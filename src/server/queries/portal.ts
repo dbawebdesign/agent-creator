@@ -376,7 +376,9 @@ async function getDeliverableUncached(orgId: string, id: string) {
     link && typeof link.payload?.to === "string"
       ? (link.payload.to as string).slice(0, 200)
       : null;
+  const sends = await draftSends(orgId, d.data ?? null);
   return {
+    sends,
     sendsOnApprove: link?.status === "pending",
     sendTo:
       link && (link.status === "pending" || link.status === "approved")
@@ -398,6 +400,100 @@ async function getDeliverableUncached(orgId: string, id: string) {
     agent: row.agent as AgentLite,
     workflowName: row.workflowName,
   };
+}
+
+/** A draft the team sent (or held) when this deliverable was approved. Status is plain-language-ready. */
+export type DraftSend = {
+  to: string;
+  channel: ChannelKind;
+  status: "sent" | "sending" | "not_sent" | "failed" | "held";
+};
+
+/** Maps a recorded outbound message to what the client is told. A simulated send is never called "Sent". */
+export function draftSendStatus(
+  m: { deliveryStatus: string; simulated?: unknown } | undefined,
+): DraftSend["status"] {
+  if (!m) return "sending";
+  if (m.deliveryStatus === "failed") return "failed";
+  if (m.deliveryStatus === "sent" || m.deliveryStatus === "delivered")
+    return m.simulated ? "not_sent" : "sent";
+  return "sending";
+}
+
+function draftList<K extends string>(
+  v: unknown,
+  key: K,
+): Array<{ to: string } & Record<K, string>> {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter(
+      (x): x is { to: string } & Record<K, string> =>
+        !!x &&
+        typeof x === "object" &&
+        typeof (x as Record<string, unknown>).to === "string" &&
+        typeof (x as Record<string, unknown>)[key] === "string",
+    )
+    .slice(0, 20);
+}
+
+/** Sends recorded by the engine on approval (data.sentDrafts / data.heldDrafts), with live status, org-scoped. */
+async function draftSends(
+  orgId: string,
+  data: Record<string, unknown> | null,
+): Promise<DraftSend[]> {
+  const sent = draftList(data?.sentDrafts, "messageId").filter((x) =>
+    isUuid(x.messageId),
+  );
+  const held = draftList(data?.heldDrafts, "reason");
+  const rows = sent.length
+    ? await db()
+        .select({
+          id: schema.messages.id,
+          deliveryStatus: schema.messages.deliveryStatus,
+          meta: schema.messages.meta,
+          channel: schema.conversations.channel,
+        })
+        .from(schema.messages)
+        .innerJoin(
+          schema.conversations,
+          and(
+            eq(schema.conversations.id, schema.messages.conversationId),
+            eq(schema.conversations.orgId, orgId),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.messages.orgId, orgId),
+            inArray(
+              schema.messages.id,
+              sent.map((x) => x.messageId),
+            ),
+          ),
+        )
+    : [];
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return [
+    ...sent.map((x): DraftSend => {
+      const m = byId.get(x.messageId);
+      return {
+        to: x.to.slice(0, 200),
+        channel: m?.channel ?? "email",
+        status: draftSendStatus(
+          m && {
+            deliveryStatus: m.deliveryStatus,
+            simulated: (m.meta as Record<string, unknown> | null)?.simulated,
+          },
+        ),
+      };
+    }),
+    ...held.map(
+      (x): DraftSend => ({
+        to: x.to.slice(0, 200),
+        channel: "email",
+        status: "held",
+      }),
+    ),
+  ];
 }
 
 /** The next piece of work waiting on the client, so review can flow item to item. */

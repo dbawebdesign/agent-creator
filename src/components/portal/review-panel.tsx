@@ -78,7 +78,7 @@ export function ReviewPanel({
           <span>
             Approved.
             <span className="mt-1 block font-normal text-ink-3">
-              {sendTo} gets it once email is connected.
+              Nothing was emailed to {sendTo}: email isn’t switched on yet.
             </span>
           </span>
         ) : sent ? (

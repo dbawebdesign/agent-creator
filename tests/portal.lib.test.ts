@@ -12,7 +12,12 @@ import {
   contrast,
   readableOn,
 } from "@/components/portal/brand-color";
-import { clientSafeText, resolveBrand } from "@/server/queries/portal";
+import {
+  clientSafeText,
+  deliverableDomain,
+  draftSendStatus,
+  resolveBrand,
+} from "@/server/queries/portal";
 import type { Org } from "@/server/auth/access";
 
 describe("portal: plain-English schedules", () => {
@@ -174,5 +179,26 @@ describe("clientSafeText", () => {
     expect(clientSafeText("Turns briefs into social packs. Drafted offline from the transcript (no AI model was used) — review every workflow before hiring.")).toBe("Turns briefs into social packs.");
     expect(clientSafeText("Answers the phones.")).toBe("Answers the phones.");
     expect(clientSafeText(null)).toBeNull();
+  });
+});
+
+describe("draft send status (client wording)", () => {
+  it("never calls a simulated send sent", () => {
+    expect(draftSendStatus({ deliveryStatus: "sent", simulated: true })).toBe("not_sent");
+    expect(draftSendStatus({ deliveryStatus: "sent" })).toBe("sent");
+    expect(draftSendStatus({ deliveryStatus: "delivered" })).toBe("sent");
+    expect(draftSendStatus({ deliveryStatus: "pending" })).toBe("sending");
+    expect(draftSendStatus({ deliveryStatus: "failed" })).toBe("failed");
+    expect(draftSendStatus(undefined)).toBe("sending");
+  });
+});
+
+describe("agent address domains", () => {
+  it("hides reserved dev domains, keeps real ones", () => {
+    expect(deliverableDomain("agents.roster.local")).toBe(false);
+    expect(deliverableDomain("mail.localhost")).toBe(false);
+    expect(deliverableDomain("team.example")).toBe(false);
+    expect(deliverableDomain("team.northbeam.ai")).toBe(true);
+    expect(deliverableDomain("agents.brandlord.co")).toBe(true);
   });
 });

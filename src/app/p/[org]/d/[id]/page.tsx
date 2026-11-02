@@ -64,6 +64,18 @@ async function markSeen(orgId: string, deliverableId: string, userId: string) {
   }
 }
 
+/** What the client is told about each send. Plain language; a send that didn't leave is never "Sent". */
+const SEND_STATUS: Record<
+  "sent" | "sending" | "not_sent" | "failed" | "held",
+  string
+> = {
+  sent: "Sent",
+  sending: "Sending",
+  not_sent: "Not sent: email isn’t switched on yet",
+  failed: "Didn’t go through",
+  held: "Not sent: held because it quoted an internal note",
+};
+
 export default async function DeliverablePage({
   params,
 }: {
@@ -109,6 +121,44 @@ export default async function DeliverablePage({
           ))}
         </dd>
       </div>
+      {d.sends.length ? (
+        <div className="col-span-2 md:col-span-1">
+          <dt className="text-ink-3">
+            {d.sends.length === 1 ? "Recipient" : "Recipients"}
+          </dt>
+          <dd className="mt-1">
+            <ul className="space-y-2">
+              {d.sends.map((x, i) => (
+                <li key={`${x.to}-${i}`} className="min-w-0">
+                  <span className="flex min-w-0 items-center gap-1.5 text-ink-2">
+                    <ChannelIcon
+                      channel={x.channel}
+                      className="shrink-0 text-ink-3"
+                    />
+                    <span className="sr-only">
+                      {CHANNEL_LABEL[x.channel] ?? x.channel}:
+                    </span>
+                    <span className="truncate" title={x.to}>
+                      {x.to}
+                    </span>
+                  </span>
+                  <span
+                    className={
+                      x.status === "sent"
+                        ? "mt-0.5 block text-[12.5px] text-good"
+                        : x.status === "failed" || x.status === "held"
+                          ? "mt-0.5 block text-[12.5px] text-warn"
+                          : "mt-0.5 block text-[12.5px] text-ink-3"
+                    }
+                  >
+                    {SEND_STATUS[x.status]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </dd>
+        </div>
+      ) : null}
       {d.hoursSaved > 0 ? (
         <div>
           <dt className="text-ink-3">Time saved</dt>
