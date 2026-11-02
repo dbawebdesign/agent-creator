@@ -715,11 +715,21 @@ export async function getConnect(orgId: string) {
       )
       .limit(1),
     db()
-      .select({ id: schema.channelConnections.id, agentId: schema.channelConnections.agentId })
+      .select({
+        id: schema.channelConnections.id,
+        agentId: schema.channelConnections.agentId,
+      })
       .from(schema.channelConnections)
-      .where(and(eq(schema.channelConnections.orgId, orgId), eq(schema.channelConnections.kind, "sms"))),
+      .where(
+        and(
+          eq(schema.channelConnections.orgId, orgId),
+          eq(schema.channelConnections.kind, "sms"),
+        ),
+      ),
   ]);
-  const smsByAgent = new Map(sms.filter((c) => c.agentId).map((c) => [c.agentId!, c.id]));
+  const smsByAgent = new Map(
+    sms.filter((c) => c.agentId).map((c) => [c.agentId!, c.id]),
+  );
   const s = slack[0];
   const teamName =
     typeof s?.config?.teamName === "string" ? s.config.teamName : null;

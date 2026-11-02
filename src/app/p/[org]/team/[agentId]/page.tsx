@@ -234,7 +234,8 @@ export default async function AgentPage({
                 Teach {agent.name}
               </h2>
               <p className="mt-1 mb-3 text-[12.5px] text-ink-3">
-                Price lists, brand guides, past work: drop in files {agent.name} should know.
+                Price lists, brand guides, past work: drop in files {agent.name}{" "}
+                should know.
               </p>
               <KnowledgeUpload orgId={p.org.id} agentId={agent.id} />
             </section>

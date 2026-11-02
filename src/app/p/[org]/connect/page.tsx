@@ -145,10 +145,15 @@ export default async function ConnectPage({
             // Admins give each teammate a number right here; everyone else sees the numbers to text.
             <ul className="space-y-4">
               {c.agents.map((a) => (
-                <li key={a.id} className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4">
+                <li
+                  key={a.id}
+                  className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4"
+                >
                   <div className="flex min-w-0 items-center gap-2.5 sm:w-44 sm:pt-2">
                     <AgentOrb seed={a.seed} name={a.name} size={24} />
-                    <span className="truncate text-[13.5px] font-medium text-ink">{a.name}</span>
+                    <span className="truncate text-[13.5px] font-medium text-ink">
+                      {a.name}
+                    </span>
                   </div>
                   <SmsConnect
                     orgId={p.org.id}
@@ -164,12 +169,21 @@ export default async function ConnectPage({
           ) : withPhone.length ? (
             <ul className="space-y-2.5">
               {withPhone.map((a) => (
-                <li key={a.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                <li
+                  key={a.id}
+                  className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
+                >
                   <div className="flex min-w-0 items-center gap-2.5 sm:w-44">
                     <AgentOrb seed={a.seed} name={a.name} size={24} />
-                    <span className="truncate text-[13.5px] font-medium text-ink">{a.name}</span>
+                    <span className="truncate text-[13.5px] font-medium text-ink">
+                      {a.name}
+                    </span>
                   </div>
-                  <CopyField value={a.phone!} label={`Copy ${a.name}'s number`} className="flex-1 tabular" />
+                  <CopyField
+                    value={a.phone!}
+                    label={`Copy ${a.name}'s number`}
+                    className="flex-1 tabular"
+                  />
                 </li>
               ))}
             </ul>

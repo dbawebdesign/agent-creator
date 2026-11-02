@@ -140,7 +140,7 @@ describe("runtime (offline model)", () => {
     // The step trace is agency-facing (run_steps / Activity), never part of the client deliverable.
     expect(d!.body).not.toMatch(/\| # \| Step \| Status \| Based on \|/);
     expect(d!.body).not.toMatch(/How I put this together/);
-    expect(steps.some((s) => s.kind === "message" && JSON.stringify(s.data ?? s).includes("How I put this together"))).toBe(true);
+    expect(steps.some((s) => s.kind === "message" && String(s.data.text ?? "").includes("| # | Step | Status | Based on |"))).toBe(true);
     expect(d!.body).toMatch(/## The work/);
     expect(d!.body).toMatch(/20 hours a week/); // grounded in the transcript via knowledge_search
     expect(d!.needsReview).toBe(true);

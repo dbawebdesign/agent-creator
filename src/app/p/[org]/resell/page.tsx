@@ -1,4 +1,9 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import { BillingStatusBadge, CheckoutLinkButton } from "@/components/billing";
+import { ConnectStripeCard } from "@/components/billing/connect-stripe-card";
+import { PortalBillingFlags } from "@/components/portal/billing-flags";
+import { getBillingStatus } from "@/server/billing/service";
 import { notFound } from "next/navigation";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { AgentOrb } from "@/components/ui/agent-orb";
@@ -23,6 +28,23 @@ export default async function ResellPage({
   const p = await getPortal(slug);
   if (!p.canResell) notFound();
   const r = await getResell(p.org.id);
+  // Real billing state where Stripe has it; everything else is a list-price record.
+  const [seller, buyers] = await Promise.all([
+    getBillingStatus(p.org.id),
+    Promise.all(r.customers.map((c) => getBillingStatus(c.id))),
+  ]);
+  const billing = new Map(r.customers.map((c, i) => [c.id, buyers[i]!]));
+  const billed = buyers.filter(
+    (b) =>
+      b.buyer?.subscription?.stripeManaged &&
+      ["active", "trialing", "past_due"].includes(b.buyer.subscription.status),
+  );
+  const billedCents = billed.reduce(
+    (sum, b) => sum + (b.buyer?.subscription?.priceCents ?? 0),
+    0,
+  );
+  const sellerReady =
+    Boolean(seller.seller?.chargesEnabled) && seller.mode !== "disabled";
   const canManage = p.isAdmin;
   const yearly = r.monthlyCents * 12;
   const paying = r.customers.filter((c) => c.monthlyCents > 0).length;
@@ -58,6 +80,9 @@ export default async function ResellPage({
 
   return (
     <div className="mx-auto w-full max-w-[1040px] px-4 pt-8 md:px-6 md:pt-14">
+      <Suspense fallback={null}>
+        <PortalBillingFlags />
+      </Suspense>
       <header className="mb-8 flex flex-col gap-5 animate-rise md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">
@@ -77,7 +102,9 @@ export default async function ResellPage({
       >
         <div>
           <p className="text-[13px] font-medium text-ink-3">
-            Monthly from your customers, at list price
+            {billedCents > 0
+              ? "Monthly from your customers"
+              : "Monthly from your customers, at list price"}
           </p>
           <p className="mt-1 text-[40px] leading-none font-semibold tracking-[-0.03em] text-ink tabular md:text-[48px]">
             {formatMoney(r.monthlyCents)}
@@ -86,16 +113,22 @@ export default async function ResellPage({
             </span>
           </p>
           <p className="mt-3 text-[13.5px] text-ink-3">
-            {r.monthlyCents > 0
-              ? `${formatMoney(yearly)} a year at your prices. Billing isn’t connected yet, so collect payment the way you do today.`
-              : "Your first customer turns your team into a revenue line."}
+            {r.monthlyCents === 0
+              ? "Your first customer turns your team into a revenue line."
+              : billedCents > 0
+                ? `${formatMoney(billedCents)}/mo is billed by card through Stripe${billedCents < r.monthlyCents ? `; the rest is at list price, not billed yet` : ""}.`
+                : sellerReady
+                  ? `${formatMoney(yearly)} a year at your prices. Copy a checkout link below so customers pay by card.`
+                  : `${formatMoney(yearly)} a year at your prices. Billing isn’t connected yet, so collect payment the way you do today.`}
           </p>
         </div>
         <dl className="grid grid-cols-2 gap-6 border-t border-line pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
           <div>
-            <dt className="text-[12px] text-ink-3">Subscribed customers</dt>
+            <dt className="text-[12px] text-ink-3">
+              {billed.length ? "Paying by card" : "Subscribed customers"}
+            </dt>
             <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">
-              {paying}
+              {billed.length || paying}
             </dd>
           </div>
           <div>
@@ -106,6 +139,14 @@ export default async function ResellPage({
           </div>
         </dl>
       </section>
+
+      {canManage ? (
+        <ConnectStripeCard
+          sellerOrgId={p.org.id}
+          returnPath={`/p/${slug}/resell`}
+          className="mt-4"
+        />
+      ) : null}
 
       {!setupDone && canManage ? (
         <ol className="mt-4 grid gap-3 md:grid-cols-3">
@@ -199,6 +240,31 @@ export default async function ResellPage({
                       </span>
                     )}
                   </p>
+                  {(() => {
+                    const sub = billing.get(c.id)?.buyer?.subscription;
+                    if (sub?.stripeManaged)
+                      return (
+                        <BillingStatusBadge
+                          status={sub.status}
+                          cancelAtPeriodEnd={sub.cancelAtPeriodEnd}
+                        />
+                      );
+                    if (
+                      canManage &&
+                      sellerReady &&
+                      sub &&
+                      sub.status !== "canceled"
+                    )
+                      return (
+                        <CheckoutLinkButton
+                          buyerOrgId={c.id}
+                          planId={sub.planId}
+                          returnPath={`/p/${slug}/resell`}
+                          size="sm"
+                        />
+                      );
+                    return null;
+                  })()}
                   {canManage && !c.agents.length && r.agents.length ? (
                     <OfferAgentDialog
                       slug={slug}

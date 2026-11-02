@@ -156,7 +156,11 @@ export default async function SettingsPage({
           title="Plan & billing"
           body={`Your plan with ${p.org.kind === "customer" ? p.brand.name : "your agency"}. Pay by card and download invoices here.`}
         >
-          <SubscriptionCard buyerOrgId={p.org.id} returnPath={`/p/${slug}/settings`} title="Your plan" />
+          <SubscriptionCard
+            buyerOrgId={p.org.id}
+            returnPath={`/p/${slug}/settings`}
+            title="Your plan"
+          />
         </Section>
       ) : null}
 

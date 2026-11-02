@@ -295,7 +295,10 @@ async function issueInvite(
     });
   const url = `${env().APP_URL.replace(/\/+$/, "")}/invite/${token}`;
   await emailInvite(orgId, email, url).catch((err) =>
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "invite email failed"),
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "invite email failed",
+    ),
   );
   return url;
 }
@@ -307,11 +310,12 @@ async function issueInvite(
 async function emailInvite(orgId: string, to: string, url: string) {
   const e = env();
   if (!e.RESEND_API_KEY) return;
-  const [{ orgChain }, { resolveBrand }, { formatFrom, sendEmail }] = await Promise.all([
-    import("@/server/auth/access"),
-    import("@/server/queries/portal"),
-    import("@/server/channels/email"),
-  ]);
+  const [{ orgChain }, { resolveBrand }, { formatFrom, sendEmail }] =
+    await Promise.all([
+      import("@/server/auth/access"),
+      import("@/server/queries/portal"),
+      import("@/server/channels/email"),
+    ]);
   const chain = await orgChain(orgId);
   const org = chain[0];
   if (!org) return;
