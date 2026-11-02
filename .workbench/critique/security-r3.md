@@ -146,3 +146,32 @@ Counts: **3 High, 4 Medium, 3 Low.**
   - **Not re-checked:** M3 (custom-domain host) and L2.
 
 **Verdict:** fix H1 to H3 before launch. All three are reachable by any stranger with an email address against an agent that uses the defaults the Architect proposes, and H2 and H3 need only one ordinary click, or none, by the client.
+
+## Re-verification (r3b)
+
+Method: fresh copy of the main tree at 1cd30ac in /tmp/sec3b, DB roster_sec3b, dev server on :3113. I re-ran the original proof tests from /tmp/sec3/tests/sec3/ unchanged, plus new variations in /tmp/sec3b/tests/sec3/. "Fixed" means the original proof no longer works and the variations I tried also failed. It does not mean every possible path was tested.
+
+| # | Verdict | Evidence |
+|---|---|---|
+| H1 | **Fixed** | Original test: the email.received run is offered only `create_deliverable,knowledge_search,send_message`. No follow-up is scheduled, 0 memories are saved and 0 approvals are created. SMS variation (h1-sms.test.ts): a stranger's text firing an sms.received workflow gets the same three tools and saves 0 memories. Follow-up of a follow-up: untrusted runs no longer get `schedule_followup` at all, and the origin is passed down in core.ts:534-546. I checked that in code and in the builders' test only; I did not run a chained run. Slack was not tested (it needs a connected install). |
+| H2 | **Fixed** (see the new low below) | Original test: approving the deliverable leaves the held stranger reply `pending`. The draft addressed to the stranger (the sender) is still sent on Approve. That is the intended "sender only" rule, but the client is approving a body that may quote the knowledge base. REST/MCP: there is no approve path in v1.ts or mcp.ts (they only filter by status), so that variation does not apply. |
+| H3 | **Fixed** in the renderer; **partly** fixed in depth | Live `/p/brandlord/d/<id>`: a plain image, an image inside a link, and a reference-style image all render as `<a … referrerPolicy="no-referrer">` with no `<img>` to an outside host. markdown.tsx is the only react-markdown renderer. The CSP still allows `img-src https:` (next.config.ts:19). Tighten it to `'self' data: blob:` so the next renderer can't reopen this. |
+| M1 | **Fixed** | The real owner now gets their own pending claim (with a per-claim TXT record) next to a squatter's pending one. `gmail.com` is refused as a public mailbox provider. Simulated rows count only in dev/test with no Resend key (domains.ts:137, used at :79 and :111). |
+| M2 | **Fixed** | The cross-tenant message from a verified domain is now `stored`, not `ignored:loop`. |
+| M3 | **Fixed** | The custom `## Pricing … 62% margin` section is gone from the customer copy; instructions are rebuilt from the role, voice and workflows. |
+| M4 | **Fixed** | The original stub had no trust fields, so the run was refused as untrusted and that test failed for an unrelated reason. Re-run with a trusted context (recipients-trusted.test.ts): `john@acme.com` is allowed; `n@acme.co` and `b@client.com` (from sender `bob@client.com.au`) are refused. |
+| L1–L3 | **Fixed** per the builders' tests | sec3.misc.test.ts passes (8-word overlap, single provisioning, no params in logs). I did not probe these myself. |
+| Double approve | Still OK | 3 concurrent approvals produce 1 outbound message. |
+
+### New issues
+
+- **L (latent): the send-time recipient re-check fails open.**
+  - **Code:** engine.ts:849 and :889-892. `draftContext` returns `null` when a deliverable has no `runId` or its run row is gone, and `sendApprovedDrafts` then skips `recipientProblem`.
+  - **Exposure:** latent today. Runs are not pruned, and `deliverables.run_id` is set to null only when a run is deleted.
+  - **Fix:** hold every draft when there is no context. Do not send unchecked.
+- **Process hazard: running the proof tests by folder name can wipe a database.**
+  - The builders' `tests/sec3.*.test.ts` call `resetDb()`, which truncates organizations and users.
+  - `vitest run tests/sec3` matches those files as well as tests/sec3/. It wiped the seed in my isolated DB.
+  - The default test DB (roster_test) keeps this safe. Never run that pattern with `TEST_DATABASE_URL` pointing at a shared DB.
+
+**Verdict:** every r3 finding holds up on re-test. Before launch, I'd still close the two small gaps above: the CSP image rule and the fail-open re-check.

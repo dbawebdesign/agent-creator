@@ -16,6 +16,8 @@ const securityHeaders = [
  */
 const csp = [
   "default-src 'self'",
+  // https: only for agency/client logo URLs in branding. Agent-written markdown never loads remote images
+  // (components/shared/markdown.tsx renders them as links). Tighten to 'self' once logos are uploaded files.
   "img-src 'self' data: blob: https:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline'",

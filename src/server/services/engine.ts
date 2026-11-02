@@ -708,7 +708,10 @@ export async function releaseHeldDeliverable(input: { orgId: string; runId: stri
   if (!job) throw new EngineNotFoundError("Held deliverable");
   const [{ releaseDeliverable }, { complete, fail }] = await Promise.all([import("@/server/agents/runtime"), import("@/server/jobs/queue")]);
   try {
-    await releaseDeliverable(database, job.payload);
+    // Rewrite the held draft from the knowledge base as it is now (files uploaded after hire), then release it.
+    const { refreshHeldPayload } = await import("@/server/llm/offline/refresh");
+    const payload = await refreshHeldPayload(database, job.payload).catch(() => job.payload);
+    await releaseDeliverable(database, payload);
     await complete(database, job.id);
   } catch (err) {
     await fail(database, job, err);
@@ -846,9 +849,10 @@ async function sendApprovedDrafts(database: DB, d: typeof schema.deliverables.$i
       logger.warn({ deliverableId: d.id }, "approved draft held: it quotes internal notes");
       continue;
     }
-    const problem = ctx ? await recipientProblem(ctx, "email", e.to) : null;
+    // Fail closed: without the run that wrote the draft (missing or pruned) there is nothing to verify the recipient against.
+    const problem = ctx ? await recipientProblem(ctx, "email", e.to) : "no run to verify the recipient against";
     if (problem) {
-      held.push({ to: e.to, reason: "not a recipient this agent may write to" });
+      held.push({ to: e.to, reason: ctx ? "not a recipient this agent may write to" : "the recipient couldn't be verified" });
       logger.warn({ deliverableId: d.id }, "approved draft held: recipient not grounded");
       continue;
     }
@@ -885,7 +889,7 @@ async function sendApprovedDrafts(database: DB, d: typeof schema.deliverables.$i
     .where(and(eq(schema.deliverables.id, d.id), eq(schema.deliverables.orgId, d.orgId)));
 }
 
-/** The tool context of the run that wrote a deliverable, for re-checking its draft recipients (null: written by a person). */
+/** The tool context of the run that wrote a deliverable, for re-checking its draft recipients (null: no run on file, so drafts are held). */
 async function draftContext(database: DB, d: typeof schema.deliverables.$inferSelect): Promise<ToolContext | null> {
   if (!d.runId) return null;
   const run = (await database.select().from(schema.runs).where(and(eq(schema.runs.id, d.runId), eq(schema.runs.orgId, d.orgId))).limit(1))[0];

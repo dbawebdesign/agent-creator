@@ -12,7 +12,8 @@ describe("double approve", () => {
     applyTestEnv();
     const c = await makeOrg({ kind: "client" });
     const a = await makeAgent(c.id);
-    const [d] = await db().insert(schema.deliverables).values({ orgId: c.id, agentId: a.id, title: "Drafts", kind: "email_draft", body: "**To:** Lorna <lorna@bayside.example>\n**Subject:** Hi\n\n> Hello Lorna.\n" }).returning();
+    const [run] = await db().insert(schema.runs).values({ orgId: c.id, agentId: a.id, trigger: "manual", status: "succeeded", input: { kind: "task", title: "Write to lorna@bayside.example" } }).returning();
+    const [d] = await db().insert(schema.deliverables).values({ orgId: c.id, agentId: a.id, runId: run!.id, title: "Drafts", kind: "email_draft", body: "**To:** Lorna <lorna@bayside.example>\n**Subject:** Hi\n\n> Hello Lorna.\n" }).returning();
     const actor = { type: "system" as const };
     const r = await Promise.allSettled([1, 2, 3].map(() => reviewDeliverable({ orgId: c.id, deliverableId: d!.id, action: "approve", actor })));
     console.log(r.map((x) => x.status + (x.status === "rejected" ? `: ${String((x.reason as Error).message).slice(0, 90)}` : "")));

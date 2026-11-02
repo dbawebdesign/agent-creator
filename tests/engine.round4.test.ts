@@ -183,7 +183,9 @@ describe("M8: approving an email draft sends it and counts", () => {
     const body =
       "## The work\n\n### To Lorna Fitch\n\n**To:** Lorna Fitch <lorna@baysidepeds.example>  \n**Subject:** Re: Bayside Pediatrics\n\n> Hi Lorna,\n>\n> Your score was 81.\n\n### No address\n\n**To:** Someone  \n**Subject:** x\n\n> Hi,";
     expect(draftsIn(body)).toEqual([{ to: "lorna@baysidepeds.example", name: "Lorna Fitch", subject: "Re: Bayside Pediatrics", body: "Hi Lorna,\n\nYour score was 81." }]);
-    const [d] = await db().insert(schema.deliverables).values({ orgId: client.id, agentId, title: "Reply to Lorna", kind: "email_draft", body, needsReview: true }).returning();
+    // The send-time recipient re-check needs the run that wrote the draft (no run on file → held).
+    const [run] = await db().insert(schema.runs).values({ orgId: client.id, agentId, trigger: "manual", status: "succeeded", input: { kind: "task", title: "Reply to Lorna Fitch at lorna@baysidepeds.example" } }).returning();
+    const [d] = await db().insert(schema.deliverables).values({ orgId: client.id, agentId, runId: run!.id, title: "Reply to Lorna", kind: "email_draft", body, needsReview: true }).returning();
     await reviewDeliverable({ orgId: client.id, deliverableId: d!.id, action: "approve", actor: { type: "user", userId: user.id } });
     await reviewDeliverable({ orgId: client.id, deliverableId: d!.id, action: "approve", actor: { type: "user", userId: user.id } });
     const msgs = await db().select().from(schema.messages).where(and(eq(schema.messages.orgId, client.id), eq(schema.messages.direction, "outbound")));
@@ -194,6 +196,21 @@ describe("M8: approving an email draft sends it and counts", () => {
     expect((jobs.rows[0] as { payload: Record<string, unknown> }).payload).toMatchObject({ channel: "email", messageId: msgs[0]!.id, to: "lorna@baysidepeds.example" });
     const [after] = await db().select().from(schema.deliverables).where(eq(schema.deliverables.id, d!.id));
     expect(after!.hoursSaved).toBeGreaterThan(0);
+  });
+});
+
+describe("approved drafts fail closed without a run", () => {
+  beforeEach(resetDb);
+
+  it("holds every draft when the run that wrote it is missing", async () => {
+    const { client, user, agentId } = await hire();
+    const body = "**To:** Lorna Fitch <lorna@baysidepeds.example>  \n**Subject:** Hi\n\n> Hi Lorna,";
+    const [d] = await db().insert(schema.deliverables).values({ orgId: client.id, agentId, title: "Orphan", kind: "email_draft", body, needsReview: true }).returning();
+    await reviewDeliverable({ orgId: client.id, deliverableId: d!.id, action: "approve", actor: { type: "user", userId: user.id } });
+    const msgs = await db().select().from(schema.messages).where(and(eq(schema.messages.orgId, client.id), eq(schema.messages.direction, "outbound")));
+    expect(msgs).toHaveLength(0);
+    const [after] = await db().select().from(schema.deliverables).where(eq(schema.deliverables.id, d!.id));
+    expect((after!.data as { heldDrafts?: unknown[] }).heldDrafts).toHaveLength(1);
   });
 });
 
