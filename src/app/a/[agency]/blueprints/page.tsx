@@ -1,3 +1,4 @@
+import { buttonClass } from "@/components/ui/button";
 import Link from "next/link";
 import { ArrowRight, LayoutTemplate } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
@@ -29,7 +30,7 @@ export default async function BlueprintsPage({ params }: { params: Promise<{ age
             return (
               <li key={b.id} className="flex flex-col rounded-xl border border-line bg-surface p-5 shadow-xs">
                 <div className="flex items-start gap-3">
-                  <AgentOrb seed={b.id} size={34} />
+                  <AgentOrb seed={b.id} name={b.name} size={34} />
                   <div className="min-w-0 flex-1">
                     <p className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{b.name}</p>
                     <p className="truncate text-[12.5px] text-ink-3">{[b.vertical, spec.role].filter(Boolean).join(" · ") || "Blueprint"}</p>
@@ -63,7 +64,13 @@ export default async function BlueprintsPage({ params }: { params: Promise<{ age
         </ul>
       ) : (
         <div className="rounded-xl border border-dashed border-line">
-          <EmptyState icon={<LayoutTemplate />} title="No blueprints yet" body="Open any agent and choose “Save as blueprint” to reuse its job, workflows and voice for other clients." />
+          <EmptyState icon={<LayoutTemplate />} title="No blueprints yet" body="Open any agent and choose “Save as blueprint” to reuse its job, workflows and voice for other clients."
+            action={
+              <Link href={`/a/${slug}/agents`} className={buttonClass("secondary", "md")}>
+                Choose an agent
+              </Link>
+            }
+          />
         </div>
       )}
     </div>

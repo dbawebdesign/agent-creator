@@ -83,7 +83,7 @@ export function Provisioning({
       <div className="flex flex-col items-center text-center">
         <div className="relative">
           <span className={cn("absolute -inset-3 rounded-full bg-accent/10 blur-md transition-opacity duration-700", done ? "opacity-100" : "opacity-0")} aria-hidden />
-          <AgentOrb seed={orbSeed} size={64} live={done} className={cn("transition-transform duration-700", done ? "scale-100" : "scale-95")} />
+          <AgentOrb seed={orbSeed} name={name} size={64} live={done} className={cn("transition-transform duration-700", done ? "scale-100" : "scale-95")} />
         </div>
         <h1 className="mt-5 text-[22px] font-semibold tracking-[-0.02em] text-ink">
           {error ? `${name} couldn’t be hired` : done ? `${name} is on the roster` : `Setting up ${name}`}

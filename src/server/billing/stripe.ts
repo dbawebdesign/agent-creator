@@ -43,8 +43,8 @@ const defaultFactory: Factory = (key) =>
 const g = globalThis as unknown as { __rosterStripe?: { key: string; client: Stripe }; __rosterStripeFactory?: Factory };
 
 function secretKey(): string | undefined {
-  // Read process.env directly so tests (and key rotation without restart) can flip modes; env() caches.
-  const k = process.env.STRIPE_SECRET_KEY ?? env().STRIPE_SECRET_KEY;
+  // Read process.env directly (env() caches) so tests can flip modes; the schema in env.ts documents the var.
+  const k = process.env.STRIPE_SECRET_KEY;
   return k && k.trim() ? k.trim() : undefined;
 }
 
@@ -85,7 +85,7 @@ export function platformFeeBps(): number {
 
 /** Webhook signing secrets: STRIPE_WEBHOOK_SECRET (comma-separated allowed) + STRIPE_CONNECT_WEBHOOK_SECRET. */
 export function webhookSecrets(): string[] {
-  const raw = [process.env.STRIPE_WEBHOOK_SECRET ?? env().STRIPE_WEBHOOK_SECRET, process.env.STRIPE_CONNECT_WEBHOOK_SECRET]
+  const raw = [process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_CONNECT_WEBHOOK_SECRET]
     .filter((s): s is string => !!s)
     .join(",");
   return [...new Set(raw.split(",").map((s) => s.trim()).filter(Boolean))];

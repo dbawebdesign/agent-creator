@@ -84,7 +84,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
               {home.delivered.map((d) => (
                 <li key={d.id}>
                   <Link href={`${base}/agents/${d.agentId}?d=${d.id}`} className="group flex items-start gap-3.5 px-4 py-3.5 transition-colors hover:bg-surface-2/50 sm:px-5">
-                    <AgentOrb seed={d.agentSeed ?? d.agentId} size={28} className="mt-0.5" />
+                    <AgentOrb seed={d.agentSeed ?? d.agentId} name={d.agentName} size={28} className="mt-0.5" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
                         <p className="truncate text-[14px] font-medium text-ink">{d.title}</p>
@@ -124,7 +124,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
               {home.approvals.map((a) => (
                 <li key={a.id} className="rounded-xl border border-line bg-surface p-4 shadow-xs">
                   <div className="flex items-start gap-3">
-                    <AgentOrb seed={a.agentSeed ?? a.agentId} size={22} className="mt-0.5" />
+                    <AgentOrb seed={a.agentSeed ?? a.agentId} name={a.agentName} size={22} className="mt-0.5" />
                     <div className="min-w-0 flex-1">
                       <p className="text-[12px] text-ink-3">
                         {a.agentName} · {a.orgName} · <RelativeTime date={a.createdAt} />

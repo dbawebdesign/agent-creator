@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { KnowledgeForm } from "@/components/studio/knowledge-form";
+import { KnowledgeUpload } from "@/components/shared/knowledge-upload";
 import { SectionHeading } from "@/components/studio/bits";
 
 export const metadata = { title: "Knowledge" };
@@ -57,6 +58,7 @@ export default async function KnowledgePage({ params }: { params: Promise<{ agen
       {hasRole(access, "member") ? (
         <section>
           <SectionHeading title="Add knowledge" />
+          <KnowledgeUpload orgId={found.agent.orgId} agentId={found.agent.id} className="mb-6" />
           <KnowledgeForm agency={slug} agentId={found.agent.id} />
         </section>
       ) : null}

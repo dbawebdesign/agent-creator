@@ -74,7 +74,7 @@ export function ProposalReview({
       <div className="min-w-0">
         {/* Identity */}
         <div className="flex items-start gap-4">
-          <AgentOrb seed={seed} size={52} className="mt-1" />
+          <AgentOrb seed={seed} name={draft.name} size={52} className="mt-1" />
           <div className="min-w-0 flex-1">
             <p className="text-[12.5px] font-medium text-accent">Proposed for {clientName}</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-x-2">

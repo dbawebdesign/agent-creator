@@ -29,7 +29,7 @@ export default async function AgentLayout({ children, params }: { children: Reac
         <span aria-current="page" className="truncate text-ink-3">{agent.name}</span>
       </nav>
       <header className="flex items-start gap-4">
-        <AgentOrb seed={agent.avatarSeed ?? agent.id} size={48} live={agent.status === "active"} />
+        <AgentOrb seed={agent.avatarSeed ?? agent.id} name={agent.name} size={48} live={agent.status === "active"} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">{agent.name}</h1>

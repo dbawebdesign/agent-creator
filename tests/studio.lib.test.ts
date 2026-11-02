@@ -63,3 +63,19 @@ describe("proposal draft", () => {
     expect(agentSpec.safeParse(out).success).toBe(true);
   });
 });
+
+describe("round 2 fixes", () => {
+  it("strips transcript markup from quotes", async () => {
+    const { cleanLine } = await import("@/components/studio/new-agent/reading");
+    expect(cleanLine("**10:32** · Dana: We chase every PO by hand.")).toBe("Dana: We chase every PO by hand.");
+    expect(cleanLine("[00:10:32] Dana: Sunday nights are quotes.")).toBe("Dana: Sunday nights are quotes.");
+  });
+  it("ranks palette results by label, never group or id", async () => {
+    const { paletteScore } = await import("@/components/shared/command-palette");
+    const s = (label: string, q: string, kw?: string[]) => paletteScore(`${label}\u0000agent-1234`, q, kw);
+    expect(s("Tess", "tess")).toBe(1);
+    expect(s("Invite a teammate", "tess")).toBe(0);
+    expect(s("Coastal Promo Co.", "coast")).toBeGreaterThan(s("Quinn", "coast", ["Quoting Specialist", "Coastal Promo Co."]));
+    expect(s("Quinn", "1234")).toBe(0);
+  });
+});

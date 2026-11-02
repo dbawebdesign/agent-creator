@@ -198,7 +198,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
                         active ? "bg-surface-2 text-ink" : "text-ink-2 hover:bg-surface-2/70 hover:text-ink",
                       )}
                     >
-                      <AgentOrb seed={a.seed} size={16} />
+                      <AgentOrb seed={a.seed} name={a.name} size={16} />
                       <span className="truncate">{a.name}</span>
                       <span className="ml-auto max-w-[45%] truncate pl-2 text-[11.5px] text-ink-3">{a.orgName}</span>
                     </Link>

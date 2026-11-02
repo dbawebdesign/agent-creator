@@ -1,3 +1,5 @@
+import { AuthShell } from "@/app/(auth)/auth-shell";
+import { authBrand } from "@/app/(auth)/brand";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { and, eq, gt, isNull } from "drizzle-orm";
@@ -8,7 +10,7 @@ import { AcceptForm } from "./accept-form";
 
 export const metadata: Metadata = { title: "Accept invitation" };
 
-export default async function InvitePage({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+async function InvitePageInner({ searchParams }: { searchParams: Promise<{ token?: string }>; brand: unknown }) {
   const { token } = await searchParams;
   const row = token
     ? (
@@ -51,5 +53,15 @@ export default async function InvitePage({ searchParams }: { searchParams: Promi
         </div>
       )}
     </div>
+  );
+}
+
+export default async function InvitePage(props: { searchParams: Promise<{ token?: string }> }) {
+  const sp = await props.searchParams;
+  const brand = await authBrand({ token: sp.token });
+  return (
+    <AuthShell brand={brand}>
+      <InvitePageInner {...props} brand={brand} />
+    </AuthShell>
   );
 }

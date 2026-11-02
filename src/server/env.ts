@@ -22,6 +22,10 @@ const schema = z.object({
   ORGO_API_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /** Signing secret of the Connect webhook endpoint, when it differs from STRIPE_WEBHOOK_SECRET. */
+  STRIPE_CONNECT_WEBHOOK_SECRET: z.string().optional(),
+  /** Platform application fee on subscriptions, basis points (0 = none). */
+  PLATFORM_FEE_BPS: z.string().optional(),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(8),
 });
 

@@ -6,13 +6,14 @@
  * knowledge_search → memory_recall → (memory_save) → (send_message) → create_deliverable → final summary —
  * composing its output from the task instructions and the tool results it actually received.
  */
-import { cell, estimateTokens, keywords, normalizeWhitespace, splitSentences, STOPWORDS, tokenize, truncate } from "./text";
+import { compose, emailFromInstruction, whoAmI } from "./offline/compose";
+import { estimateTokens, keywords, normalizeWhitespace, splitSentences, STOPWORDS, tokenize, truncate } from "./text";
 import type { LlmContent, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall } from "./types";
 
 export const OFFLINE_MODEL = "roster-offline-1";
 
 type Brief = {
-  kind: "workflow" | "message" | "revision" | "first_deliverable" | "followup";
+  kind: "workflow" | "message" | "revision" | "first_deliverable" | "followup" | "task";
   title: string;
   output: string;
   body: string;
@@ -42,7 +43,7 @@ export function parseBrief(first: string): Brief {
   const output = /^Output:\s*(\w+)/m.exec(first)?.[1] ?? "report";
   const sep = first.indexOf("\n---\n");
   const body = sep >= 0 ? first.slice(sep + 5).trim() : first;
-  return { kind: ["workflow", "message", "revision", "first_deliverable", "followup"].includes(kind) ? kind : "message", title, output, body };
+  return { kind: ["workflow", "message", "revision", "first_deliverable", "followup", "task"].includes(kind) ? kind : "message", title, output, body };
 }
 
 function collectToolEvents(messages: LlmMessage[]): ToolEvent[] {
@@ -153,93 +154,26 @@ function bestMatches(pool: Sentence[], rawKws: string[], max: number, exclude: S
     .map((x) => x.s);
 }
 
-/** Every content word of a step (not just the most frequent), minus instruction words and the org's own name. */
-function stepKeywords(step: string, exclude: Set<string>): string[] {
-  return [...new Set(tokenize(step))].filter((w) => w.length >= 4 && !STOPWORDS.has(w) && !INSTRUCTION_WORDS.has(w) && !exclude.has(w)).slice(0, 12);
-}
-
-/** Numbered / bulleted procedure steps from workflow instructions (context lines like "Why:" excluded). */
-function procedureSteps(instructions: string): string[] {
-  const body = instructions.split(/\n\s*\n(?:Why(?: this matters)?:|Feedback:|Original|Triggered by)/)[0] ?? instructions;
-  const lines = body
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => /^(\d+[.)]|[-*•])\s+/.test(l))
-    .map((l) => l.replace(/^(\d+[.)]|[-*•])\s+/, ""));
-  if (lines.length) return lines.slice(0, 12);
-  return splitSentences(body).filter((l) => !/^(?:Using|From) the (?:discovery call|knowledge base)/i.test(l) || splitSentences(body).length === 1).slice(0, 8);
-}
-
-/** Steps that only say how to package the result ("Deliver it as one document…") are honoured, not listed as work. */
-const FORMAT_STEP = /^(?:deliver|format|title|send it|lead with)\b/i;
-
-function composeDeliverable(brief: Brief, knowledge: Snippet[], memories: Snippet[], kws: string[], orgName: string | null) {
-  const allSteps = procedureSteps(brief.body);
-  const steps = allSteps.filter((s) => !FORMAT_STEP.test(s));
-  if (!steps.length) steps.push(...allSteps.slice(0, 1));
-  const prefs = memories.filter((m) => m.kind === "preference").slice(0, 5);
-  const facts = memories.filter((m) => m.kind !== "preference");
-  const pool = sentencesOf([...knowledge, ...facts]);
-  const isRevision = brief.kind === "revision";
-  const used = new Set<string>();
-  const orgWords = new Set(orgName ? tokenize(orgName) : []);
-  const titleKws = keywords(brief.title, 6).filter((k) => !orgWords.has(k));
-
-  const perStep = steps.map((step) => {
-    const ev = bestMatches(pool, [...stepKeywords(step, orgWords), ...titleKws], 2, used, 2.5);
-    ev.forEach((e) => used.add(e.text));
-    return { step, evidence: ev };
-  });
-  const grounded = perStep.filter((p) => p.evidence.length).length;
-  const extra = bestMatches(pool, kws.filter((k) => !orgWords.has(k)), 3, used, 3);
-  extra.forEach((e) => used.add(e.text));
-  const hours = facts.map((f) => /~(\d+(?:\.\d+)?) hours\/week/.exec(f.text)?.[1]).find(Boolean);
-
-  const lines: string[] = [];
-  lines.push("## Summary");
-  lines.push(
-    `${isRevision ? "Revised" : "Finished"} **${brief.title}**: ${steps.length} step${steps.length === 1 ? "" : "s"}, ${grounded} grounded in your own materials` +
-      `${memories.length ? `, shaped by ${memories.length} things I know about how you work` : ""}. Reply with changes and I will revise it.`,
-  );
-  if (hours && /time it (?:will )?saves?|hours? saved|save per week/i.test(brief.body)) {
-    lines.splice(1, 0, `**Time back:** this replaces about ${hours} hours a week of manual work.`, "");
+/** A short, clean title for work asked for in a message ("can you pull together a quick moodboard for Kindred Bakery…"). */
+export function titleFromRequest(text: string): string {
+  let t = normalizeWhitespace(text.split(/\n/)[0] ?? text).replace(/[?!.]+$/, "");
+  t = t
+    .replace(/^(?:hey|hi|hello)\b[^,]*,\s*/i, "")
+    .replace(/^(?:can|could|would|will) you(?: please)?\s+|^please\s+|^i (?:need|want|would like) (?:you to\s+)?|^we need\s+/i, "")
+    .replace(/^(?:pull|put|throw) together\s+|^(?:draft|write|make|create|prepare|build|give me|send me|get me|do|come up with|summari[sz]e|list)\s+(?:me\s+)?/i, "")
+    .replace(/^(?:a|an|the|some|our|my)\s+/i, "")
+    .replace(/^(?:quick|short|brief|rough|simple|little|first)\s+(?:pass at\s+)?/i, "")
+    .replace(/^(?:a|an|the)\s+/i, "");
+  // "moodboard direction for Kindred Bakery's spring launch" → "Kindred Bakery — moodboard direction (spring launch)".
+  const forName = /\s+for\s+((?:[A-Z][\w&'-]*\s?){1,4}?)(?:'s\s+(.+))?$/.exec(t);
+  if (forName) {
+    const name = forName[1]!.trim().replace(/'s$/, "");
+    const rest = t.slice(0, forName.index).trim();
+    t = `${name} — ${forName[2] ? `${forName[2]} ` : ""}${rest}`;
   }
-  if (isRevision) {
-    const fb = /Feedback:\s*([\s\S]+?)(?:\n\n|$)/.exec(brief.body)?.[1];
-    if (fb) lines.push("", `**What changed:** I applied your feedback — “${truncate(normalizeWhitespace(fb), 300)}”.`);
-  }
-  if (prefs.length) lines.push("", `**Applied your preferences:** ${prefs.map((p) => truncate(p.text.replace(/^Preference from the call:\s*/i, ""), 140)).join(" · ")}`);
-
-  lines.push("", "| # | Step | Status | Based on |", "|---|---|---|---|");
-  perStep.forEach((p, i) => {
-    const status = p.evidence.length ? "Drafted from your materials" : "Drafted — needs your details";
-    const basis = p.evidence[0] ? truncate(p.evidence[0].text, 90) : "Best practice (no source material yet)";
-    lines.push(`| ${i + 1} | ${cell(truncate(p.step, 140))} | ${cell(status)} | ${cell(basis)} |`);
-  });
-
-  lines.push("", "## The work");
-  perStep.forEach((p, i) => {
-    lines.push("", `### ${i + 1}. ${truncate(p.step, 160)}`);
-    if (p.evidence.length) for (const e of p.evidence) lines.push(`- From ${e.source}: “${truncate(e.text, 260)}”`);
-    else lines.push("- I used a standard approach here. Send me the source material and I'll make it exact.");
-  });
-  if (extra.length) {
-    lines.push("", "## Also worth knowing", "");
-    for (const f of extra) lines.push(`- ${truncate(f.text, 260)} _(${f.source})_`);
-  }
-  const usedKeys = new Set([...used].map(sentenceKey));
-  const context = facts.filter((f) => !sentencesOf([f]).some((x) => usedKeys.has(sentenceKey(x.text)))).slice(0, 5);
-  if (context.length) {
-    lines.push("", "## Context I used", "");
-    for (const f of context) lines.push(`- ${truncate(f.text, 200)}`);
-  }
-  const missing = perStep.filter((p) => !p.evidence.length).map((p) => truncate(p.step.replace(/[.;:]+$/, ""), 100));
-  lines.push("", "## Next", "");
-  if (missing.length) lines.push(`- To make ${missing.length === 1 ? "this step" : "these steps"} exact, send me what you have for: ${missing.slice(0, 3).join("; ")}.`);
-  lines.push("- I'll keep running this on schedule and tell you what changed since last time.");
-  const body = lines.join("\n");
-  const preview = truncate(`${brief.title} — ${steps.length} steps done, ${grounded} grounded in your materials.`, 200);
-  return { title: brief.title, kind: brief.output, body, preview };
+  t = t.replace(/\s+(?:by|before) (?:tomorrow|today|tonight|monday|tuesday|wednesday|thursday|friday|eod|end of day).*$/i, "");
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+  return truncate(t, 60) || "Request";
 }
 
 const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
@@ -308,12 +242,10 @@ export const offlineProvider: LlmProvider = {
       return makeResponse(req, `Sending this to ${email}.`, [
         {
           name: "send_message",
-          input: {
-            channel: "email",
-            to: email,
-            subject: brief.title,
-            text: `Hi,\n\n${truncate(brief.body.replace(EMAIL_RE, "").trim(), 1200)}\n\nBest,`,
-          },
+          input: (() => {
+            const e = emailFromInstruction(ownWords, whoAmI(req.system), email, titleFromRequest(ownWords));
+            return { channel: "email", to: email, subject: e.subject, text: e.body };
+          })(),
         },
       ]);
     }
@@ -321,8 +253,8 @@ export const offlineProvider: LlmProvider = {
     // 3. Produce finished work.
     const needsDeliverable = brief.kind !== "message" || wantsDocument(brief.body);
     if (needsDeliverable && has("create_deliverable") && !called("create_deliverable")) {
-      const orgName = /^## About (.+)$/m.exec(req.system)?.[1]?.trim() ?? null;
-      const d = composeDeliverable(brief, knowledge, memories, kws, orgName);
+      const title = brief.kind === "message" ? titleFromRequest(brief.body) : brief.title;
+      const d = compose({ kind: brief.kind, title, output: brief.kind === "message" ? (/\b(?:email|letter|reply)\b/i.test(brief.body) ? "email_draft" : "document") : brief.output, body: brief.body, system: req.system, knowledge, memories });
       return makeResponse(req, "Writing it up.", [{ name: "create_deliverable", input: d }]);
     }
 
@@ -331,7 +263,7 @@ export const offlineProvider: LlmProvider = {
     const sent = events.find((e) => e.name === "send_message");
     const saved = events.find((e) => e.name === "memory_save" && !e.isError);
     const parts: string[] = [];
-    if (deliverable) parts.push(`Done — “${brief.title}” is ready for you in the portal.`);
+    if (deliverable) parts.push(`Done — “${String(deliverable.input.title ?? brief.title)}” is ready for you in the portal.`);
     if (sent) parts.push(sent.isError ? "I could not send the message." : /approval/i.test(sent.result) ? "The outgoing email is waiting for your approval." : "Message sent.");
     if (saved) parts.push(`Got it — I'll remember that ${String(saved.input.content ?? "").replace(/^I\s/, "you ")}.`);
     if (!parts.length) {

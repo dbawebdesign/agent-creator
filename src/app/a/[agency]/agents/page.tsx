@@ -45,7 +45,7 @@ export default async function AgentsPage({ params }: { params: Promise<{ agency:
                   className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3.5 transition-colors hover:bg-surface-2/50 sm:px-5 md:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_110px_120px_120px]"
                 >
                   <span className="flex min-w-0 items-center gap-3">
-                    <AgentOrb seed={a.avatarSeed ?? a.id} size={30} />
+                    <AgentOrb seed={a.avatarSeed ?? a.id} size={30} name={a.name} />
                     <span className="min-w-0">
                       <span className="block truncate text-[13.5px] font-medium text-ink">{a.name}</span>
                       <span className="block truncate text-[12px] text-ink-3">{a.role}</span>

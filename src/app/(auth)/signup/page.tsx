@@ -1,3 +1,4 @@
+import { AuthShell } from "@/app/(auth)/auth-shell";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -7,7 +8,7 @@ import { SignUpForm } from "../auth-forms";
 
 export const metadata: Metadata = { title: "Create your account" };
 
-export default async function SignupPage() {
+async function SignupPageInner() {
   const user = await getCurrentUser();
   if (user) redirect(await homePathFor(user.id));
   return (
@@ -22,5 +23,13 @@ export default async function SignupPage() {
         </Link>
       </p>
     </div>
+  );
+}
+
+export default async function SignupPage() {
+  return (
+    <AuthShell brand={null}>
+      <SignupPageInner />
+    </AuthShell>
   );
 }

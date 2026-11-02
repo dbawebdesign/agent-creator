@@ -11,7 +11,7 @@ import { RelativeTime } from "@/components/shared/relative-time";
 import { cn } from "@/lib/utils";
 import { createKey, inviteMember, revokeInvite, revokeKey, updateAgency } from "@/app/a/_actions/org";
 
-type Profile = { name: string; website: string; timezone: string; displayName: string; accent: string; logoUrl: string; emailFromName: string; whiteLabel: boolean };
+type Profile = { name: string; website: string; timezone: string; displayName: string; accent: string; logoUrl: string; emailFromName: string; showPoweredBy: boolean };
 
 const ZONES = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Phoenix", "America/Anchorage", "Pacific/Honolulu", "Europe/London", "Europe/Berlin", "Europe/Paris", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "UTC"];
 
@@ -79,10 +79,10 @@ export function ProfileForm({ agency, initial, canEdit }: { agency: string; init
             </div>
             <label htmlFor="s-wl" className="flex items-center justify-between gap-4 rounded-lg border border-line bg-surface px-4 py-3">
               <span>
-                <span className="block text-[13.5px] font-medium text-ink">White-label</span>
-                <span className="block text-[12.5px] text-ink-3">Hide every “Powered by Roster” mark from client portals and emails.</span>
+                <span className="block text-[13.5px] font-medium text-ink">Show “Powered by Roster”</span>
+                <span className="block text-[12.5px] text-ink-3">Off by default: clients see only your brand in portals and emails.</span>
               </span>
-              <Switch id="s-wl" checked={f.whiteLabel} onCheckedChange={(v) => setF({ ...f, whiteLabel: v })} />
+              <Switch id="s-wl" checked={f.showPoweredBy} onCheckedChange={(v) => setF({ ...f, showPoweredBy: v })} />
             </label>
           </div>
           <div aria-label="Portal preview" className="overflow-hidden rounded-xl border border-line bg-canvas shadow-xs">
@@ -106,7 +106,7 @@ export function ProfileForm({ agency, initial, canEdit }: { agency: string; init
                   Approve
                 </span>
               </div>
-              <p className={cn("pt-1 text-center text-[10px] text-ink-4", f.whiteLabel && "invisible")}>Powered by Roster</p>
+              <p className={cn("pt-1 text-center text-[10px] text-ink-4", !f.showPoweredBy && "invisible")}>Powered by Roster</p>
             </div>
           </div>
         </div>

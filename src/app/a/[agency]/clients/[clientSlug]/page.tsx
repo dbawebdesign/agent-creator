@@ -65,7 +65,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
                 {agents.map((a) => (
                   <li key={a.id}>
                     <Link href={`${base}/agents/${a.id}`} className="flex items-start gap-3 rounded-xl border border-line bg-surface p-4 shadow-xs transition-colors hover:border-line-strong">
-                      <AgentOrb seed={a.avatarSeed ?? a.id} size={34} live={a.status === "active"} />
+                      <AgentOrb seed={a.avatarSeed ?? a.id} name={a.name} size={34} live={a.status === "active"} />
                       <div className="min-w-0 flex-1">
                         <p className="text-[14px] font-medium text-ink">{a.name}</p>
                         <p className="truncate text-[12.5px] text-ink-3">{a.role}</p>
@@ -91,7 +91,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
                 {deliverables.map((d) => (
                   <li key={d.id}>
                     <Link href={`${base}/agents/${d.agentId}?d=${d.id}`} className="flex items-start gap-3 px-4 py-3.5 transition-colors hover:bg-surface-2/50 sm:px-5">
-                      <AgentOrb seed={d.agentSeed ?? d.agentId} size={22} className="mt-0.5" />
+                      <AgentOrb seed={d.agentSeed ?? d.agentId} name={d.agentName} size={22} className="mt-0.5" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13.5px] font-medium text-ink">{d.title}</p>
                         <p className="text-[12px] text-ink-3">

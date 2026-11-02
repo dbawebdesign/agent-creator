@@ -372,7 +372,7 @@ function listItems(s: string): string[] {
       .map((p, i) => {
         let x = p.replace(/[.;]+$/, "");
         if (i === 0) x = x.replace(/^.*?\b(?:writes|captures|records|checks|includes|covers|gets|like|such as|is|are|the)\s+(?=\S)/i, "");
-        if (i === parts.length - 1) x = x.replace(/\s+(?:into|in|to|for the|before|so)\s+.*$/i, "");
+        if (i === parts.length - 1) x = x.replace(/\s+(?:into|to|for the|before|so)\s+.*$/i, "");
         return x.replace(/^(?:and|or|the|a|an)\s+/i, "").replace(/^whether it'?s\s+/i, "").trim();
       })
       .filter((x) => x.length >= 3 && x.split(/\s+/).length <= 7);

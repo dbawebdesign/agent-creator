@@ -44,7 +44,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
           accent: b.accent ?? "",
           logoUrl: b.logoUrl ?? "",
           emailFromName: b.emailFromName ?? "",
-          whiteLabel: !!b.whiteLabel,
+          showPoweredBy: (b as { showPoweredBy?: unknown }).showPoweredBy === true,
         }}
       />
 

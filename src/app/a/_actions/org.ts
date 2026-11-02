@@ -151,7 +151,7 @@ const profileInput = z.object({
   accent: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #4F46E5").optional().or(z.literal("")),
   logoUrl: z.string().trim().max(500).refine((v) => !v || /^https:\/\//.test(v), "Logo must be an https:// URL").optional(),
   emailFromName: z.string().trim().max(60).optional(),
-  whiteLabel: z.boolean(),
+  showPoweredBy: z.boolean(),
 });
 
 export async function updateAgency(slug: string, raw: z.input<typeof profileInput>): Promise<Result> {
@@ -171,14 +171,16 @@ export async function updateAgency(slug: string, raw: z.input<typeof profileInpu
         name: d.name,
         website: d.website || null,
         timezone: d.timezone,
+        // "Powered by Roster" is opt-in (portal reads showPoweredBy); whiteLabel stays its inverse for email footers.
         branding: {
           ...ctx.agency.branding,
           displayName: d.displayName || undefined,
           accent: d.accent || undefined,
           logoUrl: d.logoUrl || undefined,
           emailFromName: d.emailFromName || undefined,
-          whiteLabel: d.whiteLabel,
-        },
+          whiteLabel: !d.showPoweredBy,
+          showPoweredBy: d.showPoweredBy,
+        } as typeof ctx.agency.branding,
       })
       .where(eq(schema.organizations.id, ctx.agency.id));
     await audit({ orgId: ctx.agency.id, actorType: "user", actorId: ctx.access.user.id, action: "agency.updated" });

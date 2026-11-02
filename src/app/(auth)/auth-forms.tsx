@@ -23,7 +23,7 @@ export function SignInForm({ next }: { next?: string }) {
       {next ? <input type="hidden" name="next" value={next} /> : null}
       <FormError message={state?.error} />
       <Field label="Email" htmlFor="email" error={state?.fieldErrors?.email}>
-        <Input id="email" name="email" type="email" autoComplete="email" required autoFocus defaultValue={state?.email} placeholder="you@agency.com" aria-invalid={!!state?.fieldErrors?.email} />
+        <Input id="email" name="email" type="email" autoComplete="email" required autoFocus defaultValue={state?.email} placeholder="you@company.com" aria-invalid={!!state?.fieldErrors?.email} />
       </Field>
       <Field label="Password" htmlFor="password" error={state?.fieldErrors?.password}>
         <Input id="password" name="password" type="password" autoComplete="current-password" required aria-invalid={!!state?.fieldErrors?.password} />
@@ -44,7 +44,7 @@ export function SignUpForm() {
         <Input id="name" name="name" autoComplete="name" required autoFocus placeholder="AJ Rivera" />
       </Field>
       <Field label="Work email" htmlFor="email" error={state?.fieldErrors?.email}>
-        <Input id="email" name="email" type="email" autoComplete="email" required defaultValue={state?.email} placeholder="you@agency.com" />
+        <Input id="email" name="email" type="email" autoComplete="email" required defaultValue={state?.email} placeholder="you@company.com" />
       </Field>
       <Field label="Password" htmlFor="password" error={state?.fieldErrors?.password} hint="At least 8 characters.">
         <Input id="password" name="password" type="password" autoComplete="new-password" required minLength={8} />
@@ -111,7 +111,7 @@ export function MagicLinkForm({ next }: { next?: string }) {
       {next ? <input type="hidden" name="next" value={next} /> : null}
       <FormError message={state?.error} />
       <Field label="Email" htmlFor="email" error={state?.fieldErrors?.email}>
-        <Input id="email" name="email" type="email" autoComplete="email" required autoFocus defaultValue={state?.email} placeholder="you@agency.com" />
+        <Input id="email" name="email" type="email" autoComplete="email" required autoFocus defaultValue={state?.email} placeholder="you@company.com" />
       </Field>
       <SubmitButton variant="primary" size="lg" className="w-full" pendingLabel="Sending…">
         Email me a link
@@ -128,12 +128,12 @@ export function VerifyMagicLinkForm({ token, next }: { token: string; next?: str
       {next ? <input type="hidden" name="next" value={next} /> : null}
       <FormError message={state?.error} />
       {state?.error ? (
-        <Link href="/magic-link" className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-line bg-surface text-sm font-medium text-ink hover:bg-surface-2">
+        <Link href={next ? `/magic-link?next=${encodeURIComponent(next)}` : "/magic-link"} className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-line bg-surface text-sm font-medium text-ink hover:bg-surface-2">
           Request a new link
         </Link>
       ) : (
         <SubmitButton variant="primary" size="lg" className="w-full" pendingLabel="Signing in…" autoFocus>
-          Continue to Roster
+          Continue
         </SubmitButton>
       )}
     </form>

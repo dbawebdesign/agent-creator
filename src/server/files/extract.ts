@@ -318,7 +318,7 @@ export async function extractText(kind: FileKind, name: string, bytes: Buffer): 
     case "pdf": {
       const { getDocumentProxy } = await import("unpdf");
       const read = async () => {
-        const pdf = await getDocumentProxy(new Uint8Array(bytes), { isEvalSupported: false, useSystemFonts: false, disableFontFace: true });
+        const pdf = await getDocumentProxy(new Uint8Array(bytes), { useSystemFonts: false, disableFontFace: true, enableXfa: false });
         try {
           const pages = Math.min(pdf.numPages, PDF_MAX_PAGES);
           const parts: string[] = [];
@@ -337,7 +337,7 @@ export async function extractText(kind: FileKind, name: string, bytes: Buffer): 
           }
           return { text: parts.filter(Boolean).join("\n\n"), pages: pdf.numPages, truncated: pdf.numPages > pages || length > MAX_EXTRACTED_CHARS };
         } finally {
-          await pdf.destroy();
+          await pdf.loadingTask.destroy();
         }
       };
       let res: Awaited<ReturnType<typeof read>>;

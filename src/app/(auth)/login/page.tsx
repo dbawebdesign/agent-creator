@@ -1,3 +1,6 @@
+import type { PortalBrand } from "@/server/queries/portal";
+import { AuthShell } from "@/app/(auth)/auth-shell";
+import { authBrand } from "@/app/(auth)/brand";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -7,14 +10,14 @@ import { SignInForm } from "../auth-forms";
 
 export const metadata: Metadata = { title: "Sign in" };
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
+async function LoginPageInner({ searchParams, brand }: { searchParams: Promise<{ next?: string; org?: string }>; brand: PortalBrand | null }) {
   const { next } = await searchParams;
   const user = await getCurrentUser();
   if (user) redirect(await homePathFor(user.id));
   return (
     <div>
-      <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">Sign in to Roster</h1>
-      <p className="mt-1.5 mb-7 text-[14px] text-ink-3">Welcome back. Your team has been busy.</p>
+      <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">Sign in to {brand?.name ?? "Roster"}</h1>
+      <p className="mt-1.5 mb-7 text-[14px] text-ink-3">{brand ? "Your AI team’s work is waiting in your portal." : "Welcome back. Your team has been busy."}</p>
       <SignInForm next={next} />
       <div className="my-6 flex items-center gap-3 text-[12px] text-ink-3">
         <span className="h-px flex-1 bg-line" />
@@ -27,12 +30,24 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       >
         Email me a sign-in link
       </Link>
+      {brand ? null : (
       <p className="mt-8 text-center text-[13px] text-ink-3">
         New to Roster?{" "}
         <Link href="/signup" className="font-medium text-ink underline-offset-2 hover:underline">
           Create an account
         </Link>
       </p>
+      )}
     </div>
+  );
+}
+
+export default async function LoginPage(props: { searchParams: Promise<{ next?: string; org?: string }> }) {
+  const sp = await props.searchParams;
+  const brand = await authBrand({ next: sp.next, org: sp.org });
+  return (
+    <AuthShell brand={brand}>
+      <LoginPageInner {...props} brand={brand} />
+    </AuthShell>
   );
 }
