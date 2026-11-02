@@ -30,7 +30,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
 
   return (
     <div className="mx-auto w-full max-w-[1080px] px-4 py-8 sm:px-6 md:px-10 md:py-10">
-      <nav aria-label="Breadcrumb" className="mb-5 flex items-center gap-1 text-[12.5px] text-ink-4">
+      <nav aria-label="Breadcrumb" className="mb-5 flex items-center gap-1 text-[12.5px] text-ink-3">
         <Link href={`${base}/clients`} className="hover:text-ink-2">Clients</Link>
         <ChevronRight className="size-3" aria-hidden />
         <span className="text-ink-3">{org.name}</span>
@@ -40,7 +40,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">{org.name}</h1>
-            <ClientStatus status={org.status} />
+            <ClientStatus status={org.status === "active" && !active ? "no plan" : org.status} />
           </div>
           <p className="mt-0.5 text-[14px] text-ink-3">
             {[org.industry, org.website?.replace(/^https?:\/\//, "").replace(/\/$/, ""), customers.length ? `${customers.length} resale customer${customers.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Client"}
@@ -85,7 +85,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
           </section>
 
           <section>
-            <SectionHeading title="Recent deliverables" action={<span className="tabular text-[12.5px] text-ink-4">{hours(hrs)} saved recently</span>} />
+            <SectionHeading title="Recent deliverables" action={<span className="tabular text-[12.5px] text-ink-3">{hours(hrs)} saved recently</span>} />
             {deliverables.length ? (
               <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
                 {deliverables.map((d) => (
@@ -94,11 +94,11 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
                       <AgentOrb seed={d.agentSeed ?? d.agentId} size={22} className="mt-0.5" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13.5px] font-medium text-ink">{d.title}</p>
-                        <p className="text-[12px] text-ink-4">
+                        <p className="text-[12px] text-ink-3">
                           {d.agentName} · {OUTPUT_LABEL[d.kind] ?? d.kind}
                         </p>
                       </div>
-                      <RelativeTime date={d.createdAt} className="shrink-0 text-[12px] text-ink-4" />
+                      <RelativeTime date={d.createdAt} className="shrink-0 text-[12px] text-ink-3" />
                     </Link>
                   </li>
                 ))}
@@ -127,8 +127,8 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
               ) : (
                 <p className="mb-4 text-[13px] text-ink-3">No active subscription.</p>
               )}
-              <PlanSelect agency={slug} clientId={org.id} current={active?.planId ?? null} plans={plans.map((p) => ({ id: p.id, name: p.name, price: money(p.priceCents) }))} />
-              <p className="mt-2 text-[12px] text-ink-4">Flat rate. No setup fee, no token billing.</p>
+              <PlanSelect agency={slug} clientId={org.id} clientName={org.name} current={active?.planId ?? null} plans={plans.map((p) => ({ id: p.id, name: p.name, price: money(p.priceCents) }))} />
+              <p className="mt-2 text-[12px] text-ink-3">Flat rate. No setup fee, no token billing.</p>
             </div>
           </section>
 
@@ -140,7 +140,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
                   <li key={m.id} className="flex items-center justify-between gap-3 text-[13px]">
                     <span className="min-w-0">
                       <span className="block truncate font-medium text-ink">{m.name ?? m.email}</span>
-                      <span className="block truncate text-[12px] text-ink-4">{m.email}</span>
+                      <span className="block truncate text-[12px] text-ink-3">{m.email}</span>
                     </span>
                     <span className="shrink-0 text-[12px] text-ink-3 capitalize">{m.role}</span>
                   </li>
@@ -159,7 +159,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
                 ))}
               </ul>
             ) : null}
-            <p className="mb-2 text-[12.5px] text-ink-3">Invite the owner to their portal</p>
+            <p className="mb-2 text-[12.5px] text-ink-3">{members.some((m) => m.role === "owner") ? "Invite a teammate to their portal" : "Invite the owner to their portal"}</p>
             <InviteOwner agency={slug} clientId={org.id} clientName={org.name} />
           </section>
         </aside>

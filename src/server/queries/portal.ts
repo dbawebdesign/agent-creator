@@ -3,9 +3,27 @@
  * authorized with requireOrg(slug). Nothing here returns tokens, cost, model names or run traces.
  */
 import "server-only";
-import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { cache } from "react";
-import { requireOrg, orgChain, hasRole, type Org, type OrgAccess, type Role } from "@/server/auth/access";
+import {
+  requireOrg,
+  orgChain,
+  hasRole,
+  type Org,
+  type OrgAccess,
+  type Role,
+} from "@/server/auth/access";
 import { db, schema } from "@/server/db/client";
 import type { ChannelKind, WorkflowTrigger } from "@/server/db/schema";
 import { env } from "@/server/env";
@@ -33,7 +51,10 @@ export type PortalContext = {
   needsYouCount: number;
 };
 
-function firstOf<T>(chain: Org[], pick: (o: Org) => T | undefined | null): T | null {
+function firstOf<T>(
+  chain: Org[],
+  pick: (o: Org) => T | undefined | null,
+): T | null {
   for (const o of chain) {
     const v = pick(o);
     if (v !== undefined && v !== null && v !== "") return v;
@@ -49,8 +70,12 @@ export function resolveBrand(chain: Org[]): PortalBrand {
   const fromProvider = org.kind === "customer" ? chain.slice(1) : chain;
   return {
     name: provider.branding?.displayName?.trim() || provider.name,
-    accent: firstOf(fromProvider, (o) => (isHex(o.branding?.accent) ? o.branding.accent : null)),
-    logoUrl: firstOf(fromProvider, (o) => (isSafeUrl(o.branding?.logoUrl) ? o.branding.logoUrl : null)),
+    accent: firstOf(fromProvider, (o) =>
+      isHex(o.branding?.accent) ? o.branding.accent : null,
+    ),
+    logoUrl: firstOf(fromProvider, (o) =>
+      isSafeUrl(o.branding?.logoUrl) ? o.branding.logoUrl : null,
+    ),
     whiteLabel: chain.some((o) => o.branding?.whiteLabel === true),
   };
 }
@@ -73,7 +98,13 @@ export const getPortal = cache(async (slug: string): Promise<PortalContext> => {
   const chain = await orgChain(org.id);
   const brand = resolveBrand(chain);
   const viewingAs = access.inherited
-    ? { name: access.via.name, href: access.via.kind === "agency" ? `/a/${access.via.slug}` : `/p/${access.via.slug}` }
+    ? {
+        name: access.via.name,
+        href:
+          access.via.kind === "agency"
+            ? `/a/${access.via.slug}`
+            : `/p/${access.via.slug}`,
+      }
     : null;
   const needsYouCount = await countNeedsYou(org.id);
   const name = user.name?.trim() || null;
@@ -85,7 +116,12 @@ export const getPortal = cache(async (slug: string): Promise<PortalContext> => {
     canAct: hasRole(access, "member"),
     isAdmin: hasRole(access, "admin"),
     viewingAs,
-    user: { id: user.id, name, email: user.email, firstName: name?.split(/\s+/)[0] ?? user.email.split("@")[0]! },
+    user: {
+      id: user.id,
+      name,
+      email: user.email,
+      firstName: name?.split(/\s+/)[0] ?? user.email.split("@")[0]!,
+    },
     needsYouCount,
   };
 });
@@ -117,7 +153,13 @@ async function countNeedsYou(orgId: string): Promise<number> {
 
 /* ------------------------------------------------------------------ Today */
 
-export type AgentLite = { id: string; name: string; role: string; seed: string; status: string };
+export type AgentLite = {
+  id: string;
+  name: string;
+  role: string;
+  seed: string;
+  status: string;
+};
 
 const agentLite = {
   id: schema.agents.id,
@@ -167,8 +209,16 @@ export async function getToday(orgId: string) {
     db()
       .select({ ...deliverableCard, runId: schema.deliverables.runId })
       .from(schema.deliverables)
-      .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
-      .where(and(eq(schema.deliverables.orgId, orgId), ne(schema.deliverables.status, "archived")))
+      .innerJoin(
+        schema.agents,
+        eq(schema.agents.id, schema.deliverables.agentId),
+      )
+      .where(
+        and(
+          eq(schema.deliverables.orgId, orgId),
+          ne(schema.deliverables.status, "archived"),
+        ),
+      )
       .orderBy(desc(schema.deliverables.createdAt))
       .limit(30),
     db()
@@ -182,7 +232,12 @@ export async function getToday(orgId: string) {
       })
       .from(schema.approvals)
       .innerJoin(schema.agents, eq(schema.agents.id, schema.approvals.agentId))
-      .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.status, "pending")))
+      .where(
+        and(
+          eq(schema.approvals.orgId, orgId),
+          eq(schema.approvals.status, "pending"),
+        ),
+      )
       .orderBy(desc(schema.approvals.createdAt))
       .limit(20),
     db()
@@ -191,7 +246,12 @@ export async function getToday(orgId: string) {
         hours: sql<number>`coalesce(sum(${schema.deliverables.hoursSaved}), 0)::float`,
       })
       .from(schema.deliverables)
-      .where(and(eq(schema.deliverables.orgId, orgId), gte(schema.deliverables.createdAt, since))),
+      .where(
+        and(
+          eq(schema.deliverables.orgId, orgId),
+          gte(schema.deliverables.createdAt, since),
+        ),
+      ),
     listAgentsLite(orgId),
     db()
       .select({
@@ -217,13 +277,20 @@ export async function getToday(orgId: string) {
   const pendingRuns = new Set(approvals.map((a) => a.runId).filter(Boolean));
   const needsReview = recent
     .filter((d) => d.needsReview && (d.status === "new" || d.status === "seen"))
-    .map((d) => ({ ...d, sendsOnApprove: Boolean(d.runId && pendingRuns.has(d.runId)) }));
+    .map((d) => ({
+      ...d,
+      sendsOnApprove: Boolean(d.runId && pendingRuns.has(d.runId)),
+    }));
   const reviewRuns = new Set(needsReview.map((d) => d.runId).filter(Boolean));
   const feed = recent.filter((d) => !needsReview.some((n) => n.id === d.id));
   return {
-    needsReview: needsReview as (DeliverableCard & { sendsOnApprove: boolean })[],
+    needsReview: needsReview as (DeliverableCard & {
+      sendsOnApprove: boolean;
+    })[],
     // Approvals that ride along with a review are decided from that review.
-    approvals: approvals.filter((a) => !a.runId || !reviewRuns.has(a.runId)) as ApprovalCard[],
+    approvals: approvals.filter(
+      (a) => !a.runId || !reviewRuns.has(a.runId),
+    ) as ApprovalCard[],
     feed: feed as DeliverableCard[],
     overnight: { count: overnight[0]?.n ?? 0, hours: overnight[0]?.hours ?? 0 },
     agents,
@@ -236,13 +303,18 @@ export async function listAgentsLite(orgId: string): Promise<AgentLite[]> {
   return db()
     .select(agentLite)
     .from(schema.agents)
-    .where(and(eq(schema.agents.orgId, orgId), inArray(schema.agents.status, ["active", "paused", "provisioning"])))
+    .where(
+      and(
+        eq(schema.agents.orgId, orgId),
+        inArray(schema.agents.status, ["active", "paused", "provisioning"]),
+      ),
+    )
     .orderBy(asc(schema.agents.createdAt));
 }
 
 /* ------------------------------------------------------------ Deliverable */
 
-export async function getDeliverable(orgId: string, id: string) {
+async function getDeliverableUncached(orgId: string, id: string) {
   if (!isUuid(id)) return null;
   const rows = await db()
     .select({
@@ -252,8 +324,13 @@ export async function getDeliverable(orgId: string, id: string) {
     })
     .from(schema.deliverables)
     .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
-    .leftJoin(schema.workflows, eq(schema.workflows.id, schema.deliverables.workflowId))
-    .where(and(eq(schema.deliverables.orgId, orgId), eq(schema.deliverables.id, id)))
+    .leftJoin(
+      schema.workflows,
+      eq(schema.workflows.id, schema.deliverables.workflowId),
+    )
+    .where(
+      and(eq(schema.deliverables.orgId, orgId), eq(schema.deliverables.id, id)),
+    )
     .limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -261,16 +338,31 @@ export async function getDeliverable(orgId: string, id: string) {
   // The send/act approval riding along with this delivery, if any: pending means approving sends it.
   const [link] = d.runId
     ? await db()
-        .select({ status: schema.approvals.status, payload: schema.approvals.payload, decidedAt: schema.approvals.decidedAt })
+        .select({
+          status: schema.approvals.status,
+          payload: schema.approvals.payload,
+          decidedAt: schema.approvals.decidedAt,
+        })
         .from(schema.approvals)
-        .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.runId, d.runId)))
+        .where(
+          and(
+            eq(schema.approvals.orgId, orgId),
+            eq(schema.approvals.runId, d.runId),
+          ),
+        )
         .orderBy(desc(schema.approvals.createdAt))
         .limit(1)
     : [];
-  const to = link && typeof link.payload?.to === "string" ? (link.payload.to as string).slice(0, 200) : null;
+  const to =
+    link && typeof link.payload?.to === "string"
+      ? (link.payload.to as string).slice(0, 200)
+      : null;
   return {
     sendsOnApprove: link?.status === "pending",
-    sendTo: link && (link.status === "pending" || link.status === "approved") ? to : null,
+    sendTo:
+      link && (link.status === "pending" || link.status === "approved")
+        ? to
+        : null,
     sentAt: link?.status === "approved" ? link.decidedAt : null,
     id: d.id,
     title: d.title,
@@ -336,9 +428,19 @@ export function agentEmail(handle: string | null): string | null {
 
 export async function getTeam(orgId: string): Promise<TeamMember[]> {
   const agents = await db()
-    .select({ ...agentLite, summary: schema.agents.summary, emailHandle: schema.agents.emailHandle, phone: schema.agents.phoneNumber })
+    .select({
+      ...agentLite,
+      summary: schema.agents.summary,
+      emailHandle: schema.agents.emailHandle,
+      phone: schema.agents.phoneNumber,
+    })
     .from(schema.agents)
-    .where(and(eq(schema.agents.orgId, orgId), inArray(schema.agents.status, ["active", "paused", "provisioning"])))
+    .where(
+      and(
+        eq(schema.agents.orgId, orgId),
+        inArray(schema.agents.status, ["active", "paused", "provisioning"]),
+      ),
+    )
     .orderBy(asc(schema.agents.createdAt));
   if (!agents.length) return [];
   const ids = agents.map((a) => a.id);
@@ -358,7 +460,12 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
         hoursSavedPerRun: schema.workflows.hoursSavedPerRun,
       })
       .from(schema.workflows)
-      .where(and(eq(schema.workflows.orgId, orgId), inArray(schema.workflows.agentId, ids)))
+      .where(
+        and(
+          eq(schema.workflows.orgId, orgId),
+          inArray(schema.workflows.agentId, ids),
+        ),
+      )
       .orderBy(asc(schema.workflows.createdAt)),
     db()
       .select({
@@ -367,7 +474,12 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
         hours: sql<number>`coalesce(sum(${schema.deliverables.hoursSaved}), 0)::float`,
       })
       .from(schema.deliverables)
-      .where(and(eq(schema.deliverables.orgId, orgId), gte(schema.deliverables.createdAt, since)))
+      .where(
+        and(
+          eq(schema.deliverables.orgId, orgId),
+          gte(schema.deliverables.createdAt, since),
+        ),
+      )
       .groupBy(schema.deliverables.agentId),
   ]);
   return agents.map((a) => {
@@ -388,7 +500,11 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
   });
 }
 
-export async function getAgentPage(orgId: string, agentId: string, userId: string) {
+async function getAgentPageUncached(
+  orgId: string,
+  agentId: string,
+  userId: string,
+) {
   if (!isUuid(agentId)) return null;
   const team = await getTeam(orgId);
   const agent = team.find((a) => a.id === agentId);
@@ -397,7 +513,10 @@ export async function getAgentPage(orgId: string, agentId: string, userId: strin
     db()
       .select(deliverableCard)
       .from(schema.deliverables)
-      .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
+      .innerJoin(
+        schema.agents,
+        eq(schema.agents.id, schema.deliverables.agentId),
+      )
       .where(
         and(
           eq(schema.deliverables.orgId, orgId),
@@ -415,14 +534,19 @@ export async function getAgentPage(orgId: string, agentId: string, userId: strin
           eq(schema.conversations.orgId, orgId),
           eq(schema.conversations.agentId, agentId),
           eq(schema.conversations.channel, "portal"),
-          or(eq(schema.conversations.userId, userId), isNull(schema.conversations.userId)),
+          or(
+            eq(schema.conversations.userId, userId),
+            isNull(schema.conversations.userId),
+          ),
         ),
       )
       .orderBy(desc(schema.conversations.lastMessageAt))
       .limit(1),
   ]);
   const conversationId = convo[0]?.id ?? null;
-  const messages = conversationId ? await getMessages(orgId, conversationId, 40) : [];
+  const messages = conversationId
+    ? await getMessages(orgId, conversationId, 40)
+    : [];
   return { agent, work: work as DeliverableCard[], conversationId, messages };
 }
 
@@ -437,7 +561,11 @@ export type ThreadMessage = {
   authorName: string | null;
 };
 
-async function getMessages(orgId: string, conversationId: string, limit = 200): Promise<ThreadMessage[]> {
+async function getMessages(
+  orgId: string,
+  conversationId: string,
+  limit = 200,
+): Promise<ThreadMessage[]> {
   const rows = await db()
     .select({
       id: schema.messages.id,
@@ -448,7 +576,12 @@ async function getMessages(orgId: string, conversationId: string, limit = 200): 
       meta: schema.messages.meta,
     })
     .from(schema.messages)
-    .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.conversationId, conversationId)))
+    .where(
+      and(
+        eq(schema.messages.orgId, orgId),
+        eq(schema.messages.conversationId, conversationId),
+      ),
+    )
     .orderBy(desc(schema.messages.createdAt))
     .limit(limit);
   return rows.reverse().map((m) => ({
@@ -486,15 +619,27 @@ export async function listRequests(orgId: string): Promise<RequestRow[]> {
       subject: schema.conversations.subject,
       lastMessageAt: schema.conversations.lastMessageAt,
       agent: agentLite,
-      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone}, (select m.meta->>'from' from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${schema.conversations.orgId} and m.author = 'contact' order by m.created_at limit 1))`,
-      lastBody: sql<string | null>`(select m.body from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
-      lastAuthor: sql<string | null>`(select m.author from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
+      who: sql<
+        string | null
+      >`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone}, (select m.meta->>'from' from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${schema.conversations.orgId} and m.author = 'contact' order by m.created_at limit 1))`,
+      lastBody: sql<
+        string | null
+      >`(select m.body from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
+      lastAuthor: sql<
+        string | null
+      >`(select m.author from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
       count: sql<number>`(select count(*)::int from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId})`,
     })
     .from(schema.conversations)
-    .innerJoin(schema.agents, eq(schema.agents.id, schema.conversations.agentId))
+    .innerJoin(
+      schema.agents,
+      eq(schema.agents.id, schema.conversations.agentId),
+    )
     .leftJoin(schema.users, eq(schema.users.id, schema.conversations.userId))
-    .leftJoin(schema.contacts, eq(schema.contacts.id, schema.conversations.contactId))
+    .leftJoin(
+      schema.contacts,
+      eq(schema.contacts.id, schema.conversations.contactId),
+    )
     .where(
       and(
         eq(schema.conversations.orgId, orgId),
@@ -507,7 +652,7 @@ export async function listRequests(orgId: string): Promise<RequestRow[]> {
   return rows.filter((r) => r.count > 0) as RequestRow[];
 }
 
-export async function getRequest(orgId: string, id: string) {
+async function getRequestUncached(orgId: string, id: string) {
   if (!isUuid(id)) return null;
   const rows = await db()
     .select({
@@ -516,17 +661,34 @@ export async function getRequest(orgId: string, id: string) {
       subject: schema.conversations.subject,
       lastMessageAt: schema.conversations.lastMessageAt,
       agent: agentLite,
-      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone}, (select m.meta->>'from' from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${schema.conversations.orgId} and m.author = 'contact' order by m.created_at limit 1))`,
+      who: sql<
+        string | null
+      >`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone}, (select m.meta->>'from' from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${schema.conversations.orgId} and m.author = 'contact' order by m.created_at limit 1))`,
     })
     .from(schema.conversations)
-    .innerJoin(schema.agents, eq(schema.agents.id, schema.conversations.agentId))
+    .innerJoin(
+      schema.agents,
+      eq(schema.agents.id, schema.conversations.agentId),
+    )
     .leftJoin(schema.users, eq(schema.users.id, schema.conversations.userId))
-    .leftJoin(schema.contacts, eq(schema.contacts.id, schema.conversations.contactId))
-    .where(and(eq(schema.conversations.orgId, orgId), eq(schema.conversations.id, id)))
+    .leftJoin(
+      schema.contacts,
+      eq(schema.contacts.id, schema.conversations.contactId),
+    )
+    .where(
+      and(
+        eq(schema.conversations.orgId, orgId),
+        eq(schema.conversations.id, id),
+      ),
+    )
     .limit(1);
   const c = rows[0];
   if (!c) return null;
-  return { ...c, agent: c.agent as AgentLite, messages: await getMessages(orgId, id) };
+  return {
+    ...c,
+    agent: c.agent as AgentLite,
+    messages: await getMessages(orgId, id),
+  };
 }
 
 /* ---------------------------------------------------------------- Connect */
@@ -535,15 +697,31 @@ export async function getConnect(orgId: string) {
   const [team, slack] = await Promise.all([
     getTeam(orgId),
     db()
-      .select({ status: schema.channelConnections.status, config: schema.channelConnections.config })
+      .select({
+        status: schema.channelConnections.status,
+        config: schema.channelConnections.config,
+      })
       .from(schema.channelConnections)
-      .where(and(eq(schema.channelConnections.orgId, orgId), eq(schema.channelConnections.kind, "slack")))
+      .where(
+        and(
+          eq(schema.channelConnections.orgId, orgId),
+          eq(schema.channelConnections.kind, "slack"),
+        ),
+      )
       .limit(1),
   ]);
   const s = slack[0];
-  const teamName = typeof s?.config?.teamName === "string" ? s.config.teamName : null;
+  const teamName =
+    typeof s?.config?.teamName === "string" ? s.config.teamName : null;
   return {
-    agents: team.map((a) => ({ id: a.id, name: a.name, role: a.role, seed: a.seed, email: a.email, phone: a.phone })),
+    agents: team.map((a) => ({
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      seed: a.seed,
+      email: a.email,
+      phone: a.phone,
+    })),
     slack: s ? { status: s.status, teamName } : null,
     appUrl: env().APP_URL,
   };
@@ -590,27 +768,52 @@ export async function getResell(orgId: string) {
             currency: schema.plans.currency,
           })
           .from(schema.subscriptions)
-          .innerJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId))
+          .innerJoin(
+            schema.plans,
+            eq(schema.plans.id, schema.subscriptions.planId),
+          )
           .where(
             and(
               inArray(schema.subscriptions.orgId, customerIds),
               eq(schema.plans.orgId, orgId),
-              inArray(schema.subscriptions.status, ["active", "trialing", "past_due"]),
+              inArray(schema.subscriptions.status, [
+                "active",
+                "trialing",
+                "past_due",
+              ]),
             ),
           ),
         db()
-          .select({ ...agentLite, orgId: schema.agents.orgId, sourceAgentId: schema.agents.sourceAgentId })
+          .select({
+            ...agentLite,
+            orgId: schema.agents.orgId,
+            sourceAgentId: schema.agents.sourceAgentId,
+          })
           .from(schema.agents)
-          .where(and(inArray(schema.agents.orgId, customerIds), ne(schema.agents.status, "archived"))),
+          .where(
+            and(
+              inArray(schema.agents.orgId, customerIds),
+              ne(schema.agents.status, "archived"),
+            ),
+          ),
       ])
     : [[], []];
   const rows = customers.map((c) => {
     const mine = subs.filter((s) => s.orgId === c.id);
     return {
       ...c,
-      plans: mine.map((s) => ({ id: s.id, name: s.planName, priceCents: s.priceCents, status: s.status })),
-      monthlyCents: mine.filter((s) => s.status !== "past_due").reduce((n, s) => n + s.priceCents, 0),
-      agents: theirAgents.filter((a) => a.orgId === c.id).map((a) => ({ id: a.id, name: a.name, seed: a.seed, role: a.role })),
+      plans: mine.map((s) => ({
+        id: s.id,
+        name: s.planName,
+        priceCents: s.priceCents,
+        status: s.status,
+      })),
+      monthlyCents: mine
+        .filter((s) => s.status !== "past_due")
+        .reduce((n, s) => n + s.priceCents, 0),
+      agents: theirAgents
+        .filter((a) => a.orgId === c.id)
+        .map((a) => ({ id: a.id, name: a.name, seed: a.seed, role: a.role })),
     };
   });
   const monthlyCents = rows.reduce((n, r) => n + r.monthlyCents, 0);
@@ -619,14 +822,25 @@ export async function getResell(orgId: string) {
 
 /* --------------------------------------------------------------- Settings */
 
-export type NotifyPrefs = { channels: ChannelKind[]; cadence: "instant" | "digest" };
-export const DEFAULT_PREFS: NotifyPrefs = { channels: ["email"], cadence: "instant" };
+export type NotifyPrefs = {
+  channels: ChannelKind[];
+  cadence: "instant" | "digest";
+};
+export const DEFAULT_PREFS: NotifyPrefs = {
+  channels: ["email"],
+  cadence: "instant",
+};
 
 export function readPrefs(org: Org, userId: string): NotifyPrefs {
-  const all = (org.settings?.notificationPrefs ?? {}) as Record<string, Partial<NotifyPrefs>>;
+  const all = (org.settings?.notificationPrefs ?? {}) as Record<
+    string,
+    Partial<NotifyPrefs>
+  >;
   const p = all[userId];
   return {
-    channels: Array.isArray(p?.channels) ? (p.channels as ChannelKind[]) : DEFAULT_PREFS.channels,
+    channels: Array.isArray(p?.channels)
+      ? (p.channels as ChannelKind[])
+      : DEFAULT_PREFS.channels,
     cadence: p?.cadence === "digest" ? "digest" : "instant",
   };
 }
@@ -670,7 +884,15 @@ export async function getSettings(orgId: string) {
 /* ---------------------------------------------------------------- helpers */
 
 export function isUuid(v: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    v,
+  );
 }
 
 export type { Role };
+
+/* Detail reads are cached per request: the segment layout checks existence (so a miss is a real 404, outside
+   any loading boundary) and the page reuses the same result. */
+export const getDeliverable = cache(getDeliverableUncached);
+export const getRequest = cache(getRequestUncached);
+export const getAgentPage = cache(getAgentPageUncached);

@@ -124,34 +124,85 @@ export function InviteOwner({ agency, clientId, clientName }: { agency: string; 
   );
 }
 
-export function PlanSelect({ agency, clientId, current, plans }: { agency: string; clientId: string; current: string | null; plans: { id: string; name: string; price: string }[] }) {
-  const [value, setValue] = useState(current ?? "");
+/**
+ * Plan control for a client. Changing plan is an explicit choice plus Save; cancelling is a separate, confirmed,
+ * destructive action — never a side effect of a select.
+ */
+export function PlanSelect({
+  agency,
+  clientId,
+  current,
+  plans,
+  clientName = "this client",
+}: {
+  agency: string;
+  clientId: string;
+  current: string | null;
+  plans: { id: string; name: string; price: string }[];
+  clientName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [choice, setChoice] = useState(current ?? plans[0]?.id ?? "");
   const [pending, start] = useTransition();
+  const router = useRouter();
+  const save = (planId: string | null, done: () => void) =>
+    start(async () => {
+      const r = await setClientPlan(agency, clientId, planId);
+      if (r.ok) {
+        toast.success(planId ? "Plan updated" : "Subscription canceled");
+        done();
+        router.refresh();
+      } else toast.error(r.error);
+    });
   return (
-    <Select
-      value={value}
-      disabled={pending}
-      aria-label="Plan"
-      onChange={(e) => {
-        const v = e.target.value;
-        const prev = value;
-        setValue(v);
-        start(async () => {
-          const r = await setClientPlan(agency, clientId, v || null);
-          if (r.ok) toast.success(v ? "Plan updated" : "Subscription canceled");
-          else {
-            setValue(prev);
-            toast.error(r.error);
-          }
-        });
-      }}
-    >
-      <option value="">No plan</option>
-      {plans.map((p) => (
-        <option key={p.id} value={p.id}>
-          {p.name} — {p.price}/mo
-        </option>
-      ))}
-    </Select>
+    <div className="flex flex-wrap items-center gap-2">
+      <Dialog open={open} onOpenChange={(o) => (setOpen(o), o && setChoice(current ?? plans[0]?.id ?? ""))}>
+        <Button variant="secondary" size="sm" onClick={() => setOpen(true)} disabled={!plans.length}>
+          {current ? "Change plan" : "Choose a plan"}
+        </Button>
+        <DialogContent title={current ? "Change plan" : "Choose a plan"} description={`Billing for ${clientName} switches at the next invoice.`}>
+          <fieldset className="space-y-2">
+            <legend className="sr-only">Plan</legend>
+            {plans.map((p) => (
+              <label
+                key={p.id}
+                className="flex cursor-pointer items-center gap-3 rounded-lg border border-line px-3.5 py-3 transition-colors hover:bg-surface-2/50 has-[:checked]:border-accent has-[:checked]:bg-accent-soft/40 has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-accent/20"
+              >
+                <input type="radio" name="plan" value={p.id} checked={choice === p.id} onChange={() => setChoice(p.id)} className="accent-[var(--accent)]" />
+                <span className="flex-1 text-[13.5px] font-medium text-ink">{p.name}</span>
+                <span className="tabular text-[13px] text-ink-3">{p.price}/mo</span>
+                {p.id === current ? <span className="text-[11.5px] font-medium text-ink-3">Current</span> : null}
+              </label>
+            ))}
+          </fieldset>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={pending || !choice || choice === current} onClick={() => save(choice, () => setOpen(false))}>
+              {pending ? "Saving…" : "Save plan"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {current ? (
+        <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+          <Button variant="ghost" size="sm" className="text-bad hover:bg-bad-soft hover:text-bad" onClick={() => setCancelOpen(true)}>
+            Cancel subscription
+          </Button>
+          <DialogContent title="Cancel this subscription?" description={`${clientName} stops being billed. Their agents keep running until you pause them.`}>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setCancelOpen(false)}>
+                Keep it
+              </Button>
+              <Button variant="danger" disabled={pending} onClick={() => save(null, () => setCancelOpen(false))}>
+                {pending ? "Canceling…" : "Cancel subscription"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </div>
   );
 }

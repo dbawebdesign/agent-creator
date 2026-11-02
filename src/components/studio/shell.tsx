@@ -184,7 +184,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
 
         {props.agents.length ? (
           <div className="mt-6 min-h-0 flex-1 overflow-y-auto px-3">
-            <div className="px-2.5 pb-1.5 text-[11.5px] font-medium text-ink-4">Your roster</div>
+            <div className="px-2.5 pb-1.5 text-[11.5px] font-medium text-ink-3">Your roster</div>
             <ul className="space-y-px">
               {props.agents.slice(0, 12).map((a) => {
                 const href = `${base}/agents/${a.id}`;
@@ -200,7 +200,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
                     >
                       <AgentOrb seed={a.seed} size={16} />
                       <span className="truncate">{a.name}</span>
-                      <span className="ml-auto max-w-[45%] truncate pl-2 text-[11.5px] text-ink-4">{a.orgName}</span>
+                      <span className="ml-auto max-w-[45%] truncate pl-2 text-[11.5px] text-ink-3">{a.orgName}</span>
                     </Link>
                   </li>
                 );
@@ -240,7 +240,7 @@ function SearchButton({ compact }: { compact?: boolean }) {
     >
       <Search className="size-3.5" aria-hidden />
       Search
-      <kbd className="ml-auto font-sans text-[11px] text-ink-4">{mac ? "⌘K" : "Ctrl K"}</kbd>
+      <kbd className="ml-auto font-sans text-[11px] text-ink-3">{mac ? "⌘K" : "Ctrl K"}</kbd>
     </button>
   );
 }

@@ -2,7 +2,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function Loading() {
   return (
-    <div className="mx-auto w-full max-w-[1040px] px-4 pt-5 md:px-6 md:pt-8" aria-busy="true" aria-label="Loading">
+    <div
+      className="mx-auto w-full max-w-[1040px] px-4 pt-5 md:px-6 md:pt-8"
+      aria-busy="true"
+      aria-label="Loading"
+    >
       <Skeleton className="h-6 w-20" />
       <div className="mt-6 grid gap-12 md:grid-cols-[minmax(0,1fr)_220px]">
         <div>
@@ -12,7 +16,13 @@ export default function Loading() {
           </div>
           <Skeleton className="mt-5 h-8 w-4/5" />
           <div className="mt-6 space-y-3 rounded-2xl border border-line bg-surface p-6 md:p-10">
-            {[100, 92, 96, 60, 0, 88, 94, 70].map((w, i) => (w ? <Skeleton key={i} className="h-3.5" /> : <div key={i} className="h-3" />))}
+            {[100, 92, 96, 60, 0, 88, 94, 70].map((w, i) =>
+              w ? (
+                <Skeleton key={i} className="h-3.5" />
+              ) : (
+                <div key={i} className="h-3" />
+              ),
+            )}
           </div>
         </div>
         <div className="hidden space-y-5 md:block">

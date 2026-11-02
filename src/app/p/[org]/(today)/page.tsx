@@ -2,14 +2,30 @@ import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { AskComposer } from "@/components/portal/composer";
-import { DeliverableCardView, whenLabel } from "@/components/portal/deliverable-card";
-import { capitalize, greeting, longDate, feedBucket, hoursPhrase, numberWord, dayWord, clockTime } from "@/components/portal/lib";
+import {
+  DeliverableCardView,
+  whenLabel,
+} from "@/components/portal/deliverable-card";
+import {
+  capitalize,
+  greeting,
+  longDate,
+  feedBucket,
+  hoursPhrase,
+  numberWord,
+  dayWord,
+  clockTime,
+} from "@/components/portal/lib";
 import { NeedsYou, type NeedsYouItem } from "@/components/portal/needs-you";
 import { getPortal, getToday } from "@/server/queries/portal";
 
 export const metadata = { title: "Today" };
 
-export default async function TodayPage({ params }: { params: Promise<{ org: string }> }) {
+export default async function TodayPage({
+  params,
+}: {
+  params: Promise<{ org: string }>;
+}) {
   const { org: slug } = await params;
   const p = await getPortal(slug);
   const tz = p.org.timezone;
@@ -56,9 +72,18 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
       <header className="animate-rise">
         <div className="flex items-center gap-2.5">
           {t.agents.length ? (
-            <span className="flex -space-x-1.5" aria-label={`Your team: ${t.agents.map((a) => a.name).join(", ")}`}>
+            <span
+              className="flex -space-x-1.5"
+              aria-label={`Your team: ${t.agents.map((a) => a.name).join(", ")}`}
+            >
               {t.agents.slice(0, 5).map((a) => (
-                <AgentOrb key={a.id} seed={a.seed} size={20} className="ring-2 ring-canvas" />
+                <AgentOrb
+                  key={a.id}
+                  seed={a.seed}
+                  name={a.name}
+                  size={20}
+                  className="ring-2 ring-canvas"
+                />
               ))}
             </span>
           ) : null}
@@ -77,17 +102,23 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
               {hours ? (
                 <>
                   {" "}
-                  and saved you <span className="font-medium text-ink">{hours}</span>
+                  and saved you{" "}
+                  <span className="font-medium text-ink">{hours}</span>
                 </>
               ) : null}
               .
             </>
           ) : t.feed.length || needs.length ? (
-            <>Quiet night. Your team is caught up{nextRun ? <> — next delivery {nextRun}.</> : "."}</>
+            <>
+              Quiet night. Your team is caught up
+              {nextRun ? <> — next delivery {nextRun}.</> : "."}
+            </>
           ) : nextRun ? (
             <>Your team is all set up and starts working soon.</>
           ) : (
-            <>Your team is getting set up. Their first work will show up here.</>
+            <>
+              Your team is getting set up. Their first work will show up here.
+            </>
           )}
         </p>
       </header>
@@ -101,7 +132,9 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
         />
       ) : null}
 
-      {needs.length ? <NeedsYou slug={slug} items={needs} canAct={p.canAct} /> : null}
+      {needs.length ? (
+        <NeedsYou slug={slug} items={needs} canAct={p.canAct} />
+      ) : null}
 
       {t.feed.length ? (
         [...groups.entries()].map(([label, items]) => (
@@ -122,14 +155,19 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
             <CalendarClock className="size-5" aria-hidden />
           </span>
           <p className="text-[14.5px] font-medium text-ink">
-            {nextRun ? `Your first delivery arrives ${nextRun}` : "Nothing delivered yet"}
+            {nextRun
+              ? `Your first delivery arrives ${nextRun}`
+              : "Nothing delivered yet"}
           </p>
           <p className="mx-auto mt-1 max-w-sm text-[13.5px] text-ink-3">
             {t.nextRun
               ? `${t.nextRun.agentName} is scheduled to start on “${t.nextRun.name}”. You’ll find the finished work right here.`
               : "Finished reports, documents and drafts from your team land here — no need to ask."}
           </p>
-          <Link href={`/p/${slug}/team`} className="mt-5 inline-block text-[13px] font-medium text-accent-text hover:underline">
+          <Link
+            href={`/p/${slug}/team`}
+            className="mt-5 inline-block text-[13px] font-medium text-accent-text hover:underline"
+          >
             Meet your team
           </Link>
         </div>
@@ -143,14 +181,18 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
           <ul className="space-y-2.5">
             {t.upcoming.map((w) => (
               <li key={w.id} className="flex items-center gap-3 text-[13.5px]">
-                <AgentOrb seed={w.agentSeed} size={18} />
+                <AgentOrb seed={w.agentSeed} name={w.agentName} size={18} />
                 <span className="min-w-0 flex-1 truncate text-ink-2">
                   {w.name}
                   <span className="text-ink-3"> · {w.agentName}</span>
                 </span>
                 {w.nextRunAt ? (
-                  <time dateTime={w.nextRunAt.toISOString()} className="shrink-0 text-[12.5px] text-ink-3 tabular">
-                    {capitalize(dayWord(w.nextRunAt, tz))}, {clockTime(w.nextRunAt, tz)}
+                  <time
+                    dateTime={w.nextRunAt.toISOString()}
+                    className="shrink-0 text-[12.5px] text-ink-3 tabular"
+                  >
+                    {capitalize(dayWord(w.nextRunAt, tz))},{" "}
+                    {clockTime(w.nextRunAt, tz)}
                   </time>
                 ) : null}
               </li>

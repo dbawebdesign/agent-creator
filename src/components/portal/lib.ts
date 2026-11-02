@@ -6,7 +6,11 @@ import type { ChannelKind, WorkflowTrigger } from "@/server/db/schema/agents";
 
 export function hourIn(timezone: string, date = new Date()): number {
   try {
-    const h = new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: timezone }).format(date);
+    const h = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      hourCycle: "h23",
+      timeZone: timezone,
+    }).format(date);
     return Number(h) % 24;
   } catch {
     return date.getHours();
@@ -23,7 +27,12 @@ export function greeting(timezone: string, date = new Date()): string {
 
 export function longDate(timezone: string, date = new Date()): string {
   try {
-    return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: timezone }).format(date);
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      timeZone: timezone,
+    }).format(date);
   } catch {
     return date.toDateString();
   }
@@ -31,26 +40,52 @@ export function longDate(timezone: string, date = new Date()): string {
 
 export function clockTime(date: Date, timezone: string): string {
   try {
-    return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone }).format(date);
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: timezone,
+    }).format(date);
   } catch {
     return date.toLocaleTimeString();
   }
 }
 
 /** "today", "tomorrow", "Thursday", "Nov 12" — relative to now in the org timezone. */
-export function dayWord(date: Date, timezone: string, now = new Date()): string {
-  const key = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+export function dayWord(
+  date: Date,
+  timezone: string,
+  now = new Date(),
+): string {
+  const key = (d: Date) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
   const a = key(date);
   if (a === key(now)) return "today";
   if (a === key(new Date(now.getTime() + 86400000))) return "tomorrow";
   if (a === key(new Date(now.getTime() - 86400000))) return "yesterday";
   const diffDays = (date.getTime() - now.getTime()) / 86400000;
-  if (diffDays > 0 && diffDays < 7) return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: timezone }).format(date);
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: timezone }).format(date);
+  if (diffDays > 0 && diffDays < 7)
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      timeZone: timezone,
+    }).format(date);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: timezone,
+  }).format(date);
 }
 
 /** Bucket label for the feed: "This morning", "Yesterday", "Earlier this week", "Earlier". */
-export function feedBucket(date: Date, timezone: string, now = new Date()): string {
+export function feedBucket(
+  date: Date,
+  timezone: string,
+  now = new Date(),
+): string {
   const word = dayWord(date, timezone, now);
   if (word === "today") {
     const h = hourIn(timezone, date);
@@ -65,10 +100,20 @@ export function feedBucket(date: Date, timezone: string, now = new Date()): stri
 function fmtHour(h: number, m: number): string {
   const suffix = h < 12 ? "AM" : "PM";
   const hh = h % 12 === 0 ? 12 : h % 12;
-  return m === 0 ? `${hh} ${suffix}` : `${hh}:${String(m).padStart(2, "0")} ${suffix}`;
+  return m === 0
+    ? `${hh} ${suffix}`
+    : `${hh}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
-const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 
 function ordinal(n: number): string {
   const s = ["th", "st", "nd", "rd"];
@@ -80,13 +125,20 @@ function ordinal(n: number): string {
 export function humanizeCron(cron: string): string {
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) return "on a regular schedule";
-  const [min, hour, dom, mon, dow] = parts as [string, string, string, string, string];
+  const [min, hour, dom, mon, dow] = parts as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
   const everyMin = /^\*\/(\d+)$/.exec(min);
   if (everyMin && hour === "*") return `every ${everyMin[1]} minutes`;
   if (/^\d+$/.test(min) && hour === "*") return "every hour";
   const everyHour = /^\*\/(\d+)$/.exec(hour);
   if (/^\d+$/.test(min) && everyHour) return `every ${everyHour[1]} hours`;
-  if (!/^\d+$/.test(min) || !/^[\d,]+$/.test(hour)) return "on a regular schedule";
+  if (!/^\d+$/.test(min) || !/^[\d,]+$/.test(hour))
+    return "on a regular schedule";
   const times = hour
     .split(",")
     .map((h) => fmtHour(Number(h), Number(min)))
@@ -102,7 +154,8 @@ export function humanizeCron(cron: string): string {
       return `every ${names.slice(0, -1).join(", ")} and ${names.at(-1)} ${at}`;
     }
   }
-  if (/^\d+$/.test(dom) && mon === "*" && dow === "*") return `on the ${ordinal(Number(dom))} of every month ${at}`;
+  if (/^\d+$/.test(dom) && mon === "*" && dow === "*")
+    return `on the ${ordinal(Number(dom))} of every month ${at}`;
   return "on a regular schedule";
 }
 
@@ -114,10 +167,13 @@ const EVENT_WORDS: Record<string, string> = {
   "deliverable.approved": "right after you approve their work",
 };
 
-export function humanizeTrigger(trigger: WorkflowTrigger | null | undefined): string {
+export function humanizeTrigger(
+  trigger: WorkflowTrigger | null | undefined,
+): string {
   if (!trigger) return "whenever you ask";
   if (trigger.type === "schedule") return humanizeCron(trigger.cron);
-  if (trigger.type === "event") return EVENT_WORDS[trigger.event] ?? "when something happens";
+  if (trigger.type === "event")
+    return EVENT_WORDS[trigger.event] ?? "when something happens";
   return "whenever you ask";
 }
 
@@ -146,7 +202,8 @@ export const CHANNEL_LABEL: Record<ChannelKind, string> = {
 /** "~11 hours", "about 40 minutes". */
 export function hoursPhrase(hours: number): string {
   if (hours <= 0) return "";
-  if (hours < 1) return `about ${Math.max(5, Math.round((hours * 60) / 5) * 5)} minutes`;
+  if (hours < 1)
+    return `about ${Math.max(5, Math.round((hours * 60) / 5) * 5)} minutes`;
   const r = hours < 10 ? Math.round(hours * 2) / 2 : Math.round(hours);
   return `~${r} ${r === 1 ? "hour" : "hours"}`;
 }
@@ -159,6 +216,18 @@ export function shortHours(hours: number): string {
 }
 
 export function numberWord(n: number): string {
-  const w = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+  const w = [
+    "no",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+  ];
   return n <= 10 ? w[n]! : String(n);
 }

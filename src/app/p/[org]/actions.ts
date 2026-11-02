@@ -14,7 +14,9 @@ import { randomToken, sha256 } from "@/server/security/crypto";
 import * as engine from "@/server/services/engine";
 import { slugify } from "@/lib/utils";
 
-export type ActionResult<T = object> = ({ ok: true } & T) | { ok: false; error: string };
+export type ActionResult<T = object> =
+  | ({ ok: true } & T)
+  | { ok: false; error: string };
 
 const slugSchema = z.string().min(1).max(64);
 
@@ -23,11 +25,15 @@ function fail(error: string): { ok: false; error: string } {
 }
 
 /** Engine calls can fail while the team is being provisioned; keep the message human. */
-function engineError(err: unknown, fallback: string): { ok: false; error: string } {
+function engineError(
+  err: unknown,
+  fallback: string,
+): { ok: false; error: string } {
   const msg = err instanceof Error ? err.message : String(err);
   // Never forward internals (stack traces, SQL, model errors) to clients.
   logger.warn({ err: msg }, "portal engine call failed");
-  if (/not implemented/i.test(msg)) return fail("Your team isn't reachable right now. Try again in a minute.");
+  if (/not implemented/i.test(msg))
+    return fail("Your team isn't reachable right now. Try again in a minute.");
   return fail(fallback);
 }
 
@@ -44,22 +50,35 @@ const askInput = z.object({
   conversationId: z.uuid().optional(),
 });
 
-export async function askTeam(input: z.input<typeof askInput>): Promise<ActionResult<{ conversationId: string }>> {
+export async function askTeam(
+  input: z.input<typeof askInput>,
+): Promise<ActionResult<{ conversationId: string }>> {
   const parsed = askInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check your message");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check your message");
   const { slug, agentId, text, conversationId } = parsed.data;
   const access = await requireOrg(slug, "member");
   const [agent] = await db()
     .select({ id: schema.agents.id })
     .from(schema.agents)
-    .where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, access.org.id)))
+    .where(
+      and(
+        eq(schema.agents.id, agentId),
+        eq(schema.agents.orgId, access.org.id),
+      ),
+    )
     .limit(1);
   if (!agent) return fail("That teammate isn't on your team");
   if (conversationId) {
     const [c] = await db()
       .select({ id: schema.conversations.id })
       .from(schema.conversations)
-      .where(and(eq(schema.conversations.id, conversationId), eq(schema.conversations.orgId, access.org.id)))
+      .where(
+        and(
+          eq(schema.conversations.id, conversationId),
+          eq(schema.conversations.orgId, access.org.id),
+        ),
+      )
       .limit(1);
     if (!c) return fail("That conversation is gone");
   }
@@ -88,21 +107,35 @@ const reviewInput = z.object({
   feedback: z.string().trim().max(4000).optional(),
 });
 
-export async function reviewDeliverableAction(input: z.input<typeof reviewInput>): Promise<ActionResult> {
+export async function reviewDeliverableAction(
+  input: z.input<typeof reviewInput>,
+): Promise<ActionResult> {
   const parsed = reviewInput.safeParse(input);
   if (!parsed.success) return fail("Something about that didn't look right");
   const { slug, deliverableId, action, feedback } = parsed.data;
-  if (action === "request_changes" && !feedback) return fail("Tell them what to change");
+  if (action === "request_changes" && !feedback)
+    return fail("Tell them what to change");
   const access = await requireOrg(slug, "member");
   const [d] = await db()
     .select({ id: schema.deliverables.id, runId: schema.deliverables.runId })
     .from(schema.deliverables)
-    .where(and(eq(schema.deliverables.id, deliverableId), eq(schema.deliverables.orgId, access.org.id)))
+    .where(
+      and(
+        eq(schema.deliverables.id, deliverableId),
+        eq(schema.deliverables.orgId, access.org.id),
+      ),
+    )
     .limit(1);
   if (!d) return fail("That item is gone");
   const actor = { type: "user" as const, userId: access.user.id };
   try {
-    await engine.reviewDeliverable({ orgId: access.org.id, deliverableId, action, feedback, actor });
+    await engine.reviewDeliverable({
+      orgId: access.org.id,
+      deliverableId,
+      action,
+      feedback,
+      actor,
+    });
     // An email draft that waits on a send approval is decided together with its review.
     if (d.runId && action !== "archive") {
       const pending = await db()
@@ -131,15 +164,26 @@ export async function reviewDeliverableAction(input: z.input<typeof reviewInput>
   }
 }
 
-const approvalInput = z.object({ slug: slugSchema, approvalId: z.uuid(), decision: z.enum(["approved", "rejected"]) });
+const approvalInput = z.object({
+  slug: slugSchema,
+  approvalId: z.uuid(),
+  decision: z.enum(["approved", "rejected"]),
+});
 
-export async function decideApprovalAction(input: z.input<typeof approvalInput>): Promise<ActionResult> {
+export async function decideApprovalAction(
+  input: z.input<typeof approvalInput>,
+): Promise<ActionResult> {
   const parsed = approvalInput.safeParse(input);
   if (!parsed.success) return fail("Something about that didn't look right");
   const { slug, approvalId, decision } = parsed.data;
   const access = await requireOrg(slug, "member");
   try {
-    await engine.decideApproval({ orgId: access.org.id, approvalId, decision, actor: { type: "user", userId: access.user.id } });
+    await engine.decideApproval({
+      orgId: access.org.id,
+      approvalId,
+      decision,
+      actor: { type: "user", userId: access.user.id },
+    });
     refresh(slug);
     return { ok: true };
   } catch (err) {
@@ -155,9 +199,12 @@ const keyInput = z.object({
   agentId: z.uuid().optional(),
 });
 
-export async function createApiKeyAction(input: z.input<typeof keyInput>): Promise<ActionResult<{ key: string; prefix: string }>> {
+export async function createApiKeyAction(
+  input: z.input<typeof keyInput>,
+): Promise<ActionResult<{ key: string; prefix: string }>> {
   const parsed = keyInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check the name");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check the name");
   const { slug, name, agentId } = parsed.data;
   const access = await requireOrg(slug, "admin");
   try {
@@ -174,19 +221,30 @@ export async function createApiKeyAction(input: z.input<typeof keyInput>): Promi
     refresh(slug);
     return { ok: true, key: res.key, prefix: res.apiKey.prefix };
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "api key create failed");
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "api key create failed",
+    );
     return fail("Couldn't create a key right now. Try again in a minute.");
   }
 }
 
-export async function revokeApiKeyAction(input: { slug: string; keyId: string }): Promise<ActionResult> {
-  const parsed = z.object({ slug: slugSchema, keyId: z.uuid() }).safeParse(input);
+export async function revokeApiKeyAction(input: {
+  slug: string;
+  keyId: string;
+}): Promise<ActionResult> {
+  const parsed = z
+    .object({ slug: slugSchema, keyId: z.uuid() })
+    .safeParse(input);
   if (!parsed.success) return fail("Unknown key");
   const access = await requireOrg(parsed.data.slug, "admin");
   try {
     const { revokeApiKey } = await import("@/server/api/keys");
     const h = await headers();
-    await revokeApiKey(access.org.id, parsed.data.keyId, { userId: access.user.id, ip: clientIp(h) });
+    await revokeApiKey(access.org.id, parsed.data.keyId, {
+      userId: access.user.id,
+      ip: clientIp(h),
+    });
     refresh(parsed.data.slug);
     return { ok: true };
   } catch {
@@ -213,10 +271,17 @@ async function uniqueSlug(base: string): Promise<string> {
       .limit(1);
     if (!hit) return candidate;
   }
-  return `${root}-${randomToken(3).toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+  return `${root}-${randomToken(3)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")}`;
 }
 
-async function issueInvite(orgId: string, email: string, role: "admin" | "member" | "viewer" | "owner", invitedBy: string) {
+async function issueInvite(
+  orgId: string,
+  email: string,
+  role: "admin" | "member" | "viewer" | "owner",
+  invitedBy: string,
+) {
   const token = randomToken(32);
   await db()
     .insert(schema.invitations)
@@ -234,14 +299,17 @@ async function issueInvite(orgId: string, email: string, role: "admin" | "member
 const customerInput = z.object({
   slug: slugSchema,
   name: z.string().trim().min(2, "Add the business name").max(120),
-  email: z.union([z.literal(""), z.email("That email doesn't look right")]).optional(),
+  email: z
+    .union([z.literal(""), z.email("That email doesn't look right")])
+    .optional(),
 });
 
 export async function addCustomerAction(
   input: z.input<typeof customerInput>,
 ): Promise<ActionResult<{ customerSlug: string; inviteUrl: string | null }>> {
   const parsed = customerInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check the details");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check the details");
   const access = await requireReseller(parsed.data.slug);
   if (!access) return fail("Only client workspaces can resell");
   const { name, email } = parsed.data;
@@ -270,7 +338,9 @@ export async function addCustomerAction(
     })
     .returning({ id: schema.organizations.id });
   if (!org) return fail("Couldn't add that customer");
-  const inviteUrl = email ? await issueInvite(org.id, email, "owner", access.user.id) : null;
+  const inviteUrl = email
+    ? await issueInvite(org.id, email, "owner", access.user.id)
+    : null;
   await audit({
     orgId: access.org.id,
     actorType: "user",
@@ -291,9 +361,12 @@ const offerInput = z.object({
   planId: z.uuid().optional(),
 });
 
-export async function offerAgentAction(input: z.input<typeof offerInput>): Promise<ActionResult> {
+export async function offerAgentAction(
+  input: z.input<typeof offerInput>,
+): Promise<ActionResult> {
   const parsed = offerInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check the details");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check the details");
   const access = await requireReseller(parsed.data.slug);
   if (!access) return fail("Only client workspaces can resell");
   const { agentId, customerId, planId } = parsed.data;
@@ -314,17 +387,26 @@ export async function offerAgentAction(input: z.input<typeof offerInput>): Promi
     const [plan] = await db()
       .select({ id: schema.plans.id })
       .from(schema.plans)
-      .where(and(eq(schema.plans.id, planId), eq(schema.plans.orgId, access.org.id)))
+      .where(
+        and(eq(schema.plans.id, planId), eq(schema.plans.orgId, access.org.id)),
+      )
       .limit(1);
     if (!plan) return fail("That price plan isn't yours");
   }
   try {
-    await engine.resellAgent({ orgId: access.org.id, agentId, customerOrgId: customerId, actor: { type: "user", userId: access.user.id } });
+    await engine.resellAgent({
+      orgId: access.org.id,
+      agentId,
+      customerOrgId: customerId,
+      actor: { type: "user", userId: access.user.id },
+    });
   } catch (err) {
     return engineError(err, "Couldn't set that up. Try again.");
   }
   if (planId) {
-    await db().insert(schema.subscriptions).values({ orgId: customerId, planId, status: "active" });
+    await db()
+      .insert(schema.subscriptions)
+      .values({ orgId: customerId, planId, status: "active" });
   }
   refresh(parsed.data.slug);
   return { ok: true };
@@ -337,15 +419,24 @@ const planInput = z.object({
   description: z.string().trim().max(400).optional(),
 });
 
-export async function createPlanAction(input: z.input<typeof planInput>): Promise<ActionResult> {
+export async function createPlanAction(
+  input: z.input<typeof planInput>,
+): Promise<ActionResult> {
   const parsed = planInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check the plan");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check the plan");
   const access = await requireReseller(parsed.data.slug);
   if (!access) return fail("Only client workspaces can resell");
   const [dupe] = await db()
     .select({ id: schema.plans.id })
     .from(schema.plans)
-    .where(and(eq(schema.plans.orgId, access.org.id), eq(schema.plans.active, true), sql`lower(${schema.plans.name}) = lower(${parsed.data.name})`))
+    .where(
+      and(
+        eq(schema.plans.orgId, access.org.id),
+        eq(schema.plans.active, true),
+        sql`lower(${schema.plans.name}) = lower(${parsed.data.name})`,
+      ),
+    )
     .limit(1);
   if (dupe) return fail("You already have a plan with that name");
   await db()
@@ -368,19 +459,32 @@ const inviteInput = z.object({
   role: z.enum(["admin", "member", "viewer"]),
 });
 
-export async function inviteMemberAction(input: z.input<typeof inviteInput>): Promise<ActionResult<{ inviteUrl: string }>> {
+export async function inviteMemberAction(
+  input: z.input<typeof inviteInput>,
+): Promise<ActionResult<{ inviteUrl: string }>> {
   const parsed = inviteInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check the email");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check the email");
   const access = await requireOrg(parsed.data.slug, "admin");
   const email = parsed.data.email.toLowerCase();
   const [existing] = await db()
     .select({ id: schema.memberships.id })
     .from(schema.memberships)
     .innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId))
-    .where(and(eq(schema.memberships.orgId, access.org.id), sql`lower(${schema.users.email}) = ${email}`))
+    .where(
+      and(
+        eq(schema.memberships.orgId, access.org.id),
+        sql`lower(${schema.users.email}) = ${email}`,
+      ),
+    )
     .limit(1);
   if (existing) return fail("They're already on this workspace");
-  const inviteUrl = await issueInvite(access.org.id, email, parsed.data.role, access.user.id);
+  const inviteUrl = await issueInvite(
+    access.org.id,
+    email,
+    parsed.data.role,
+    access.user.id,
+  );
   await audit({
     orgId: access.org.id,
     actorType: "user",
@@ -393,13 +497,23 @@ export async function inviteMemberAction(input: z.input<typeof inviteInput>): Pr
   return { ok: true, inviteUrl };
 }
 
-export async function revokeInviteAction(input: { slug: string; inviteId: string }): Promise<ActionResult> {
-  const parsed = z.object({ slug: slugSchema, inviteId: z.uuid() }).safeParse(input);
+export async function revokeInviteAction(input: {
+  slug: string;
+  inviteId: string;
+}): Promise<ActionResult> {
+  const parsed = z
+    .object({ slug: slugSchema, inviteId: z.uuid() })
+    .safeParse(input);
   if (!parsed.success) return fail("Unknown invite");
   const access = await requireOrg(parsed.data.slug, "admin");
   await db()
     .delete(schema.invitations)
-    .where(and(eq(schema.invitations.id, parsed.data.inviteId), eq(schema.invitations.orgId, access.org.id)));
+    .where(
+      and(
+        eq(schema.invitations.id, parsed.data.inviteId),
+        eq(schema.invitations.orgId, access.org.id),
+      ),
+    );
   refresh(parsed.data.slug);
   return { ok: true };
 }
@@ -410,13 +524,17 @@ const prefsInput = z.object({
   cadence: z.enum(["instant", "digest"]),
 });
 
-export async function savePrefsAction(input: z.input<typeof prefsInput>): Promise<ActionResult> {
+export async function savePrefsAction(
+  input: z.input<typeof prefsInput>,
+): Promise<ActionResult> {
   const parsed = prefsInput.safeParse(input);
   if (!parsed.success) return fail("Pick at least one place");
   // Any member (including viewers) may choose where *they* hear about work.
   const access = await requireOrg(parsed.data.slug, "viewer");
   const userId = access.user.id;
-  const value = JSON.stringify({ [userId]: { channels: parsed.data.channels, cadence: parsed.data.cadence } });
+  const value = JSON.stringify({
+    [userId]: { channels: parsed.data.channels, cadence: parsed.data.cadence },
+  });
   // Merge just this user's entry so concurrent saves by teammates don't clobber each other.
   await db()
     .update(schema.organizations)
@@ -431,15 +549,29 @@ export async function savePrefsAction(input: z.input<typeof prefsInput>): Promis
 const brandingInput = z.object({
   slug: slugSchema,
   displayName: z.string().trim().max(60).optional(),
-  accent: z.union([z.literal(""), z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #E11D48")]).optional(),
-  logoUrl: z.union([z.literal(""), z.url({ protocol: /^https$/, message: "Use an https:// image link" })]).optional(),
+  accent: z
+    .union([
+      z.literal(""),
+      z.string().regex(/^#[0-9a-fA-F]{6}$/, "Use a hex color like #E11D48"),
+    ])
+    .optional(),
+  logoUrl: z
+    .union([
+      z.literal(""),
+      z.url({ protocol: /^https$/, message: "Use an https:// image link" }),
+    ])
+    .optional(),
 });
 
-export async function saveBrandingAction(input: z.input<typeof brandingInput>): Promise<ActionResult> {
+export async function saveBrandingAction(
+  input: z.input<typeof brandingInput>,
+): Promise<ActionResult> {
   const parsed = brandingInput.safeParse(input);
-  if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check your branding");
+  if (!parsed.success)
+    return fail(parsed.error.issues[0]?.message ?? "Check your branding");
   const access = await requireOrg(parsed.data.slug, "admin");
-  if (access.org.kind !== "client") return fail("Branding is set by your provider");
+  if (access.org.kind !== "client")
+    return fail("Branding is set by your provider");
   const current = access.org.branding ?? {};
   const next = {
     ...current,
@@ -447,8 +579,75 @@ export async function saveBrandingAction(input: z.input<typeof brandingInput>): 
     accent: parsed.data.accent ? parsed.data.accent.toLowerCase() : undefined,
     logoUrl: parsed.data.logoUrl || undefined,
   };
-  await db().update(schema.organizations).set({ branding: next }).where(eq(schema.organizations.id, access.org.id));
-  await audit({ orgId: access.org.id, actorType: "user", actorId: access.user.id, action: "branding.updated", targetType: "organization", targetId: access.org.id });
+  await db()
+    .update(schema.organizations)
+    .set({ branding: next })
+    .where(eq(schema.organizations.id, access.org.id));
+  await audit({
+    orgId: access.org.id,
+    actorType: "user",
+    actorId: access.user.id,
+    action: "branding.updated",
+    targetType: "organization",
+    targetId: access.org.id,
+  });
+  refresh(parsed.data.slug);
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------ Workflows */
+
+const workflowToggleInput = z.object({
+  slug: slugSchema,
+  workflowId: z.uuid(),
+  enabled: z.boolean(),
+});
+
+/** Pause or resume one of a teammate's routines. Admins only; the routine must belong to this workspace. */
+export async function setWorkflowEnabledAction(
+  input: z.input<typeof workflowToggleInput>,
+): Promise<ActionResult> {
+  const parsed = workflowToggleInput.safeParse(input);
+  if (!parsed.success) return fail("Unknown routine");
+  const access = await requireOrg(parsed.data.slug, "admin");
+  const [wf] = await db()
+    .select({
+      id: schema.workflows.id,
+      trigger: schema.workflows.trigger,
+      name: schema.workflows.name,
+    })
+    .from(schema.workflows)
+    .where(
+      and(
+        eq(schema.workflows.id, parsed.data.workflowId),
+        eq(schema.workflows.orgId, access.org.id),
+      ),
+    )
+    .limit(1);
+  if (!wf) return fail("Unknown routine");
+  const { nextRunForTrigger } = await import("@/server/jobs/scheduler");
+  // Resuming schedules from now, so a paused routine never fires a backlog of missed runs.
+  const nextRunAt = parsed.data.enabled
+    ? nextRunForTrigger(wf.trigger, access.org.timezone)
+    : null;
+  await db()
+    .update(schema.workflows)
+    .set({ enabled: parsed.data.enabled, nextRunAt })
+    .where(
+      and(
+        eq(schema.workflows.id, wf.id),
+        eq(schema.workflows.orgId, access.org.id),
+      ),
+    );
+  await audit({
+    orgId: access.org.id,
+    actorType: "user",
+    actorId: access.user.id,
+    action: parsed.data.enabled ? "workflow.resumed" : "workflow.paused",
+    targetType: "workflow",
+    targetId: wf.id,
+    metadata: { name: wf.name },
+  });
   refresh(parsed.data.slug);
   return { ok: true };
 }

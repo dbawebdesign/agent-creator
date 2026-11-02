@@ -10,13 +10,33 @@ import { timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Connect" };
 
-function Section({ icon, title, body, children, id }: { icon: React.ReactNode; title: string; body: React.ReactNode; children: React.ReactNode; id: string }) {
+function Section({
+  icon,
+  title,
+  body,
+  children,
+  id,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: React.ReactNode;
+  children: React.ReactNode;
+  id: string;
+}) {
   return (
-    <section aria-labelledby={id} className="rounded-xl border border-line bg-surface p-5 shadow-sm md:p-6">
+    <section
+      aria-labelledby={id}
+      className="rounded-xl border border-line bg-surface p-5 shadow-sm md:p-6"
+    >
       <div className="flex items-start gap-3.5">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-2 [&_svg]:size-[18px]">{icon}</span>
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-2 [&_svg]:size-[18px]">
+          {icon}
+        </span>
         <div className="min-w-0">
-          <h2 id={id} className="text-[15px] font-semibold tracking-[-0.01em] text-ink">
+          <h2
+            id={id}
+            className="text-[15px] font-semibold tracking-[-0.01em] text-ink"
+          >
             {title}
           </h2>
           <p className="mt-0.5 text-[13.5px] text-ink-3 text-pretty">{body}</p>
@@ -27,11 +47,22 @@ function Section({ icon, title, body, children, id }: { icon: React.ReactNode; t
   );
 }
 
-export default async function ConnectPage({ params }: { params: Promise<{ org: string }> }) {
+export default async function ConnectPage({
+  params,
+}: {
+  params: Promise<{ org: string }>;
+}) {
   const { org: slug } = await params;
   const p = await getPortal(slug);
   const c = await getConnect(p.org.id);
-  let keys: { id: string; name: string; prefix: string; createdAt: string; lastUsed: string | null; status: string }[] = [];
+  let keys: {
+    id: string;
+    name: string;
+    prefix: string;
+    createdAt: string;
+    lastUsed: string | null;
+    status: string;
+  }[] = [];
   if (p.isAdmin) {
     try {
       const { listApiKeys } = await import("@/server/api/keys");
@@ -55,43 +86,76 @@ export default async function ConnectPage({ params }: { params: Promise<{ org: s
   return (
     <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="mb-8 animate-rise">
-        <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">Reach your team wherever you work</h1>
+        <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">
+          Reach your team wherever you work
+        </h1>
         <p className="mt-1.5 max-w-[60ch] text-[15px] text-ink-3 text-pretty">
-          No new app to learn. Email them, text them, mention them in Slack — or let Claude and Codex hand them work.
+          No new app to learn. Email them, text them, mention them in Slack — or
+          let Claude and Codex hand them work.
         </p>
       </header>
 
       <div className="space-y-4">
-        <Section id="email" icon={<Mail />} title="Email" body="Every teammate has their own inbox. Forward a request, CC them on a thread, or just write — they reply in the same thread.">
+        <Section
+          id="email"
+          icon={<Mail />}
+          title="Email"
+          body="Every teammate has their own inbox. Forward a request, CC them on a thread, or just write — they reply in the same thread."
+        >
           {c.agents.filter((a) => a.email).length ? (
             <ul className="space-y-2.5">
               {c.agents
                 .filter((a) => a.email)
                 .map((a) => (
-                  <li key={a.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                  <li
+                    key={a.id}
+                    className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
+                  >
                     <div className="flex min-w-0 items-center gap-2.5 sm:w-44">
-                      <AgentOrb seed={a.seed} size={24} />
-                      <span className="truncate text-[13.5px] font-medium text-ink">{a.name}</span>
+                      <AgentOrb seed={a.seed} name={a.name} size={24} />
+                      <span className="truncate text-[13.5px] font-medium text-ink">
+                        {a.name}
+                      </span>
                     </div>
-                    <CopyField value={a.email!} label={`Copy ${a.name}'s email address`} className="flex-1" />
+                    <CopyField
+                      value={a.email!}
+                      label={`Copy ${a.name}'s email address`}
+                      className="flex-1"
+                    />
                   </li>
                 ))}
             </ul>
           ) : (
-            <p className="text-[13px] text-ink-3">Inboxes appear here as soon as your teammates are set up.</p>
+            <p className="text-[13px] text-ink-3">
+              Inboxes appear here as soon as your teammates are set up.
+            </p>
           )}
         </Section>
 
-        <Section id="sms" icon={<MessageSquare />} title="Text" body="Text a teammate from your phone like you would a colleague — great for quick asks on the go.">
+        <Section
+          id="sms"
+          icon={<MessageSquare />}
+          title="Text"
+          body="Text a teammate from your phone like you would a colleague — great for quick asks on the go."
+        >
           {withPhone.length ? (
             <ul className="space-y-2.5">
               {withPhone.map((a) => (
-                <li key={a.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                <li
+                  key={a.id}
+                  className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
+                >
                   <div className="flex min-w-0 items-center gap-2.5 sm:w-44">
-                    <AgentOrb seed={a.seed} size={24} />
-                    <span className="truncate text-[13.5px] font-medium text-ink">{a.name}</span>
+                    <AgentOrb seed={a.seed} name={a.name} size={24} />
+                    <span className="truncate text-[13.5px] font-medium text-ink">
+                      {a.name}
+                    </span>
                   </div>
-                  <CopyField value={a.phone!} label={`Copy ${a.name}'s number`} className="flex-1 tabular" />
+                  <CopyField
+                    value={a.phone!}
+                    label={`Copy ${a.name}'s number`}
+                    className="flex-1 tabular"
+                  />
                 </li>
               ))}
             </ul>
@@ -110,7 +174,8 @@ export default async function ConnectPage({ params }: { params: Promise<{ org: s
         >
           {c.slack?.status === "connected" ? (
             <p className="inline-flex items-center gap-2 rounded-lg bg-good-soft px-3 py-2 text-[13px] font-medium text-good">
-              <Check className="size-4" aria-hidden /> Connected{c.slack.teamName ? ` to ${c.slack.teamName}` : ""}
+              <Check className="size-4" aria-hidden /> Connected
+              {c.slack.teamName ? ` to ${c.slack.teamName}` : ""}
             </p>
           ) : p.isAdmin && slackReady ? (
             <a
@@ -121,11 +186,20 @@ export default async function ConnectPage({ params }: { params: Promise<{ org: s
             </a>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              <span className={buttonClass("secondary", "lg", "pointer-events-none gap-2.5 opacity-60")} aria-disabled>
+              <span
+                className={buttonClass(
+                  "secondary",
+                  "lg",
+                  "pointer-events-none gap-2.5 opacity-60",
+                )}
+                aria-disabled
+              >
                 <SlackMark /> Add to Slack
               </span>
               <span className="text-[13px] text-ink-3">
-                {p.isAdmin ? `Ask ${provider} to switch on Slack for your workspace.` : "A workspace admin can add your team to Slack."}
+                {p.isAdmin
+                  ? `Ask ${provider} to switch on Slack for your workspace.`
+                  : "A workspace admin can add your team to Slack."}
               </span>
             </div>
           )}

@@ -28,6 +28,9 @@ async function setup(config: Record<string, unknown> = {}) {
     .set({ config: { ...agent!.config, ...config } })
     .where(eq(schema.agents.id, agentId));
   await db().insert(schema.memories).values({ orgId: orgs.client.id, agentId, kind: "fact", importance: 5, content: SECRET });
+  // Focus on the conversational reply path: no event workflow takes over inbound email, no setup run in the way.
+  await db().execute(sql`update workflows set enabled = false where agent_id = ${agentId} and trigger->>'type' = 'event'`);
+  await db().execute(sql`delete from jobs where org_id = ${orgs.client.id} and type = 'agent.run'`);
   return { ...orgs, agentId };
 }
 
@@ -146,6 +149,35 @@ describe("untrusted senders", () => {
     expect(g.run.status).toBe("waiting_approval");
     const [ap] = await db().select().from(schema.approvals).where(eq(schema.approvals.runId, g.run.id));
     expect(ap!.action).toBe("send_external_email");
+  });
+});
+
+describe("untrusted senders: knowledge and allowlist", () => {
+  beforeEach(resetDb);
+
+  it("never surfaces the discovery transcript to an unverified sender, but can use other knowledge", async () => {
+    const { client, agentId } = await setup();
+    await db().insert(schema.knowledgeSources).values({ orgId: client.id, agentId, title: "Public FAQ", kind: "text", status: "ready" });
+    const [faq] = await db().select().from(schema.knowledgeSources).where(and(eq(schema.knowledgeSources.agentId, agentId), eq(schema.knowledgeSources.title, "Public FAQ")));
+    await db().insert(schema.knowledgeChunks).values({ orgId: client.id, agentId, sourceId: faq!.id, seq: 0, content: "Tumbler quotes take one business day. Minimum order is 50 tumblers." });
+    const [call] = await db().insert(schema.knowledgeSources).values({ orgId: client.id, agentId, title: "Discovery call: Kickoff", kind: "transcript", status: "ready" }).returning();
+    await db().insert(schema.knowledgeChunks).values({ orgId: client.id, agentId, sourceId: call!.id, seq: 0, content: "Owner: tumbler quotes take me 20 hours a week and our Acme margin is 62 percent." });
+
+    const r = await inboundEmail(client.id, agentId, "buyer@customer.example", "How long do tumbler quotes take, and what are your quotes like?", { senderAuth: "pass" });
+    const results = await db().execute(sql`select data from run_steps where run_id = ${r.run.id} and kind = 'tool_result' and name = 'knowledge_search'`);
+    const text = JSON.stringify(results.rows);
+    expect(text).toContain("Public FAQ");
+    expect(text).not.toContain("Discovery call");
+  });
+
+  it("allowlisted, authenticated senders get replies without approval; a spoofable From does not", async () => {
+    const { client, agentId } = await setup({ replyAllowlist: ["@customer.example"] });
+    const ok = await inboundEmail(client.id, agentId, "buyer@customer.example", "Do you do tumblers?", { senderAuth: "pass" });
+    expect(ok.run.status).toBe("succeeded");
+    expect(await outbound(ok.conversationId)).toHaveLength(1);
+    expect(await toolSteps(ok.run.id, "memory_recall")).toHaveLength(0); // still the untrusted tool set
+    const spoof = await inboundEmail(client.id, agentId, "buyer@customer.example", "Do you do tumblers?");
+    expect(spoof.run.status).toBe("waiting_approval");
   });
 });
 

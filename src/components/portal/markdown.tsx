@@ -13,14 +13,20 @@ export function softBreaks(md: string): string {
     .map((line, i) => {
       if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
       const next = lines[i + 1];
-      if (fenced || !line.trim() || next === undefined || !next.trim()) return line;
-      if (BLOCK.test(line) || BLOCK.test(next) || /\s{2}$/.test(line)) return line;
+      if (fenced || !line.trim() || next === undefined || !next.trim())
+        return line;
+      if (BLOCK.test(line) || BLOCK.test(next) || /\s{2}$/.test(line))
+        return line;
       return `${line}  `;
     })
     .join("\n");
 }
 
-const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const norm = (t: string) =>
+  t
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 
 /** Agents often open with the same heading the page already shows as its title. Drop that repeat. */
 export function dropLeadingTitle(md: string, title?: string): string {
@@ -34,6 +40,18 @@ export function dropLeadingTitle(md: string, title?: string): string {
 }
 
 /** Safe markdown (no raw HTML, via the shared renderer) tuned for reading agent work. */
-export function PortalMarkdown({ children, className, title }: { children: string; className?: string; title?: string }) {
-  return <Markdown className={className}>{softBreaks(dropLeadingTitle(children, title))}</Markdown>;
+export function PortalMarkdown({
+  children,
+  className,
+  title,
+}: {
+  children: string;
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <Markdown className={className}>
+      {softBreaks(dropLeadingTitle(children, title))}
+    </Markdown>
+  );
 }

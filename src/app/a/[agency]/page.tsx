@@ -91,12 +91,12 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                         {d.needsReview ? <span className="shrink-0 rounded-full bg-warn-soft px-1.5 text-[11px] font-medium text-warn">Needs review</span> : null}
                       </div>
                       {d.preview ? <p className="mt-0.5 line-clamp-1 text-[13px] text-ink-3">{d.preview}</p> : null}
-                      <p className="mt-1 text-[12px] text-ink-4">
+                      <p className="mt-1 text-[12px] text-ink-3">
                         {d.agentName} for {d.orgName} · {OUTPUT_LABEL[d.kind] ?? d.kind}
                       </p>
                     </div>
                     <div className="shrink-0 text-right">
-                      <RelativeTime date={d.createdAt} className="text-[12px] text-ink-4" />
+                      <RelativeTime date={d.createdAt} className="text-[12px] text-ink-3" />
                       {d.hoursSaved ? <p className="tabular mt-1 text-[12px] font-medium text-good">+{hours(d.hoursSaved)}</p> : null}
                     </div>
                   </Link>
@@ -112,7 +112,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
           )}
         </section>
 
-        <section aria-labelledby="attention-h">
+        <section aria-labelledby="attention-h" className={attention ? "max-lg:order-first" : undefined}>
           <SectionHeading title="Needs attention" count={attention || undefined} className="[&_h2]:text-[14px]" />
           {attention === 0 ? (
             <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-4 text-[13.5px] text-ink-2 shadow-xs">
@@ -126,7 +126,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                   <div className="flex items-start gap-3">
                     <AgentOrb seed={a.agentSeed ?? a.agentId} size={22} className="mt-0.5" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-[12px] text-ink-4">
+                      <p className="text-[12px] text-ink-3">
                         {a.agentName} · {a.orgName} · <RelativeTime date={a.createdAt} />
                       </p>
                       <p className="mt-0.5 text-[13.5px] leading-snug text-ink">{a.description}</p>
@@ -161,7 +161,7 @@ function AttentionRow({ href, icon, title, meta, date }: { href: string; icon: R
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-2">{icon}</span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13.5px] font-medium text-ink">{title}</p>
-          <p className="truncate text-[12px] text-ink-4">
+          <p className="truncate text-[12px] text-ink-3">
             {meta} · <RelativeTime date={date} />
           </p>
         </div>

@@ -56,7 +56,7 @@ export function KnowledgeForm({ agency, agentId }: { agency: string; agentId: st
         )}
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-[12px] text-ink-4">Chunked and searchable by this agent within a minute.</p>
+        <p className="text-[12px] text-ink-3">Chunked and searchable by this agent within a minute.</p>
         <Button type="submit" variant="primary" disabled={pending}>
           {pending ? "Adding…" : "Add source"}
         </Button>

@@ -38,7 +38,7 @@ export default async function ClientsPage({ params }: { params: Promise<{ agency
 
       {clients.length ? (
         <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
-          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_80px_120px_100px] gap-4 border-b border-line px-5 py-2.5 text-[12px] font-medium text-ink-4 md:grid">
+          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_80px_120px_100px] gap-4 border-b border-line px-5 py-2.5 text-[12px] font-medium text-ink-3 md:grid">
             <span>Client</span>
             <span>Plan</span>
             <span className="text-right">Agents</span>
@@ -56,25 +56,25 @@ export default async function ClientsPage({ params }: { params: Promise<{ agency
                     <OrgMark name={c.name} size={30} />
                     <span className="min-w-0">
                       <span className="block truncate text-[13.5px] font-medium text-ink">{c.name}</span>
-                      <span className="block truncate text-[12px] text-ink-4">{c.industry ?? c.website?.replace(/^https?:\/\//, "") ?? c.slug}</span>
+                      <span className="block truncate text-[12px] text-ink-3">{c.industry ?? c.website?.replace(/^https?:\/\//, "") ?? c.slug}</span>
                     </span>
                   </span>
                   <span className="hidden min-w-0 md:block">
                     {c.planName ? (
                       <>
-                        <span className="tabular block text-[13px] font-medium text-ink-2">{money(c.mrrCents)}<span className="font-normal text-ink-4"> / mo</span></span>
-                        <span className="block truncate text-[12px] text-ink-4">{c.planName}</span>
+                        <span className="tabular block text-[13px] font-medium text-ink-2">{money(c.mrrCents)}<span className="font-normal text-ink-3"> / mo</span></span>
+                        <span className="block truncate text-[12px] text-ink-3">{c.planName}</span>
                       </>
                     ) : (
-                      <span className="text-[12.5px] text-ink-4">No plan</span>
+                      <span className="text-[12.5px] text-ink-3">No plan</span>
                     )}
                   </span>
                   <span className="tabular hidden text-right text-[13px] text-ink-2 md:block">{c.agents}</span>
-                  <span className="hidden text-[12.5px] text-ink-3 md:block">{c.lastDeliveryAt ? <RelativeTime date={c.lastDeliveryAt} /> : <span className="text-ink-4">—</span>}</span>
+                  <span className="hidden text-[12.5px] text-ink-3 md:block">{c.lastDeliveryAt ? <RelativeTime date={c.lastDeliveryAt} /> : <span className="text-ink-3">—</span>}</span>
                   <span className="justify-self-end md:justify-self-start">
-                    <ClientStatus status={c.status} />
+                    <ClientStatus status={c.status === "active" && !c.planName ? "no plan" : c.status} />
                   </span>
-                  <span className="col-span-2 text-[12px] text-ink-4 md:hidden">
+                  <span className="col-span-2 text-[12px] text-ink-3 md:hidden">
                     {c.planName ? `${money(c.mrrCents)}/mo` : "No plan"} · {c.agents} agent{c.agents === 1 ? "" : "s"}
                     {c.lastDeliveryAt ? <> · delivered <RelativeTime date={c.lastDeliveryAt} /></> : null}
                   </span>

@@ -45,11 +45,11 @@ export default async function BlueprintsPage({ params }: { params: Promise<{ age
                         <span className="shrink-0 text-ink-4">{w.trigger ? describeTrigger(w.trigger) : ""}</span>
                       </li>
                     ))}
-                    {wfs.length > 4 ? <li className="text-[12px] text-ink-4">+{wfs.length - 4} more</li> : null}
+                    {wfs.length > 4 ? <li className="text-[12px] text-ink-3">+{wfs.length - 4} more</li> : null}
                   </ul>
                 ) : null}
                 <div className="mt-auto flex items-center justify-between gap-3 pt-5">
-                  <span className="text-[12px] text-ink-4">
+                  <span className="text-[12px] text-ink-3">
                     Updated <RelativeTime date={b.updatedAt} />
                     {spec.weeklyHoursSaved ? ` · ~${spec.weeklyHoursSaved} h/week` : ""}
                   </span>

@@ -19,6 +19,7 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
   const pctRaw = revenue ? ((revenue - cost) / revenue) * 100 : 0;
   const pct = pctRaw >= 99 && pctRaw < 100 ? pctRaw.toFixed(2) : pctRaw.toFixed(1);
   const activeSubs = subs.filter((s) => s.sub.status !== "canceled");
+  const subByOrg = new Map(activeSubs.map((s) => [s.orgSlug, s] as const));
 
   return (
     <div className="mx-auto w-full max-w-[1080px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
@@ -55,7 +56,7 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
                   {money(plan.priceCents)}
                   <span className="text-[13px] font-normal tracking-normal text-ink-3"> / month</span>
                 </p>
-                <p className="text-[12px] text-ink-4">{plan.setupFeeCents ? `${money(plan.setupFeeCents)} setup` : "No setup fee"} · no token billing</p>
+                <p className="text-[12px] text-ink-3">{plan.setupFeeCents ? `${money(plan.setupFeeCents)} setup` : "No setup fee"} · no token billing</p>
                 {plan.description ? <p className="mt-3 text-[13px] leading-relaxed text-ink-3">{plan.description}</p> : null}
                 {plan.features.length ? (
                   <ul className="mt-3 space-y-1 text-[12.5px] text-ink-2">
@@ -83,64 +84,59 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
         </section>
 
         <section>
-          <SectionHeading title="Margin by client" action={<Badge tone="accent">Agency only</Badge>} />
-          <div className="overflow-x-auto rounded-xl border border-line bg-surface shadow-xs">
-            <table className="w-full min-w-[560px] text-[13px]">
+          <SectionHeading title="Clients and margin" count={margin.length} action={<Badge tone="accent">Agency only</Badge>} />
+          <div className="relative overflow-x-auto rounded-xl border border-line bg-surface shadow-xs">
+            <table className="w-full min-w-[620px] text-[13px]">
               <thead>
-                <tr className="border-b border-line text-left text-[12px] text-ink-4">
+                <tr className="border-b border-line text-left text-[12px] text-ink-3">
                   <th className="px-5 py-2.5 font-medium">Client</th>
-                  <th className="px-3 py-2.5 text-right font-medium">Plan price</th>
+                  <th className="px-3 py-2.5 font-medium">Plan</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Price</th>
                   <th className="px-3 py-2.5 text-right font-medium">AI & infra (30d)</th>
-                  <th className="px-3 py-2.5 text-right font-medium">Margin</th>
-                  <th className="w-40 px-5 py-2.5 font-medium"><span className="sr-only">Cost share</span></th>
+                  <th className="px-5 py-2.5 text-right font-medium">Margin</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
                 {margin.map((m) => {
                   const mg = m.priceCents ? ((m.priceCents - m.costCents) / m.priceCents) * 100 : null;
-                  const share = m.priceCents ? Math.min(100, (m.costCents / m.priceCents) * 100) : m.costCents ? 100 : 0;
+                  const sub = subByOrg.get(m.slug);
                   return (
                     <tr key={m.id} className="tabular">
                       <td className="px-5 py-3">
                         <Link href={`/a/${slug}/clients/${m.slug}`} className="font-medium text-ink hover:underline underline-offset-2">{m.name}</Link>
                       </td>
-                      <td className="px-3 py-3 text-right text-ink-2">{m.priceCents ? money(m.priceCents) : <span className="text-ink-4">—</span>}</td>
-                      <td className="px-3 py-3 text-right text-ink-2" title={Object.entries(m.byKind).map(([k, v]) => `${k}: $${(v / 1e6).toFixed(2)}`).join(" · ")}>{money(m.costCents)}</td>
-                      <td className={cn("px-3 py-3 text-right font-medium", mg === null ? "text-ink-4" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>{mg === null ? "—" : `${mg >= 99 && mg < 100 ? mg.toFixed(2) : mg.toFixed(1)}%`}</td>
-                      <td className="px-5 py-3">
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2" aria-hidden>
-                          <div className="h-full rounded-full bg-ink-4" style={{ width: `${Math.max(share, m.costCents ? 2 : 0)}%` }} />
-                        </div>
+                      <td className="px-3 py-3">
+                        {sub ? (
+                          <span className="inline-flex items-center gap-2">
+                            <span className="text-ink-2">{sub.planName}</span>
+                            {sub.sub.status !== "active" ? (
+                              <Badge tone={sub.sub.status === "past_due" ? "warn" : sub.sub.status === "trialing" ? "accent" : "neutral"}>
+                                {sub.sub.status === "past_due" ? "Past due" : sub.sub.status[0]!.toUpperCase() + sub.sub.status.slice(1)}
+                              </Badge>
+                            ) : null}
+                          </span>
+                        ) : (
+                          <Badge tone="neutral">No plan</Badge>
+                        )}
                       </td>
+                      <td className="px-3 py-3 text-right text-ink-2">{m.priceCents ? money(m.priceCents) : <span className="text-ink-3">—</span>}</td>
+                      <td className="px-3 py-3 text-right text-ink-2" title={Object.entries(m.byKind).map(([k, v]) => `${k}: $${(v / 1e6).toFixed(2)}`).join(" · ")}>{money(Math.round(m.costCents))}</td>
+                      <td className={cn("px-5 py-3 text-right font-medium", mg === null ? "text-ink-3" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>{mg === null ? "—" : pct(mg)}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          <p className="mt-2 text-[12px] text-ink-4">Cost is metered model, email, SMS and computer usage, including resale customers. Clients never see it.</p>
-        </section>
-
-        <section>
-          <SectionHeading title="Subscriptions" count={subs.length} />
-          {subs.length ? (
-            <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
-              {subs.map((s) => (
-                <li key={s.sub.id} className="flex items-center gap-4 px-5 py-3 text-[13px]">
-                  <Link href={`/a/${slug}/clients/${s.orgSlug}`} className="min-w-0 flex-1 truncate font-medium text-ink hover:underline underline-offset-2">{s.orgName}</Link>
-                  <span className="hidden truncate text-ink-3 sm:block">{s.planName}</span>
-                  <span className="tabular w-24 text-right text-ink-2">{money(s.priceCents)}</span>
-                  <Badge tone={s.sub.status === "active" ? "good" : s.sub.status === "past_due" ? "warn" : s.sub.status === "trialing" ? "accent" : "neutral"}>
-                    {s.sub.status === "past_due" ? "Past due" : s.sub.status[0]!.toUpperCase() + s.sub.status.slice(1)}
-                  </Badge>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="rounded-xl border border-dashed border-line px-5 py-6 text-[13.5px] text-ink-3">No subscriptions yet. Assign a plan from a client’s page.</p>
-          )}
+          <p className="mt-2 text-[12px] text-ink-3">Cost is metered model, email, SMS and computer usage over the last 30 days, including resale customers. Clients never see it.</p>
         </section>
       </div>
     </div>
   );
+}
+
+/** One decimal, and never round a real margin up to 100%. */
+function pct(v: number) {
+  const r = Math.round(v * 10) / 10;
+  return `${r >= 100 && v < 100 ? "99.9" : r.toFixed(1)}%`;
 }

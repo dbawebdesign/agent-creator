@@ -40,7 +40,12 @@ export function Thread({
 }) {
   const router = useRouter();
   const last = messages.at(-1);
-  const awaiting = Boolean(last && last.author !== "agent" && last.author !== "system" && Date.now() - new Date(last.at).getTime() < 1000 * 60 * 5);
+  const awaiting = Boolean(
+    last &&
+    last.author !== "agent" &&
+    last.author !== "system" &&
+    Date.now() - new Date(last.at).getTime() < 1000 * 60 * 5,
+  );
   const endRef = useRef<HTMLDivElement>(null);
   const count = messages.length;
 
@@ -55,7 +60,8 @@ export function Thread({
   useEffect(() => {
     const prev = seen.current;
     seen.current = { count, awaiting };
-    if (count > prev.count || (awaiting && !prev.awaiting)) endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (count > prev.count || (awaiting && !prev.awaiting))
+      endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [count, awaiting]);
 
   return (
@@ -65,18 +71,50 @@ export function Thread({
           {messages.map((m) => {
             const mine = m.author === "user";
             const isAgent = m.author === "agent";
-            const name = isAgent ? agent.name : mine ? (m.authorName ?? youName) : (m.authorName ?? (m.author === "system" ? "Note" : "Customer"));
+            const name = isAgent
+              ? agent.name
+              : mine
+                ? (m.authorName ?? youName)
+                : (m.authorName ??
+                  (m.author === "system" ? "Note" : "Customer"));
             return (
-              <li key={m.id} className={cn("flex gap-3", mine && "flex-row-reverse")}>
-                {isAgent ? <AgentOrb seed={agent.seed} size={28} className="mt-0.5" /> : <Avatar name={name} size={28} className="mt-0.5" />}
-                <div className={cn("min-w-0 max-w-[85%]", mine && "flex flex-col items-end")}>
-                  <p className={cn("mb-1 text-[12px] text-ink-3", mine && "text-right")}>
-                    <span className="font-medium text-ink-3">{mine ? "You" : name}</span> · <time dateTime={m.at}>{m.when}</time>
+              <li
+                key={m.id}
+                className={cn("flex gap-3", mine && "flex-row-reverse")}
+              >
+                {isAgent ? (
+                  <AgentOrb
+                    seed={agent.seed}
+                    name={agent.name}
+                    size={28}
+                    className="mt-0.5"
+                  />
+                ) : (
+                  <Avatar name={name} size={28} className="mt-0.5" />
+                )}
+                <div
+                  className={cn(
+                    "min-w-0 max-w-[85%]",
+                    mine && "flex flex-col items-end",
+                  )}
+                >
+                  <p
+                    className={cn(
+                      "mb-1 text-[12px] text-ink-3",
+                      mine && "text-right",
+                    )}
+                  >
+                    <span className="font-medium text-ink-3">
+                      {mine ? "You" : name}
+                    </span>{" "}
+                    · <time dateTime={m.at}>{m.when}</time>
                   </p>
                   <div
                     className={cn(
                       "rounded-2xl px-3.5 py-2.5 text-[14px]",
-                      mine ? "rounded-tr-md bg-surface-2 text-ink ring-1 ring-line/60" : "rounded-tl-md border border-line bg-surface text-ink-2",
+                      mine
+                        ? "rounded-tr-md bg-surface-2 text-ink ring-1 ring-line/60"
+                        : "rounded-tl-md border border-line bg-surface text-ink-2",
                     )}
                   >
                     <Markdown className="portal-bubble">{m.body}</Markdown>
@@ -87,7 +125,13 @@ export function Thread({
           })}
           {awaiting ? (
             <li className="flex gap-3" role="status">
-              <AgentOrb seed={agent.seed} size={28} className="mt-0.5" live />
+              <AgentOrb
+                seed={agent.seed}
+                name={agent.name}
+                size={28}
+                className="mt-0.5"
+                live
+              />
               <div className="mt-1 inline-flex items-center gap-2 rounded-2xl rounded-tl-md border border-line bg-surface px-3.5 py-2.5 text-[13px] text-ink-3">
                 <span className="flex gap-1" aria-hidden>
                   <span className="size-1.5 animate-pulse-soft rounded-full bg-ink-4" />
@@ -101,7 +145,8 @@ export function Thread({
         </ol>
       ) : (
         <p className="rounded-xl border border-dashed border-line-strong px-4 py-6 text-center text-[13.5px] text-ink-3">
-          {emptyHint ?? `Ask ${agent.name} for something — they’ll reply right here.`}
+          {emptyHint ??
+            `Ask ${agent.name} for something — they’ll reply right here.`}
         </p>
       )}
       <div ref={endRef} />
@@ -111,12 +156,18 @@ export function Thread({
           agents={[agent]}
           lockAgent
           conversationId={conversationId ?? undefined}
-          placeholder={messages.length ? `Reply to ${agent.name}…` : `Ask ${agent.name} for anything…`}
+          placeholder={
+            messages.length
+              ? `Reply to ${agent.name}…`
+              : `Ask ${agent.name} for anything…`
+          }
           onSent={() => router.refresh()}
           className="mt-5"
         />
       ) : replyNote ? (
-        <div className="mt-5 rounded-xl bg-surface-2 px-4 py-3 text-[13px] text-ink-3">{replyNote}</div>
+        <div className="mt-5 rounded-xl bg-surface-2 px-4 py-3 text-[13px] text-ink-3">
+          {replyNote}
+        </div>
       ) : null}
     </div>
   );

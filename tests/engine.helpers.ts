@@ -44,3 +44,11 @@ export async function makeCustomer(parentId: string, agencyId: string) {
 export async function makeJobsDue() {
   await db().execute(sql`update jobs set run_at = now() - interval '1 second' where status = 'queued'`);
 }
+
+/** A fixed-offset IANA zone whose local hour right now is `hour` (makes time-of-day behaviour deterministic). */
+export function tzAtLocalHour(hour: number, now = new Date()): string {
+  let off = hour - now.getUTCHours();
+  if (off > 14) off -= 24;
+  if (off < -12) off += 24;
+  return off === 0 ? "Etc/GMT" : `Etc/GMT${off > 0 ? "-" : "+"}${Math.abs(off)}`;
+}

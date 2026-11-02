@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { Brain, CalendarClock, Inbox, Library, Mail, Monitor, Radio, ShieldAlert, Sparkles, Zap } from "lucide-react";
 import { ApprovalActions } from "@/components/studio/approval-actions";
 import { requireOrg } from "@/server/auth/access";
-import { agentApprovals, agentChannels, agentDeliverables, agentKnowledge, agentMemories, agentValue, agentWorkflows, getAgent } from "@/server/queries/studio";
+import { agentApprovals, agentChannels, agentDeliverables, agentKnowledge, agentMemories, agentSetup, agentValue, agentWorkflows, getAgent } from "@/server/queries/studio";
+import { AutoRefresh, BeforeTonight, FirstDeliverableRow } from "@/components/studio/setup-panel";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { DeliverableList } from "@/components/studio/deliverable-list";
 import { CHANNEL_LABEL, hours, microsToDollars, SectionHeading, Stat, TextLink } from "@/components/studio/bits";
@@ -15,8 +16,8 @@ export default async function AgentOverview({ params, searchParams }: { params: 
   const { org: agency } = await requireOrg(slug, "viewer");
   const found = await getAgent(agency.id, agentId);
   if (!found) notFound();
-  const { agent, inbox } = found;
-  const [deliverables, workflows, value, memories, knowledge, channels, approvals] = await Promise.all([
+  const { agent, org, inbox } = found;
+  const [deliverables, workflows, value, memories, knowledge, channels, approvals, setup] = await Promise.all([
     agentDeliverables(agent.orgId, agent.id, 8),
     agentWorkflows(agent.orgId, agent.id),
     agentValue(agent.orgId, agent.id),
@@ -24,7 +25,12 @@ export default async function AgentOverview({ params, searchParams }: { params: 
     agentKnowledge(agent.orgId, agent.id),
     agentChannels(agent.orgId, agent.id),
     agentApprovals(agent.orgId, agent.id),
+    agentSetup(agent.orgId, agent.id),
   ]);
+  const provisioning = agent.status === "provisioning";
+  const hasRun = value.delivered > 0;
+  const first = setup.firstRun && setup.firstRun.status !== "succeeded" ? setup.firstRun : null;
+  const lands = first ? landsAt(first.releaseAt, setup.timezone) : null;
   const base = `/a/${slug}/agents/${agent.id}`;
   const enabled = workflows.filter((w) => w.enabled);
   const weekly = enabled.reduce((s, w) => {
@@ -49,7 +55,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
         <div className="flex items-start gap-3 rounded-xl border border-accent/25 bg-accent-soft/60 px-5 py-4 animate-rise">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden />
           <div className="text-[13.5px] leading-relaxed text-ink-2">
-            <span className="font-medium text-ink">{agent.name} is on the roster.</span> The first overnight deliverable is queued — it lands in the client’s portal by morning. Share the inbox address so the team can email {agent.name} directly.
+            <span className="font-medium text-ink">{agent.name} is on the roster.</span> {first ? <>“{first.title}” is queued{lands ? <> and lands {lands}</> : null}.</> : <>The first deliverable is on its way.</>} Work through “Before tonight” below, and share the inbox address so the team can email {agent.name} directly.
           </div>
         </div>
       ) : null}
@@ -59,7 +65,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
           {approvals.map((a) => (
             <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3">
               <ShieldAlert className="size-4 shrink-0 text-warn" aria-hidden />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1 basis-64">
                 <p className="text-[13.5px] font-medium text-ink">{a.description}</p>
                 <p className="text-[12px] text-ink-3">
                   Waiting for approval · <RelativeTime date={a.createdAt} />
@@ -71,28 +77,67 @@ export default async function AgentOverview({ params, searchParams }: { params: 
         </section>
       ) : null}
 
+      {provisioning ? (
+        <section aria-label="Setting up" className="rounded-xl border border-line bg-surface shadow-xs" aria-live="polite">
+          <AutoRefresh />
+          <div className="border-b border-line px-4 py-3.5">
+            <h2 className="text-[14px] font-semibold text-ink">Setting up {agent.name}</h2>
+            <p className="text-[12.5px] text-ink-3">This page updates on its own. It usually takes under a minute.</p>
+          </div>
+          <ul className="divide-y divide-line">
+            {stack.map((l) => (
+              <li key={l.label} className="flex items-center gap-3 px-4 py-3">
+                <l.icon className="size-4 shrink-0 text-ink-3" aria-hidden />
+                <span className="text-[13.5px] text-ink">{l.label}</span>
+                <span className="ml-auto truncate pl-3 text-[12.5px] text-ink-3">{l.ok ? l.value : "Setting up…"}</span>
+                {l.ok ? <span className="text-[12px] font-medium text-good">Ready</span> : <span className="size-3.5 animate-spin rounded-full border-2 border-accent/25 border-t-accent" aria-label="In progress" />}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : hasRun ? (
       <section aria-label="Value delivered" className="grid grid-cols-2 gap-y-6 rounded-xl border border-line bg-surface px-5 py-5 shadow-xs sm:grid-cols-4 sm:divide-x sm:divide-line sm:px-0">
-        <Stat className="sm:px-6" label="Hours saved" value={hours(value.hours)} sub="all time" />
-        <Stat className="sm:px-6" label="Deliverables" value={value.delivered} sub={value.approved ? `${value.approved} approved` : "to date"} />
-        <Stat className="sm:px-6" label="Capacity" value={`${Math.round(weekly)} h`} sub="per week, scheduled" />
-        <Stat className="sm:px-6" label="AI cost" value={microsToDollars(value.costMicros)} sub={`${value.runs} run${value.runs === 1 ? "" : "s"} · agency only`} />
-      </section>
+          <Stat className="sm:px-6" label="Hours saved" value={hours(value.hours)} sub="all time" />
+          <Stat className="sm:px-6" label="Deliverables" value={value.delivered} sub={value.approved ? `${value.approved} approved` : "to date"} />
+          <Stat className="sm:px-6" label="Capacity" value={`${Math.round(weekly)} h`} sub="per week, scheduled" />
+          <Stat className="sm:px-6" label="AI cost" value={microsToDollars(value.costMicros)} sub={`${value.runs} run${value.runs === 1 ? "" : "s"} · agency only`} />
+        </section>
+      ) : null}
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="min-w-0">
-          <SectionHeading title="Recent deliverables" count={value.delivered} />
-          <DeliverableList
-            items={deliverables}
-            initialOpenId={sp.d}
-            empty={
-              <div className="rounded-xl border border-dashed border-line px-6 py-12 text-center">
-                <Sparkles className="mx-auto size-5 text-ink-4" aria-hidden />
-                <p className="mt-3 text-[14px] font-medium text-ink">No deliverables yet</p>
-                <p className="mt-1 text-[13px] text-ink-3">The first overnight deliverable will appear here by morning.</p>
+        <div className="min-w-0 space-y-10">
+          <section>
+            <SectionHeading title={hasRun ? "Recent deliverables" : "First deliverable"} count={hasRun ? value.delivered : undefined} />
+            {first ? (
+              <div className={cn(hasRun && "mb-3")}>
+                <FirstDeliverableRow title={first.title} description={first.description} status={first.status} lands={lands} />
               </div>
-            }
-          />
-        </section>
+            ) : null}
+            {hasRun || !first ? (
+              <DeliverableList
+                items={deliverables}
+                initialOpenId={sp.d}
+                empty={
+                  <div className="rounded-xl border border-dashed border-line px-6 py-12 text-center">
+                    <Sparkles className="mx-auto size-5 text-ink-4" aria-hidden />
+                    <p className="mt-3 text-[14px] font-medium text-ink">No deliverables yet</p>
+                    <p className="mt-1 text-[13px] text-ink-3">Finished work shows up here as {agent.name} delivers it.</p>
+                  </div>
+                }
+              />
+            ) : null}
+          </section>
+          {!hasRun ? (
+            <BeforeTonight
+              knowledgeHref={`${base}/knowledge`}
+              agentName={agent.name}
+              clientName={org.name}
+              needs={setup.knowledgeNeeds}
+              questions={setup.openQuestions}
+              haveTitles={knowledge.map((k) => k.title)}
+            />
+          ) : null}
+        </div>
 
         <div className="space-y-10">
           <section>
@@ -133,7 +178,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
                   <>
                     <s.icon className="size-4 shrink-0 text-ink-3" aria-hidden />
                     <span className="text-[13px] text-ink-2">{s.label}</span>
-                    <span className={cn("ml-auto truncate pl-3 text-right text-[12.5px]", s.ok ? "text-ink-3" : "text-ink-4")}>{s.value}</span>
+                    <span className={cn("ml-auto truncate pl-3 text-right text-[12.5px]", s.ok ? "text-ink-3" : "text-ink-3")}>{s.value}</span>
                   </>
                 );
                 return (
@@ -154,4 +199,16 @@ export default async function AgentOverview({ params, searchParams }: { params: 
       </div>
     </div>
   );
+}
+
+/** "tomorrow at 6:00 AM" in the client's timezone, or null when it hands over as soon as it's done. */
+function landsAt(releaseAt: Date | null, timezone: string) {
+  if (!releaseAt) return "as soon as it’s done";
+  const fmt = (d: Date) => new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  const time = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }).format(releaseAt);
+  const today = fmt(new Date());
+  const tomorrow = fmt(new Date(Date.now() + 86_400_000));
+  const day = fmt(releaseAt) === today ? "today" : fmt(releaseAt) === tomorrow ? "tomorrow" : new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long" }).format(releaseAt);
+  const tz = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "short" }).formatToParts(releaseAt).find((p) => p.type === "timeZoneName")?.value;
+  return `${day} at ${time}${tz ? ` ${tz}` : ""}`;
 }

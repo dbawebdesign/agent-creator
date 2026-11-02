@@ -56,7 +56,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
     <div>
       <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-[13.5px] text-ink-3">Every run with its step trace. Token usage and cost are visible to your agency only.</p>
-        <p className="tabular text-[12.5px] text-ink-4">
+        <p className="tabular text-[12.5px] text-ink-3">
           Last {runs.length} runs · {totals.tokens.toLocaleString()} tokens · {microsToDollars(totals.cost)}
         </p>
       </div>
@@ -73,11 +73,11 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
                     <p className="truncate text-[13.5px] font-medium text-ink">{r.workflowName ?? (r.trigger === "message" ? "Conversation reply" : r.trigger === "setup" ? "First deliverable" : "Manual run")}</p>
                     <p className="truncate text-[12.5px] text-ink-3">{r.error ?? r.summary ?? st.label}</p>
                   </div>
-                  <div className="tabular hidden shrink-0 text-right text-[12px] text-ink-4 sm:block">
+                  <div className="tabular hidden shrink-0 text-right text-[12px] text-ink-3 sm:block">
                     <p>{(r.inputTokens + r.outputTokens).toLocaleString()} tok · {microsToDollars(r.costMicros)}</p>
                     <p>{duration(r.startedAt, r.finishedAt) ?? r.trigger}</p>
                   </div>
-                  <RelativeTime date={r.createdAt} className="w-20 shrink-0 text-right text-[12px] text-ink-4" />
+                  <RelativeTime date={r.createdAt} className="w-20 shrink-0 text-right text-[12px] text-ink-3" />
                 </summary>
                 <div className="border-t border-line bg-canvas/60 px-4 py-4 sm:px-5 sm:pl-12">
                   <div className="tabular mb-3 flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-ink-3">
@@ -93,7 +93,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
                         const text = stepText(s.data);
                         return (
                           <li key={s.id} className="flex gap-3">
-                            <span className={cn("mt-0.5 w-16 shrink-0 text-[11.5px] font-medium", s.kind === "error" ? "text-bad" : s.kind === "tool_call" ? "text-accent" : "text-ink-4")}>{STEP[s.kind] ?? s.kind}</span>
+                            <span className={cn("mt-0.5 w-16 shrink-0 text-[11.5px] font-medium", s.kind === "error" ? "text-bad" : s.kind === "tool_call" ? "text-accent" : "text-ink-3")}>{STEP[s.kind] ?? s.kind}</span>
                             <div className="min-w-0 flex-1">
                               {s.name ? <p className="font-mono text-[12px] text-ink-2">{s.name}</p> : null}
                               {text ? <pre className="mt-0.5 max-h-48 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-ink-3">{text.slice(0, 4000)}</pre> : null}
@@ -103,7 +103,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
                       })}
                     </ol>
                   ) : (
-                    <p className="text-[12.5px] text-ink-4">No steps recorded.</p>
+                    <p className="text-[12.5px] text-ink-3">No steps recorded.</p>
                   )}
                 </div>
               </details>

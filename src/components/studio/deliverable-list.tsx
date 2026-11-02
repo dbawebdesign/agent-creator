@@ -29,12 +29,12 @@ export function DeliverableList({ items, empty, initialOpenId }: { items: D[]; e
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13.5px] font-medium text-ink">{d.title}</span>
                   {d.preview ? <span className="mt-0.5 line-clamp-1 block text-[12.5px] text-ink-3">{d.preview}</span> : null}
-                  <span className="mt-1 block text-[12px] text-ink-4">
+                  <span className="mt-1 block text-[12px] text-ink-3">
                     {OUTPUT_LABEL[d.kind] ?? d.kind} · {d.needsReview && d.status === "new" ? <span className="text-warn">Needs review</span> : STATUS[d.status] ?? d.status}
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
-                  <RelativeTime date={d.createdAt} className="block text-[12px] text-ink-4" />
+                  <RelativeTime date={d.createdAt} className="block text-[12px] text-ink-3" />
                   {d.hoursSaved ? <span className="tabular mt-1 block text-[12px] font-medium text-good">+{hours(d.hoursSaved)}</span> : null}
                 </span>
               </button>

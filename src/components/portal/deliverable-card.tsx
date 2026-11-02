@@ -11,7 +11,19 @@ export function whenLabel(date: Date, tz: string): string {
   return day === "today" ? t : `${capitalize(day)}, ${t}`;
 }
 
-export function DeliverableCardView({ d, slug, tz, compact, hideAgent }: { d: Card; slug: string; tz: string; compact?: boolean; hideAgent?: boolean }) {
+export function DeliverableCardView({
+  d,
+  slug,
+  tz,
+  compact,
+  hideAgent,
+}: {
+  d: Card;
+  slug: string;
+  tz: string;
+  compact?: boolean;
+  hideAgent?: boolean;
+}) {
   const unseen = d.status === "new";
   return (
     <Link
@@ -24,9 +36,11 @@ export function DeliverableCardView({ d, slug, tz, compact, hideAgent }: { d: Ca
       <div className="flex items-center gap-2 text-[12.5px] text-ink-3">
         {hideAgent ? null : (
           <>
-            <AgentOrb seed={d.agent.seed} size={20} />
+            <AgentOrb seed={d.agent.seed} name={d.agent.name} size={20} />
             <span className="font-medium text-ink-2">{d.agent.name}</span>
-            <span aria-hidden className="text-ink-3">·</span>
+            <span aria-hidden className="text-ink-3">
+              ·
+            </span>
           </>
         )}
         <time dateTime={d.createdAt.toISOString()} className="tabular">
@@ -39,17 +53,36 @@ export function DeliverableCardView({ d, slug, tz, compact, hideAgent }: { d: Ca
           </span>
         ) : null}
       </div>
-      <h3 className={cn("mt-2.5 font-semibold tracking-[-0.01em] text-ink text-pretty", compact ? "text-[14.5px]" : "text-[15.5px]")}>{d.title}</h3>
-      {d.preview ? <p className="mt-1 line-clamp-2 text-[13.5px] leading-relaxed text-ink-3 text-pretty">{d.preview}</p> : null}
+      <h3
+        className={cn(
+          "mt-2.5 font-semibold tracking-[-0.01em] text-ink text-pretty",
+          compact ? "text-[14.5px]" : "text-[15.5px]",
+        )}
+      >
+        {d.title}
+      </h3>
+      {d.preview ? (
+        <p className="mt-1 line-clamp-2 text-[13.5px] leading-relaxed text-ink-3 text-pretty">
+          {d.preview}
+        </p>
+      ) : null}
       <div className="mt-3.5 flex items-center gap-3 text-[12px] text-ink-3">
         <span className="inline-flex items-center gap-1.5">
           <KindIcon kind={d.kind} />
           {kindLabel(d.kind)}
         </span>
         <DeliveredVia via={d.deliveredVia} />
-        {d.status === "approved" ? <span className="text-good">Approved</span> : null}
-        {d.status === "changes_requested" ? <span className="text-warn">Changes requested</span> : null}
-        {d.hoursSaved > 0 ? <span className="ml-auto tabular">~{shortHours(d.hoursSaved)} saved</span> : null}
+        {d.status === "approved" ? (
+          <span className="text-good">Approved</span>
+        ) : null}
+        {d.status === "changes_requested" ? (
+          <span className="text-warn">Changes requested</span>
+        ) : null}
+        {d.hoursSaved > 0 ? (
+          <span className="ml-auto tabular">
+            ~{shortHours(d.hoursSaved)} saved
+          </span>
+        ) : null}
       </div>
     </Link>
   );

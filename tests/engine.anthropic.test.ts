@@ -59,12 +59,19 @@ describe("anthropic provider", () => {
     const res = await anthropicProvider.chat({
       tier: "smart",
       system: "You are a test.",
+      systemVolatile: "## Now\nIt is noon.",
       messages: [{ role: "user", content: "hi" }],
       tools: [{ name: "knowledge_search", description: "Search", input_schema: { type: "object", properties: { query: { type: "string" } } } }],
       maxTokens: 1000,
     });
     const req = calls[0]!;
     expect(req.body).toMatchObject({ model: "claude-opus-5-5", max_tokens: 1000, thinking: { type: "adaptive" }, output_config: { effort: "high" }, fallbacks: "default" });
+    // Prompt caching: breakpoint after the stable system prompt (+ tools), automatic caching for the growing tail.
+    expect(req.body.cache_control).toEqual({ type: "ephemeral" });
+    expect(req.body.system).toEqual([
+      { type: "text", text: "You are a test.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "## Now\nIt is noon." },
+    ]);
     expect((req.body.tools as unknown[]).length).toBe(1);
     expect(req.headers.get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
     expect(res.stopReason).toBe("tool_use");

@@ -105,7 +105,7 @@ export function Provisioning({
                 <l.icon className="size-4" aria-hidden />
               </span>
               <div className="min-w-0 flex-1">
-                <p className={cn("text-[13.5px] font-medium transition-colors", state === "todo" ? "text-ink-4" : "text-ink")}>{l.label}</p>
+                <p className={cn("text-[13.5px] font-medium transition-colors", state === "todo" ? "text-ink-3" : "text-ink")}>{l.label}</p>
                 <p className={cn("truncate text-[12.5px] transition-opacity duration-300", state === "done" ? "text-ink-3 opacity-100" : "opacity-0")}>{l.detail}</p>
               </div>
               <span className="flex size-5 items-center justify-center" aria-label={state === "done" ? "Done" : state === "active" ? "In progress" : "Waiting"}>

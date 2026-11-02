@@ -9,7 +9,8 @@ const toRgb = (hex: string): RGB => {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
-const toHex = (c: RGB) => `#${c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+const toHex = (c: RGB) =>
+  `#${c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
 
 function luminance([r, g, b]: RGB): number {
   const f = (c: number) => {
@@ -26,10 +27,19 @@ export function contrast(a: string, b: string): number {
   return (x + 0.05) / (y + 0.05);
 }
 
-const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const mix = (a: RGB, b: RGB, t: number): RGB => [
+  a[0] + (b[0] - a[0]) * t,
+  a[1] + (b[1] - a[1]) * t,
+  a[2] + (b[2] - a[2]) * t,
+];
 
 /** Shift `hex` toward black or white until it reads at `min`:1 on `bg`. */
-export function readableOn(hex: string, bg: string, toward: "black" | "white", min = 4.5): string {
+export function readableOn(
+  hex: string,
+  bg: string,
+  toward: "black" | "white",
+  min = 4.5,
+): string {
   const base = toRgb(hex);
   const target: RGB = toward === "black" ? [0, 0, 0] : [255, 255, 255];
   for (let t = 0; t <= 1; t += 0.04) {
@@ -41,7 +51,9 @@ export function readableOn(hex: string, bg: string, toward: "black" | "white", m
 
 /** Text colour for a brand-filled surface (buttons, the logo monogram). */
 export function inkFor(hex: string): string {
-  return contrast(hex, "#ffffff") >= contrast(hex, "#111113") ? "#ffffff" : "#111113";
+  return contrast(hex, "#ffffff") >= contrast(hex, "#111113")
+    ? "#ffffff"
+    : "#111113";
 }
 
 /** The :root variables the portal theme reads (see portal.css). */

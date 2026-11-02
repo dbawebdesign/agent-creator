@@ -19,11 +19,13 @@ import {
   runWorkflowNow,
   setAgentStatus,
 } from "@/server/services/engine";
-import { makeCustomer, makeJobsDue, makeOrgs, resetDb } from "./engine.helpers";
+import { firstDeliverableSchedule } from "@/server/jobs/scheduler";
+import { makeCustomer, makeJobsDue, makeOrgs, resetDb, tzAtLocalHour } from "./engine.helpers";
 
 const PODCAST = readFileSync(path.join(__dirname, "fixtures", "podcast-ai-employees.md"), "utf8");
 
-async function hireFromTranscript(timezone = "America/Chicago") {
+// Midday local time by default: the first deliverable runs now and is handed over as soon as it is done.
+async function hireFromTranscript(timezone = tzAtLocalHour(12)) {
   const orgs = await makeOrgs({ clientName: "Summit Promo Co", industry: "Promotional products distribution", timezone });
   const [disc] = await db()
     .insert(schema.discoveries)
@@ -46,7 +48,8 @@ const jobsOf = async (type: string) =>
 describe("hireAgent", () => {
   beforeEach(resetDb);
 
-  it("provisions the full stack and schedules the overnight deliverable for 6:00 AM local", async () => {
+  it("provisions the full stack and schedules the first deliverable (work ~1 AM, hand over at 6 AM local)", async () => {
+    const before = new Date();
     const { client, agentId, spec, discoveryId } = await hireFromTranscript("America/Chicago");
     const [agent] = await db().select().from(schema.agents).where(eq(schema.agents.id, agentId));
     expect(agent).toMatchObject({ status: "active", orgId: client.id, name: spec.name, role: "Quoting Specialist" });
@@ -82,8 +85,10 @@ describe("hireAgent", () => {
     expect(runs[0]!.input.title).toBe(spec.firstDeliverable.title);
     const [job] = await jobsOf("agent.run");
     expect(job!.payload).toMatchObject({ runId: runs[0]!.id, orgId: client.id });
-    const local = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", hour12: false }).format(new Date(job!.run_at));
-    expect(local).toBe("06:00");
+    const expected = firstDeliverableSchedule("America/Chicago", before);
+    expect(Math.abs(new Date(job!.run_at).getTime() - expected.runAt.getTime())).toBeLessThan(5_000);
+    if (expected.releaseAt) expect(runs[0]!.input.releaseAt).toBe(expected.releaseAt.toISOString());
+    else expect(runs[0]!.input.releaseAt).toBeUndefined();
     expect(new Date(job!.run_at).getTime() - Date.now()).toBeLessThanOrEqual(24 * 3600_000);
 
     const [disc] = await db().select().from(schema.discoveries).where(eq(schema.discoveries.id, discoveryId));

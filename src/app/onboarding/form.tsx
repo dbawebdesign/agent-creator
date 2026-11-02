@@ -32,7 +32,7 @@ export function OnboardingForm({ defaultName }: { defaultName: string }) {
       </Field>
       <Field label="Studio address" htmlFor="slug" error={state?.fieldErrors?.slug}>
         <div className="flex h-9 items-center rounded-md border border-line bg-surface shadow-xs focus-within:border-accent focus-within:ring-3 focus-within:ring-accent/15">
-          <span className="pl-3 text-[13.5px] text-ink-4 select-none">roster.app/a/</span>
+          <span className="pl-3 text-[13.5px] text-ink-3 select-none">roster.app/a/</span>
           <input
             id="slug"
             name="slug"
@@ -48,9 +48,9 @@ export function OnboardingForm({ defaultName }: { defaultName: string }) {
       </Field>
       <Field label="Default monthly price per AI employee" htmlFor="price" hint="Flat rate. No setup fee, no token billing. You can add more plans later.">
         <div className="flex h-9 items-center rounded-md border border-line bg-surface shadow-xs focus-within:border-accent focus-within:ring-3 focus-within:ring-accent/15">
-          <span className="pl-3 text-[13.5px] text-ink-4 select-none">$</span>
+          <span className="pl-3 text-[13.5px] text-ink-3 select-none">$</span>
           <input id="price" name="price" type="number" min={0} step={100} defaultValue={5000} className="tabular h-full flex-1 bg-transparent px-1.5 text-[13.5px] text-ink focus:outline-none" />
-          <span className="pr-3 text-[13.5px] text-ink-4 select-none">/ month</span>
+          <span className="pr-3 text-[13.5px] text-ink-3 select-none">/ month</span>
         </div>
       </Field>
       <SubmitButton variant="primary" size="lg" className="w-full" pendingLabel="Setting up your studio…">

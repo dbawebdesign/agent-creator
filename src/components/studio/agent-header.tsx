@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Check, Copy, ExternalLink, LayoutTemplate, MoreHorizontal, Pause, Play } from "lucide-react";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
@@ -39,8 +39,29 @@ export function AgentTabs({ base }: { base: string }) {
     { href: `${base}/activity`, label: "Activity" },
     { href: `${base}/settings`, label: "Settings" },
   ];
+  const navRef = useRef<HTMLElement>(null);
+  const [fade, setFade] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const update = () => setFade({ left: el.scrollLeft > 2, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 2 });
+    el.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => {
+      el.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [pathname]);
+  const mask = fade.left && fade.right ? "linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)" : fade.right ? "linear-gradient(90deg,#000 calc(100% - 36px),transparent)" : fade.left ? "linear-gradient(90deg,transparent,#000 36px)" : undefined;
   return (
-    <nav className="-mb-px flex gap-5 overflow-x-auto [scrollbar-width:none]" aria-label="Agent sections">
+    <nav
+      ref={navRef}
+      className="-mb-px flex gap-5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
+      aria-label="Agent sections"
+    >
       {tabs.map((t) => {
         const active = t.href === base ? pathname === base : pathname.startsWith(t.href);
         return (

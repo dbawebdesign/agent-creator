@@ -20,6 +20,26 @@ export type PaletteItem = {
   shortcut?: string;
 };
 
+const SEP = "\u0000";
+
+/**
+ * Rank on the label (and keywords) only — never the group name or id. Exact and prefix matches first, then a word
+ * that starts with the query, then a substring, then a keyword match. Anything else is hidden.
+ */
+export function paletteScore(value: string, search: string, keywords?: string[]): number {
+  const q = search.trim().toLowerCase();
+  if (!q) return 1;
+  const label = (value.split(SEP)[0] ?? "").toLowerCase();
+  if (label === q) return 1;
+  if (label.startsWith(q)) return 0.9;
+  const words = label.split(/[\s·›/,()&-]+/).filter(Boolean);
+  if (words.some((w) => w.startsWith(q))) return 0.8;
+  if (q.length >= 3 && label.includes(q)) return 0.6;
+  const kws = (keywords ?? []).map((k) => k.toLowerCase());
+  if (kws.some((k) => k.startsWith(q) || k.split(/\s+/).some((w) => w.startsWith(q)))) return 0.4;
+  return 0;
+}
+
 const Ctx = createContext<{ open: () => void }>({ open: () => {} });
 export const useCommandPalette = () => useContext(Ctx);
 
@@ -75,7 +95,7 @@ export function CommandPalette({ items, placeholder = "Type a command or search�
           >
             <D.Title className="sr-only">Command palette</D.Title>
             <D.Description className="sr-only">Search pages, clients, agents and actions</D.Description>
-            <Command loop className="flex flex-col" label="Command palette">
+            <Command loop className="flex flex-col" label="Command palette" filter={paletteScore}>
               <div className="flex items-center gap-2.5 border-b border-line px-4">
                 <Search className="size-4 text-ink-4" aria-hidden />
                 <Command.Input
@@ -91,14 +111,14 @@ export function CommandPalette({ items, placeholder = "Type a command or search�
                     {list.map((it) => (
                       <Command.Item
                         key={it.id}
-                        value={`${it.label} ${it.group} ${it.id}`}
+                        value={`${it.label}${SEP}${it.id}`}
                         keywords={it.keywords}
                         onSelect={() => run(it)}
                         className="flex h-9 cursor-default select-none items-center gap-2.5 rounded-md px-2.5 text-[13.5px] text-ink-2 data-[selected=true]:bg-surface-2 data-[selected=true]:text-ink [&_svg]:size-4 [&_svg]:text-ink-3"
                       >
                         {it.icon}
                         <span className="truncate">{it.label}</span>
-                        {it.hint ? <span className="ml-auto truncate pl-3 text-[12px] text-ink-4">{it.hint}</span> : null}
+                        {it.hint ? <span className="ml-auto truncate pl-3 text-[12px] text-ink-3">{it.hint}</span> : null}
                         {it.shortcut ? (
                           <kbd className="ml-auto rounded border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-ink-3">{it.shortcut}</kbd>
                         ) : null}
@@ -107,7 +127,7 @@ export function CommandPalette({ items, placeholder = "Type a command or search�
                   </Command.Group>
                 ))}
               </Command.List>
-              <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11.5px] text-ink-4">
+              <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11.5px] text-ink-3">
                 <span>↑↓ to move</span>
                 <span>↵ to open</span>
                 <span className="ml-auto">esc to close</span>

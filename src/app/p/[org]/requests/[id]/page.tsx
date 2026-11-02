@@ -7,14 +7,22 @@ import { CHANNEL_LABEL } from "@/components/portal/lib";
 import { Thread } from "@/components/portal/thread";
 import { getPortal, getRequest } from "@/server/queries/portal";
 
-export async function generateMetadata({ params }: { params: Promise<{ org: string; id: string }> }) {
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ org: string; id: string }>;
+}) {
   const { org, id } = await params;
   const p = await getPortal(org);
   const r = await getRequest(p.org.id, id);
   return { title: r?.subject ?? "Request" };
 }
 
-export default async function RequestPage({ params }: { params: Promise<{ org: string; id: string }> }) {
+export default async function RequestPage({
+  params,
+}: {
+  params: Promise<{ org: string; id: string }>;
+}) {
   const { org: slug, id } = await params;
   const p = await getPortal(slug);
   const r = await getRequest(p.org.id, id);
@@ -46,13 +54,21 @@ export default async function RequestPage({ params }: { params: Promise<{ org: s
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[13px] text-ink-3">
           <ChannelIcon channel={r.channel} className="text-ink-3" />
           {channel}
-          <span aria-hidden className="text-ink-3">·</span>
-          <Link href={`/p/${slug}/team/${r.agent.id}`} className="text-ink-2 hover:text-ink">
+          <span aria-hidden className="text-ink-3">
+            ·
+          </span>
+          <Link
+            href={`/p/${slug}/team/${r.agent.id}`}
+            className="text-ink-2 hover:text-ink"
+          >
             {r.agent.name}
           </Link>
           {r.who ? (
             <>
-              <span aria-hidden className="text-ink-3">·</span> {r.who}
+              <span aria-hidden className="text-ink-3">
+                ·
+              </span>{" "}
+              {r.who}
             </>
           ) : null}
         </p>

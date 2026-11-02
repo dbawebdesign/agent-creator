@@ -30,7 +30,7 @@ export default async function AgentsPage({ params }: { params: Promise<{ agency:
       </header>
       {agents.length ? (
         <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
-          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_110px_120px_120px] gap-4 border-b border-line px-5 py-2.5 text-[12px] font-medium text-ink-4 md:grid">
+          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_110px_120px_120px] gap-4 border-b border-line px-5 py-2.5 text-[12px] font-medium text-ink-3 md:grid">
             <span>Agent</span>
             <span>Client</span>
             <span>Status</span>
@@ -48,19 +48,19 @@ export default async function AgentsPage({ params }: { params: Promise<{ agency:
                     <AgentOrb seed={a.avatarSeed ?? a.id} size={30} />
                     <span className="min-w-0">
                       <span className="block truncate text-[13.5px] font-medium text-ink">{a.name}</span>
-                      <span className="block truncate text-[12px] text-ink-4">{a.role}</span>
+                      <span className="block truncate text-[12px] text-ink-3">{a.role}</span>
                     </span>
                   </span>
                   <span className="hidden truncate text-[13px] text-ink-2 md:block">
                     {a.orgName}
-                    {a.orgKind === "customer" ? <span className="ml-1.5 text-[11.5px] text-ink-4">resale</span> : null}
+                    {a.orgKind === "customer" ? <span className="ml-1.5 text-[11.5px] text-ink-3">resale</span> : null}
                   </span>
                   <span className="justify-self-end md:justify-self-start">
                     <AgentStatus status={a.status} />
                   </span>
-                  <span className="hidden text-[12.5px] text-ink-3 md:block">{a.nextRunAt ? <RelativeTime date={a.nextRunAt} /> : <span className="text-ink-4">—</span>}</span>
-                  <span className="tabular hidden text-right text-[13px] text-ink-2 md:block">{a.hoursWeek ? hours(a.hoursWeek) : <span className="text-ink-4">—</span>}</span>
-                  <span className="col-span-2 truncate text-[12px] text-ink-4 md:hidden">
+                  <span className="hidden text-[12.5px] text-ink-3 md:block">{a.nextRunAt ? <RelativeTime date={a.nextRunAt} /> : <span className="text-ink-3">—</span>}</span>
+                  <span className="tabular hidden text-right text-[13px] text-ink-2 md:block">{a.hoursWeek ? hours(a.hoursWeek) : <span className="text-ink-3">—</span>}</span>
+                  <span className="col-span-2 truncate text-[12px] text-ink-3 md:hidden">
                     {a.orgName} · {a.workflows} workflow{a.workflows === 1 ? "" : "s"}
                     {a.lastDeliveryAt ? <> · delivered <RelativeTime date={a.lastDeliveryAt} /></> : null}
                   </span>

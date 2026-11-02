@@ -392,7 +392,8 @@ const APPROVAL_RULE =
 
 // ───────────────────────────────────────────── main ─────────────────────────────────────────────
 
-export function readDiscovery(raw: string): Discovery {
+/** `keep(text, prev, next)` drops sentences that are about some other business (e.g. examples on a podcast). */
+export function readDiscovery(raw: string, keep?: (text: string, prev: string, next: string) => boolean): Discovery {
   const turns = parseTurns(raw);
   const labelled = turns.some((t) => t.speaker);
   const sentences: Sentence[] = [];
@@ -409,6 +410,12 @@ export function readDiscovery(raw: string): Discovery {
     }
     lastAgencyItch = false;
   });
+  if (keep) {
+    const all = sentences.splice(0);
+    all.forEach((s, i) => {
+      if (keep(s.text, all[i - 1]?.text ?? "", all[i + 1]?.text ?? "")) sentences.push(s);
+    });
+  }
   const speakerCounts = new Map<string, number>();
   for (const t of turns) if (t.speaker && !t.agency) speakerCounts.set(t.speaker, (speakerCounts.get(t.speaker) ?? 0) + 1);
   const owner = [...speakerCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;

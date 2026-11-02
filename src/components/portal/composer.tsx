@@ -7,7 +7,13 @@ import { ArrowUp, Check, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { askTeam } from "@/app/p/[org]/actions";
 import { AgentOrb } from "@/components/ui/agent-orb";
-import { Menu, MenuContent, MenuItem, MenuLabel, MenuTrigger } from "@/components/ui/menu";
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuTrigger,
+} from "@/components/ui/menu";
 import { cn } from "@/lib/utils";
 
 type A = { id: string; name: string; role: string; seed: string };
@@ -42,7 +48,10 @@ export function AskComposer({
   const [agentId, setAgentId] = useState(defaultAgentId ?? agents[0]?.id ?? "");
   const [text, setText] = useState("");
   const [pending, start] = useTransition();
-  const [sent, setSent] = useState<{ name: string; conversationId: string } | null>(null);
+  const [sent, setSent] = useState<{
+    name: string;
+    conversationId: string;
+  } | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
   const agent = agents.find((a) => a.id === agentId) ?? agents[0];
@@ -60,7 +69,12 @@ export function AskComposer({
     const body = text.trim();
     if (!body || pending) return;
     start(async () => {
-      const res = await askTeam({ slug, agentId: agent.id, text: prefix ? `${prefix}\n\n${body}` : body, conversationId });
+      const res = await askTeam({
+        slug,
+        agentId: agent.id,
+        text: prefix ? `${prefix}\n\n${body}` : body,
+        conversationId,
+      });
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -71,7 +85,11 @@ export function AskComposer({
       else
         toast.success(`Sent to ${agent.name}`, {
           description: "They'll reply here and in Requests.",
-          action: { label: "View", onClick: () => router.push(`/p/${slug}/requests/${res.conversationId}`) },
+          action: {
+            label: "View",
+            onClick: () =>
+              router.push(`/p/${slug}/requests/${res.conversationId}`),
+          },
         });
       router.refresh();
     });
@@ -91,7 +109,7 @@ export function AskComposer({
       >
         {lockAgent || agents.length < 2 ? (
           <span className="flex h-9 shrink-0 items-center pl-1.5 pr-0.5">
-            <AgentOrb seed={agent.seed} size={22} />
+            <AgentOrb seed={agent.seed} name={agent.name} size={22} />
           </span>
         ) : (
           <Menu>
@@ -99,26 +117,39 @@ export function AskComposer({
               className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg pr-1.5 pl-1.5 text-[13px] font-medium text-ink-2 transition-colors hover:bg-surface-2"
               aria-label={`Asking ${agent.name}. Change teammate`}
             >
-              <AgentOrb seed={agent.seed} size={22} />
+              <AgentOrb seed={agent.seed} name={agent.name} size={22} />
               <span className="hidden sm:inline">{agent.name}</span>
               <ChevronDown className="size-3.5 text-ink-3" aria-hidden />
             </MenuTrigger>
             <MenuContent align="start" className="w-64">
               <MenuLabel>Ask</MenuLabel>
               {agents.map((a) => (
-                <MenuItem key={a.id} onSelect={() => setAgentId(a.id)} className="h-auto py-1.5">
-                  <AgentOrb seed={a.seed} size={24} />
+                <MenuItem
+                  key={a.id}
+                  onSelect={() => setAgentId(a.id)}
+                  className="h-auto py-1.5"
+                >
+                  <AgentOrb seed={a.seed} name={a.name} size={24} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-ink">{a.name}</span>
-                    <span className="block truncate text-[12px] text-ink-3">{a.role}</span>
+                    <span className="block truncate font-medium text-ink">
+                      {a.name}
+                    </span>
+                    <span className="block truncate text-[12px] text-ink-3">
+                      {a.role}
+                    </span>
                   </span>
-                  {a.id === agent.id ? <Check className="!text-accent-text" aria-hidden /> : null}
+                  {a.id === agent.id ? (
+                    <Check className="!text-accent-text" aria-hidden />
+                  ) : null}
                 </MenuItem>
               ))}
             </MenuContent>
           </Menu>
         )}
-        <label htmlFor={`ask-${slug}-${conversationId ?? "new"}`} className="sr-only">
+        <label
+          htmlFor={`ask-${slug}-${conversationId ?? "new"}`}
+          className="sr-only"
+        >
           Message {agent.name}
         </label>
         <textarea
@@ -132,7 +163,11 @@ export function AskComposer({
             if (sent) setSent(null);
           }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
               e.preventDefault();
               submit();
             }
@@ -147,18 +182,30 @@ export function AskComposer({
           aria-label={`Send message to ${agent.name}`}
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-lg transition-[background,color,opacity] duration-150",
-            text.trim() ? "bg-accent text-accent-ink hover:brightness-110" : "bg-surface-2 text-ink-3",
+            text.trim()
+              ? "bg-accent text-accent-ink hover:brightness-110"
+              : "bg-surface-2 text-ink-3",
             "disabled:cursor-not-allowed",
           )}
         >
-          {pending ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+          {pending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <ArrowUp className="size-4" />
+          )}
         </button>
       </form>
       {sent && !onSent ? (
-        <p className="mt-2 flex items-center gap-1.5 px-1 text-[12.5px] text-ink-3 animate-fade-in" role="status">
+        <p
+          className="mt-2 flex items-center gap-1.5 px-1 text-[12.5px] text-ink-3 animate-fade-in"
+          role="status"
+        >
           <Check className="size-3.5 text-good" aria-hidden />
           {sent.name} is on it.
-          <Link href={`/p/${slug}/requests/${sent.conversationId}`} className="font-medium text-ink-2 underline-offset-2 hover:underline">
+          <Link
+            href={`/p/${slug}/requests/${sent.conversationId}`}
+            className="font-medium text-ink-2 underline-offset-2 hover:underline"
+          >
             Follow along
           </Link>
         </p>

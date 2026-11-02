@@ -25,7 +25,19 @@ async function writeClipboard(text: string) {
 }
 
 /** Icon (or labeled) copy button with a brief check-mark confirmation. */
-export function CopyButton({ value, label, className, toastLabel, children }: { value: string; label: string; className?: string; toastLabel?: string; children?: React.ReactNode }) {
+export function CopyButton({
+  value,
+  label,
+  className,
+  toastLabel,
+  children,
+}: {
+  value: string;
+  label: string;
+  className?: string;
+  toastLabel?: string;
+  children?: React.ReactNode;
+}) {
   const [done, setDone] = useState(false);
   return (
     <button
@@ -33,7 +45,8 @@ export function CopyButton({ value, label, className, toastLabel, children }: { 
       aria-label={label}
       onClick={async () => {
         const ok = await writeClipboard(value);
-        if (!ok) return toast.error("Couldn't copy — select and copy it instead");
+        if (!ok)
+          return toast.error("Couldn't copy — select and copy it instead");
         setDone(true);
         if (toastLabel) toast.success(toastLabel);
         setTimeout(() => setDone(false), 1600);
@@ -44,7 +57,11 @@ export function CopyButton({ value, label, className, toastLabel, children }: { 
         className,
       )}
     >
-      {done ? <Check className="size-4 text-good" aria-hidden /> : <Copy className="size-4" aria-hidden />}
+      {done ? (
+        <Check className="size-4 text-good" aria-hidden />
+      ) : (
+        <Copy className="size-4" aria-hidden />
+      )}
       {children ? <span>{done ? "Copied" : children}</span> : null}
       <span className="sr-only" role="status">
         {done ? "Copied" : ""}
@@ -54,10 +71,32 @@ export function CopyButton({ value, label, className, toastLabel, children }: { 
 }
 
 /** A value on one line (email, number, key) with a copy button. */
-export function CopyField({ value, label, mono, className }: { value: string; label: string; mono?: boolean; className?: string }) {
+export function CopyField({
+  value,
+  label,
+  mono,
+  className,
+}: {
+  value: string;
+  label: string;
+  mono?: boolean;
+  className?: string;
+}) {
   return (
-    <div className={cn("flex h-10 min-w-0 items-center gap-1 rounded-lg border border-line bg-surface-2/60 pr-1 pl-3", className)}>
-      <span className={cn("min-w-0 flex-1 truncate text-[13.5px] text-ink-2 select-all", mono && "font-mono text-[12.5px]")}>{value}</span>
+    <div
+      className={cn(
+        "flex h-10 min-w-0 items-center gap-1 rounded-lg border border-line bg-surface-2/60 pr-1 pl-3",
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-[13.5px] text-ink-2 select-all",
+          mono && "font-mono text-[12.5px]",
+        )}
+      >
+        {value}
+      </span>
       <CopyButton value={value} label={label} toastLabel="Copied" />
     </div>
   );

@@ -59,17 +59,17 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
                   {m.name ?? m.email}
                   {m.userId === access.user.id ? <span className="ml-1.5 font-normal text-ink-4">(you)</span> : null}
                 </p>
-                <p className="truncate text-[12px] text-ink-4">{m.email}</p>
+                <p className="truncate text-[12px] text-ink-3">{m.email}</p>
               </div>
               <span className="text-[12.5px] text-ink-3 capitalize">{m.role}</span>
             </li>
           ))}
           {invites.map((i) => (
             <li key={i.id} className="flex items-center gap-3 px-4 py-3 sm:px-5">
-              <span className="flex size-7 items-center justify-center rounded-full border border-dashed border-line-strong text-[11px] text-ink-4">@</span>
+              <span className="flex size-7 items-center justify-center rounded-full border border-dashed border-line-strong text-[11px] text-ink-3">@</span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] text-ink-2">{i.email}</p>
-                <p className="text-[12px] text-ink-4">
+                <p className="text-[12px] text-ink-3">
                   Invited <RelativeTime date={i.createdAt} /> · {i.expiresAt < new Date() ? "expired" : "pending"}
                 </p>
               </div>
@@ -98,9 +98,9 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13.5px] font-medium text-ink">
                       {k.name}
-                      <code className="ml-2 font-mono text-[12px] font-normal text-ink-4">{k.prefix}…</code>
+                      <code className="ml-2 font-mono text-[12px] font-normal text-ink-3">{k.prefix}…</code>
                     </p>
-                    <p className="truncate text-[12px] text-ink-4">
+                    <p className="truncate text-[12px] text-ink-3">
                       {k.scopes.join(", ")} · last used <KeyAge date={k.lastUsedAt} />
                     </p>
                   </div>

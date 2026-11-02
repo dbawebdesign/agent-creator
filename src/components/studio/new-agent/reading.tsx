@@ -14,11 +14,20 @@ const STEPS = [
 
 const PAIN = /(every (week|day|morning|friday|monday|night)|hours?|forty|thirty|minutes|drown|behind|lose|never remember|manual|by hand|spreadsheet|takes|eats|chase|follow[- ]?ups?|sunday|weekend|i have to|we have to)/i;
 
+/** Strip markdown emphasis and leading timestamps ("**10:32** · ", "[00:10:32]", "(10:32) -") from a transcript line. */
+export function cleanLine(line: string): string {
+  return line
+    .replace(/\*\*|__/g, "")
+    .replace(/^\s*[>#*-]*\s*/, "")
+    .replace(/^[\[(]?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?[\])]?\s*(?:[·•|–—-]\s*)?/, "")
+    .trim();
+}
+
 /** Pull a few quotable pain-point lines from the transcript, client-side, for the live reading state. */
 export function extractItches(transcript: string, max = 3): string[] {
   const lines = transcript
     .split(/\n+/)
-    .map((l) => l.replace(/^\s*\[?[\d:.]+\]?\s*/, "").trim())
+    .map(cleanLine)
     .filter((l) => l.length > 30);
   const speakers = new Map<string, number>();
   for (const l of lines) {
@@ -49,9 +58,32 @@ export function transcriptStats(t: string) {
   return { words, speakers, minutes: Math.max(1, Math.round(words / 150)) };
 }
 
-export function ArchitectReading({ transcript, clientName, done, failed, slow }: { transcript: string; clientName: string; done: boolean; failed?: string | null; slow?: boolean }) {
+export function ArchitectReading({
+  transcript,
+  clientName,
+  done,
+  failed,
+  slow,
+  found,
+}: {
+  transcript: string;
+  clientName: string;
+  done: boolean;
+  failed?: string | null;
+  slow?: boolean;
+  /** Once the proposal is ready: the workflows it designed and the itch each one answers. */
+  found?: { workflow: string; problem: string }[] | null;
+}) {
   const [step, setStep] = useState(0);
-  const itches = useMemo(() => extractItches(transcript), [transcript]);
+  const guessed = useMemo(() => extractItches(transcript), [transcript]);
+  const fromProposal = useMemo(() => {
+    const seen = new Set<string>();
+    return (found ?? [])
+      .map((f) => ({ ...f, problem: cleanLine(f.problem).replace(/^["“]|["”]$/g, "") }))
+      .filter((f) => f.problem && !seen.has(f.problem) && seen.add(f.problem))
+      .slice(0, 4);
+  }, [found]);
+  const finished = done && step >= STEPS.length;
   const stats = useMemo(() => transcriptStats(transcript), [transcript]);
 
   useEffect(() => {
@@ -68,9 +100,9 @@ export function ArchitectReading({ transcript, clientName, done, failed, slow }:
   return (
     <div className="mx-auto max-w-[560px] pt-6 animate-fade-in" aria-live="polite">
       <div className="mb-10 flex items-center gap-4">
-        <ArchitectOrb active={!done && !failed} />
+        <ArchitectOrb active={!finished && !failed} />
         <div>
-          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">{failed ? "The Architect hit a snag" : done ? "Proposal ready" : "The Architect is reading the call"}</h1>
+          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">{failed ? "The Architect hit a snag" : finished ? "Proposal ready" : done ? "Finishing the proposal" : "The Architect is reading the call"}</h1>
           <p className="mt-0.5 text-[14px] text-ink-3">
             {failed ? failed : `${clientName} · ${stats.words.toLocaleString()} words · about ${stats.minutes} min of conversation`}
           </p>
@@ -102,14 +134,25 @@ export function ArchitectReading({ transcript, clientName, done, failed, slow }:
                     {stats.speakers > 1 ? `${stats.speakers} speakers` : "One speaker"} · {stats.words.toLocaleString()} words
                   </p>
                 ) : null}
-                {s.key === "itch" && state !== "todo" && itches.length ? (
-                  <ul className="mt-2 space-y-1.5">
-                    {itches.map((q, qi) => (
-                      <li key={qi} className="border-l-2 border-accent/30 pl-3 text-[13px] leading-relaxed text-ink-2 italic animate-rise" style={{ animationDelay: `${qi * 380}ms` }}>
-                        “{q}”
-                      </li>
-                    ))}
-                  </ul>
+                {s.key === "itch" && state !== "todo" && (fromProposal.length || guessed.length) ? (
+                  fromProposal.length ? (
+                    <ul className="mt-2 space-y-2" key="proposal">
+                      {fromProposal.map((f, qi) => (
+                        <li key={qi} className="border-l-2 border-accent/40 pl-3 animate-rise" style={{ animationDelay: `${qi * 160}ms` }}>
+                          <p className="text-[13px] leading-relaxed text-ink-2">{f.problem}</p>
+                          <p className="mt-0.5 text-[12px] font-medium text-accent-text">→ {f.workflow}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <ul className="mt-2 space-y-1.5" key="guessed">
+                      {guessed.map((q, qi) => (
+                        <li key={qi} className="border-l-2 border-line-strong pl-3 text-[13px] leading-relaxed text-ink-3 italic animate-rise" style={{ animationDelay: `${qi * 380}ms` }}>
+                          “{q}”
+                        </li>
+                      ))}
+                    </ul>
+                  )
                 ) : null}
               </div>
             </li>

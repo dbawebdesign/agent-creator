@@ -46,6 +46,7 @@ export function NewAgentFlow({
   );
   const [draft, setDraftState] = useState<Draft | null>(resume?.proposal ? toDraft(resume.proposal) : blueprint ? toDraft(blueprint.spec) : null);
   const [ready, setReady] = useState(false);
+  const [found, setFound] = useState<{ workflow: string; problem: string }[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [slow, setSlow] = useState(false);
   const [starting, startTransition] = useTransition();
@@ -54,6 +55,11 @@ export function NewAgentFlow({
   const [hireError, setHireError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [attempted, setAttempted] = useState(false);
+  const [isMac, setIsMac] = useState(true);
+  useEffect(() => setIsMac(/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)), []);
 
   const setDraft = useCallback((fn: (d: Draft) => Draft) => setDraftState((d) => (d ? fn(d) : d)), []);
   const selected = clients.find((c) => c.id === clientId);
@@ -72,13 +78,16 @@ export function NewAgentFlow({
         if (!alive) return;
         if (r.status === "ready" && r.proposal) {
           setReady(true);
+          setFound(
+            (r.proposal.workflows ?? []).map((w) => ({ workflow: w.name, problem: w.problem ?? "" })),
+          );
           setResolvedClient({ id: r.clientId, name: r.clientName });
           setTimeout(() => {
             if (!alive) return;
             setDraftState(toDraft(r.proposal!));
             setPhase("review");
             window.scrollTo({ top: 0 });
-          }, 1400);
+          }, 2600);
           return;
         }
         if (r.status === "hired" && r.agentId) {
@@ -102,8 +111,16 @@ export function NewAgentFlow({
     };
   }, [phase, discoveryId, agency, router]);
 
+  const clientMissing = clientId === "new" ? newClient.name.trim().length < 2 : !selected;
+  const transcriptShort = transcript.trim().length < 200;
   const begin = () => {
-    if (!canStart) return;
+    if (!canStart) {
+      setAttempted(true);
+      if (clientMissing && clientId !== "new") setPickerOpen(true);
+      else if (clientMissing) document.querySelector<HTMLInputElement>('input[aria-label="New client name"]')?.focus();
+      else textRef.current?.focus();
+      return;
+    }
     startTransition(async () => {
       const res = await startDiscovery({
         agency,
@@ -170,7 +187,7 @@ export function NewAgentFlow({
   };
 
   if (phase === "reading") {
-    return <ArchitectReading transcript={transcript} clientName={clientName} done={ready} failed={failed} slow={slow} />;
+    return <ArchitectReading transcript={transcript} clientName={clientName} done={ready} failed={failed} slow={slow} found={found} />;
   }
 
   if (phase === "hiring" && draft) {
@@ -227,8 +244,26 @@ export function NewAgentFlow({
 
       <div className="mt-8 space-y-6">
         <div>
-          <p className="mb-2 text-[13px] font-medium text-ink-2">Who is it for?</p>
-          <ClientPicker clients={clients} value={clientId} onChange={setClientId} allowNew />
+          <p className="mb-2 text-[13px] font-medium text-ink-2" id="client-label">
+            Who is it for?
+          </p>
+          <ClientPicker
+            clients={clients}
+            value={clientId}
+            onChange={(v) => {
+              setClientId(v);
+              if (v !== "new" && transcript.trim().length === 0) setTimeout(() => textRef.current?.focus(), 50);
+            }}
+            allowNew
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            invalid={attempted && clientMissing && clientId !== "new"}
+          />
+          {attempted && clientMissing ? (
+            <p className="mt-2 text-[12.5px] font-medium text-bad" role="alert">
+              {clientId === "new" ? "Name the new client to continue." : "Choose who this is for. The Architect tailors the proposal to the client."}
+            </p>
+          ) : null}
           {clientId === "new" ? (
             <div className="mt-3 grid gap-3 animate-fade-in sm:grid-cols-2">
               <Input autoFocus placeholder="Business name" aria-label="New client name" value={newClient.name} onChange={(e) => setNewClient((c) => ({ ...c, name: e.target.value }))} />
@@ -247,7 +282,7 @@ export function NewAgentFlow({
                 Try a sample call
               </button>
             ) : (
-              <span className="tabular text-[12px] text-ink-4">
+              <span className="tabular text-[12px] text-ink-3">
                 {stats.words.toLocaleString()} words{stats.speakers > 1 ? ` · ${stats.speakers} speakers` : ""}
               </span>
             )}
@@ -270,6 +305,8 @@ export function NewAgentFlow({
             )}
           >
             <textarea
+              ref={textRef}
+              aria-invalid={attempted && transcriptShort ? true : undefined}
               id="transcript"
               value={transcript}
               onChange={(e) => setTranscript(e.target.value)}
@@ -311,15 +348,19 @@ export function NewAgentFlow({
               }}
             />
           </div>
-          {transcript && transcript.trim().length < 200 ? <p className="mt-2 text-[12.5px] text-ink-4">Paste the full call — a few paragraphs at least.</p> : null}
+          {(transcript || attempted) && transcriptShort ? (
+            <p className={cn("mt-2 text-[12.5px]", attempted ? "font-medium text-bad" : "text-ink-3")} role={attempted ? "alert" : undefined}>
+              {transcript ? "Paste the full call — a few paragraphs at least." : "Paste the call transcript, or try the sample call."}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-line pt-5">
-          <span className="hidden text-[12px] text-ink-4 sm:inline-flex sm:items-center sm:gap-1">
-            <Kbd>⌘</Kbd>
+          <span className="hidden text-[12px] text-ink-3 sm:inline-flex sm:items-center sm:gap-1">
+            <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
             <Kbd>↵</Kbd>
           </span>
-          <Button variant="primary" size="lg" onClick={begin} disabled={!canStart || starting}>
+          <Button variant="primary" size="lg" onClick={begin} disabled={starting} aria-disabled={!canStart || undefined} className={cn(!canStart && "opacity-60")}>
             {starting ? <span className="size-3.5 animate-spin rounded-full border-2 border-canvas/30 border-t-canvas" /> : null}
             Read the call
           </Button>
@@ -329,11 +370,33 @@ export function NewAgentFlow({
   );
 }
 
-function ClientPicker({ clients, value, onChange, allowNew }: { clients: Client[]; value: string; onChange: (v: string) => void; allowNew: boolean }) {
+function ClientPicker({
+  clients,
+  value,
+  onChange,
+  allowNew,
+  open,
+  onOpenChange,
+  invalid,
+}: {
+  clients: Client[];
+  value: string;
+  onChange: (v: string) => void;
+  allowNew: boolean;
+  open?: boolean;
+  onOpenChange?: (o: boolean) => void;
+  invalid?: boolean;
+}) {
   const selected = clients.find((c) => c.id === value);
   return (
-    <Menu>
-      <MenuTrigger className="inline-flex h-10 min-w-64 items-center gap-2.5 rounded-lg border border-line bg-surface pr-3 pl-2 text-left text-[13.5px] shadow-xs transition-colors hover:border-line-strong data-[state=open]:border-accent focus:outline-none focus-visible:ring-3 focus-visible:ring-accent/15">
+    <Menu open={open} onOpenChange={onOpenChange}>
+      <MenuTrigger
+        aria-invalid={invalid || undefined}
+        className={cn(
+          "inline-flex h-10 min-w-64 max-w-full items-center gap-2.5 rounded-lg border bg-surface pr-3 pl-2 text-left text-[13.5px] shadow-xs transition-colors hover:border-line-strong data-[state=open]:border-accent focus:outline-none focus-visible:ring-3 focus-visible:ring-accent/15",
+          invalid ? "border-bad ring-3 ring-bad/15" : "border-line",
+        )}
+      >
         {selected ? (
           <OrgMark name={selected.name} size={24} />
         ) : (

@@ -6,7 +6,11 @@ import { getPortal } from "@/server/queries/portal";
 import "@/components/portal/portal.css";
 import { brandVars } from "@/components/portal/brand-color";
 
-export async function generateMetadata({ params }: { params: Promise<{ org: string }> }): Promise<Metadata> {
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ org: string }>;
+}): Promise<Metadata> {
   const { org } = await params;
   const p = await getPortal(org);
   return { title: { default: p.brand.name, template: `%s · ${p.brand.name}` } };
@@ -14,7 +18,13 @@ export async function generateMetadata({ params }: { params: Promise<{ org: stri
 
 /** Readable text color on top of a hex accent. */
 
-export default async function PortalLayout({ children, params }: { children: React.ReactNode; params: Promise<{ org: string }> }) {
+export default async function PortalLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: Promise<{ org: string }>;
+}) {
   const { org: slug } = await params;
   const p = await getPortal(slug);
   // accent is validated as #rrggbb in resolveBrand, so this CSS can't carry anything else.
@@ -25,7 +35,11 @@ export default async function PortalLayout({ children, params }: { children: Rea
       <TooltipProvider>
         <PortalShell
           slug={p.org.slug}
-          brand={{ name: p.brand.name, logoUrl: p.brand.logoUrl, whiteLabel: p.brand.whiteLabel }}
+          brand={{
+            name: p.brand.name,
+            logoUrl: p.brand.logoUrl,
+            whiteLabel: p.brand.whiteLabel,
+          }}
           orgName={p.org.name}
           isCustomer={p.org.kind === "customer"}
           canResell={p.canResell}

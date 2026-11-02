@@ -2,12 +2,33 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Cable, LogOut, MessagesSquare, Settings, Store, Sun, Users } from "lucide-react";
-import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
+import {
+  Cable,
+  LogOut,
+  MessagesSquare,
+  Settings,
+  Store,
+  Sun,
+  Users,
+} from "lucide-react";
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu";
 import { Avatar } from "@/components/ui/agent-orb";
 import { cn } from "@/lib/utils";
 
-type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }>; match: (p: string) => boolean; badge?: number };
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  match: (p: string) => boolean;
+  badge?: number;
+};
 
 export type ShellProps = {
   slug: string;
@@ -21,10 +42,27 @@ export type ShellProps = {
   children: React.ReactNode;
 };
 
-export function BrandMark({ name, logoUrl, size = 26 }: { name: string; logoUrl: string | null; size?: number }) {
+export function BrandMark({
+  name,
+  logoUrl,
+  size = 26,
+}: {
+  name: string;
+  logoUrl: string | null;
+  size?: number;
+}) {
   if (logoUrl) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={logoUrl} alt="" width={size} height={size} className="shrink-0 rounded-md object-contain" style={{ width: size, height: size }} />;
+    return (
+      <img
+        src={logoUrl}
+        alt=""
+        width={size}
+        height={size}
+        className="shrink-0 rounded-md object-contain"
+        style={{ width: size, height: size }}
+      />
+    );
   }
   return (
     <span
@@ -37,21 +75,69 @@ export function BrandMark({ name, logoUrl, size = 26 }: { name: string; logoUrl:
   );
 }
 
-export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needsYouCount, user, viewingAs, children }: ShellProps) {
+export function PortalShell({
+  slug,
+  brand,
+  orgName,
+  isCustomer,
+  canResell,
+  needsYouCount,
+  user,
+  viewingAs,
+  children,
+}: ShellProps) {
   const pathname = usePathname() ?? "";
   const base = `/p/${slug}`;
-  const rel = pathname.startsWith(base) ? pathname.slice(base.length) || "/" : pathname;
+  const rel = pathname.startsWith(base)
+    ? pathname.slice(base.length) || "/"
+    : pathname;
 
   const items: NavItem[] = [
-    { href: base, label: "Today", icon: Sun, match: (p) => p === "/" || p.startsWith("/d/"), badge: needsYouCount },
-    { href: `${base}/team`, label: "Team", icon: Users, match: (p) => p.startsWith("/team") },
-    { href: `${base}/requests`, label: "Requests", icon: MessagesSquare, match: (p) => p.startsWith("/requests") },
-    { href: `${base}/connect`, label: "Connect", icon: Cable, match: (p) => p.startsWith("/connect") },
-    ...(canResell ? [{ href: `${base}/resell`, label: "Resell", icon: Store, match: (p: string) => p.startsWith("/resell") }] : []),
-    { href: `${base}/settings`, label: "Settings", icon: Settings, match: (p) => p.startsWith("/settings") },
+    {
+      href: base,
+      label: "Today",
+      icon: Sun,
+      match: (p) => p === "/" || p.startsWith("/d/"),
+      badge: needsYouCount,
+    },
+    {
+      href: `${base}/team`,
+      label: "Team",
+      icon: Users,
+      match: (p) => p.startsWith("/team"),
+    },
+    {
+      href: `${base}/requests`,
+      label: "Requests",
+      icon: MessagesSquare,
+      match: (p) => p.startsWith("/requests"),
+    },
+    {
+      href: `${base}/connect`,
+      label: "Connect",
+      icon: Cable,
+      match: (p) => p.startsWith("/connect"),
+    },
+    ...(canResell
+      ? [
+          {
+            href: `${base}/resell`,
+            label: "Resell",
+            icon: Store,
+            match: (p: string) => p.startsWith("/resell"),
+          },
+        ]
+      : []),
+    {
+      href: `${base}/settings`,
+      label: "Settings",
+      icon: Settings,
+      match: (p) => p.startsWith("/settings"),
+    },
   ];
   // Phone tab bar: five slots. Clients reach Settings from the avatar menu.
-  const tabs = items.length > 5 ? items.filter((i) => i.label !== "Settings") : items;
+  const tabs =
+    items.length > 5 ? items.filter((i) => i.label !== "Settings") : items;
 
   return (
     <>
@@ -62,8 +148,13 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
               Viewing {orgName}&rsquo;s portal as {viewingAs.name}
             </span>
             {viewingAs.href ? (
-              <Link href={viewingAs.href} className="shrink-0 font-medium text-ink-2 hover:text-ink">
-                {viewingAs.href.startsWith("/a/") ? "Back to Studio" : `Back to ${viewingAs.name}`}
+              <Link
+                href={viewingAs.href}
+                className="shrink-0 font-medium text-ink-2 hover:text-ink"
+              >
+                {viewingAs.href.startsWith("/a/")
+                  ? "Back to Studio"
+                  : `Back to ${viewingAs.name}`}
               </Link>
             ) : null}
           </div>
@@ -72,13 +163,26 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
 
       <header className="sticky top-0 z-30 border-b border-line bg-canvas/85 backdrop-blur-md supports-[backdrop-filter]:bg-canvas/70">
         <div className="mx-auto flex h-14 max-w-[1040px] items-center gap-6 px-4 md:px-6">
-          <Link href={base} className="flex min-w-0 items-center gap-2.5 rounded-md" aria-label={`${brand.name} home`}>
+          <Link
+            href={base}
+            className="flex min-w-0 items-center gap-2.5 rounded-md"
+            aria-label={`${brand.name} home`}
+          >
             <BrandMark name={brand.name} logoUrl={brand.logoUrl} />
-            <span className="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-ink">{brand.name}</span>
-            {isCustomer ? <span className="hidden truncate text-[13px] text-ink-3 sm:inline">for {orgName}</span> : null}
+            <span className="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-ink">
+              {brand.name}
+            </span>
+            {isCustomer ? (
+              <span className="hidden truncate text-[13px] text-ink-3 sm:inline">
+                for {orgName}
+              </span>
+            ) : null}
           </Link>
 
-          <nav aria-label="Portal" className="hidden items-center gap-0.5 md:flex">
+          <nav
+            aria-label="Portal"
+            className="hidden items-center gap-0.5 md:flex"
+          >
             {items.map((it) => {
               const active = it.match(rel);
               return (
@@ -88,7 +192,9 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "relative inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[13.5px] transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-                    active ? "bg-surface-2 font-medium text-ink" : "text-ink-3 hover:bg-surface-2/60 hover:text-ink",
+                    active
+                      ? "bg-surface-2 font-medium text-ink"
+                      : "text-ink-3 hover:bg-surface-2/60 hover:text-ink",
                   )}
                 >
                   {it.label}
@@ -112,8 +218,14 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
               </MenuTrigger>
               <MenuContent align="end" className="w-60">
                 <MenuLabel className="pb-2">
-                  <span className="block truncate text-[13px] font-medium text-ink">{user.name ?? user.email}</span>
-                  {user.name ? <span className="block truncate font-normal text-ink-3">{user.email}</span> : null}
+                  <span className="block truncate text-[13px] font-medium text-ink">
+                    {user.name ?? user.email}
+                  </span>
+                  {user.name ? (
+                    <span className="block truncate font-normal text-ink-3">
+                      {user.email}
+                    </span>
+                  ) : null}
                 </MenuLabel>
                 <MenuSeparator />
                 <MenuItem asChild>
@@ -163,7 +275,12 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
                   )}
                 >
                   <span className="relative">
-                    <Icon className={cn("size-[21px]", active ? "text-accent-text" : "")} />
+                    <Icon
+                      className={cn(
+                        "size-[21px]",
+                        active ? "text-accent-text" : "",
+                      )}
+                    />
                     {it.badge ? (
                       <span className="absolute -top-1 -right-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-ink px-1 text-[10px] font-semibold text-canvas tabular">
                         {it.badge}

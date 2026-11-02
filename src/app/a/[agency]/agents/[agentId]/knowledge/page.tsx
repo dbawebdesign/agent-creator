@@ -33,7 +33,7 @@ export default async function KnowledgePage({ params }: { params: Promise<{ agen
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13.5px] font-medium text-ink">{s.title}</p>
-                    <p className="truncate text-[12px] text-ink-4">
+                    <p className="truncate text-[12px] text-ink-3">
                       {s.uri ? `${s.uri} · ` : ""}
                       {s.chunkCount ? `${s.chunkCount} chunks · ` : ""}
                       {s.agentId ? "" : "Shared with all agents · "}

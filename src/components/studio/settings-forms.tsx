@@ -250,7 +250,7 @@ export function ApiKeyCreate({ agency, scopes }: { agency: string; scopes: { id:
                   <label key={s.id} className="flex items-center gap-2.5 text-[13px] text-ink-2">
                     <input type="checkbox" checked={sel.includes(s.id)} onChange={(e) => setSel((x) => (e.target.checked ? [...x, s.id] : x.filter((y) => y !== s.id)))} className="size-3.5 accent-[var(--accent)]" />
                     {s.label}
-                    <code className="ml-auto font-mono text-[11px] text-ink-4">{s.id}</code>
+                    <code className="ml-auto font-mono text-[11px] text-ink-3">{s.id}</code>
                   </label>
                 ))}
               </div>

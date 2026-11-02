@@ -73,7 +73,7 @@ export function Stat({ label, value, sub, className }: { label: string; value: R
     <div className={cn("min-w-0", className)}>
       <div className="text-[12.5px] text-ink-3">{label}</div>
       <div className="tabular mt-1 text-[22px] font-semibold tracking-[-0.02em] text-ink">{value}</div>
-      {sub ? <div className="mt-0.5 text-[12px] text-ink-4">{sub}</div> : null}
+      {sub ? <div className="mt-0.5 text-[12px] text-ink-3">{sub}</div> : null}
     </div>
   );
 }
@@ -83,7 +83,7 @@ export function SectionHeading({ title, count, action, className }: { title: str
     <div className={cn("mb-3 flex items-center justify-between gap-3", className)}>
       <h2 className="flex items-center gap-2 text-[13.5px] font-semibold text-ink">
         {title}
-        {typeof count === "number" ? <span className="tabular text-[12.5px] font-normal text-ink-4">{count}</span> : null}
+        {typeof count === "number" ? <span className="tabular text-[12.5px] font-normal text-ink-3">{count}</span> : null}
       </h2>
       {action}
     </div>
@@ -109,5 +109,6 @@ export function money(cents: number) {
 
 export function microsToDollars(micros: number) {
   const d = micros / 1_000_000;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "usd", minimumFractionDigits: 2, maximumFractionDigits: d < 1 ? 3 : 2 }).format(d);
+  if (d > 0 && d < 0.01) return "<$0.01";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "usd", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(d);
 }

@@ -117,7 +117,7 @@ export function ProposalReview({
             <h2 id="wf-h" className="text-[14px] font-semibold text-ink">
               What {firstName} will do <span className="ml-1 font-normal text-ink-4 tabular">{onCount} of {draft.workflows.length}</span>
             </h2>
-            <span className="text-[12.5px] text-ink-4 max-sm:hidden">Switch off anything you don’t want yet</span>
+            <span className="text-[12.5px] text-ink-3 max-sm:hidden">Switch off anything you don’t want yet</span>
           </div>
           <div className="space-y-3">
             {draft.workflows.map((w) => (
@@ -225,7 +225,7 @@ export function ProposalReview({
                     </span>
                   ))
                 ) : (
-                  <span className="text-[12.5px] text-ink-4">Nothing — fully autonomous</span>
+                  <span className="text-[12.5px] text-ink-3">Nothing — fully autonomous</span>
                 )}
               </div>
             </div>
@@ -279,7 +279,7 @@ export function ProposalReview({
             {hiring ? <Loader2 className="animate-spin" /> : null}
             Hire {draft.name || "agent"}
           </Button>
-          <p className="mt-3 text-center text-[12px] leading-relaxed text-ink-4">
+          <p className="mt-3 text-center text-[12px] leading-relaxed text-ink-3">
             Sets up memory, knowledge, an inbox, a computer and channels. Live in under a minute.
           </p>
         </div>
@@ -346,7 +346,7 @@ function WorkflowCard({ w, onChange, canDisable }: { w: DraftWorkflow; onChange:
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Delivery channels">
-            <span className="mr-1 text-[12px] text-ink-4">Delivers to</span>
+            <span className="mr-1 text-[12px] text-ink-3">Delivers to</span>
             {CHANNELS.map((c) => {
               const on = w.deliverTo.includes(c);
               return (
@@ -443,7 +443,7 @@ function SchedulePicker({ w, onChange, icon }: { w: DraftWorkflow; onChange: (p:
               ))}
             </Select>
           ) : null}
-          <p className="mt-2.5 font-mono text-[11px] text-ink-4">{cron} · client’s time zone</p>
+          <p className="mt-2.5 font-mono text-[11px] text-ink-3">{cron} · client’s time zone</p>
         </P.Content>
       </P.Portal>
     </P.Root>
