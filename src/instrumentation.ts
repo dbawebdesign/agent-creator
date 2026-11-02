@@ -10,14 +10,8 @@ import type { Instrumentation } from "next";
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  const [{ env }, { logger }] = await Promise.all([import("@/server/env"), import("@/server/lib/logger")]);
-  try {
-    env();
-    logger.info({ nodeEnv: process.env.NODE_ENV }, "web starting: configuration ok");
-  } catch (err) {
-    logger.fatal({ err: (err as Error).message }, "web refused to start: invalid configuration");
-    if (process.env.NODE_ENV === "production") process.exit(1);
-  }
+  const { validateConfigOrExit } = await import("./instrumentation-node");
+  validateConfigOrExit();
 }
 
 function header(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {

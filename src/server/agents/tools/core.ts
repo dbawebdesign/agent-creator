@@ -138,9 +138,7 @@ export const createDeliverable = defineTool({
       return ok({ delivered: true, deliverableId: dupe[0].id, title, duplicate: true });
     }
     const kind = input.kind ?? (ctx.workflow?.outputKind && (DELIVERABLE_KINDS as readonly string[]).includes(ctx.workflow.outputKind) ? (ctx.workflow.outputKind as (typeof DELIVERABLE_KINDS)[number]) : "report");
-    // A format still waiting for the client's data (data.substantive === false) saves nobody any time yet.
-    const substantive = (input.data as { substantive?: unknown } | null | undefined)?.substantive !== false;
-    const hoursSaved = substantive ? hoursCreditFor(run, ctx.workflow, ctx.state.deliverableIds.length) : 0;
+    const hoursSaved = hoursCreditFor(run, ctx.workflow, ctx.state.deliverableIds.length);
     // A change request produces a new version linked to the original (never an email).
     let data = input.data ?? null;
     if (run.input?.kind === "revision" && typeof run.input.deliverableId === "string") {
