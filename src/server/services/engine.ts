@@ -8,7 +8,7 @@
  */
 import "server-only";
 import { randomBytes, randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { architect, finalizeSpec } from "@/server/agents/architect";
 import { executeRun } from "@/server/agents/runtime";
@@ -115,6 +115,31 @@ export async function createDiscovery(input: {
   return { discoveryId };
 }
 
+/**
+ * Names a new agent must not take: every agent in the agency's tree (so the agency never has two Quinns), and the
+ * people at the client and the agency (members, contacts). Internal only: passed to the Architect, never returned.
+ */
+async function namesInUse(database: DB, org: { id: string; agencyId: string | null; parentId: string | null }): Promise<string[]> {
+  const agencyId = org.agencyId ?? org.id;
+  const memberOrgs = [...new Set([org.id, agencyId, ...(org.parentId ? [org.parentId] : [])])];
+  const [agents, members, contacts] = await Promise.all([
+    database
+      .select({ name: schema.agents.name })
+      .from(schema.agents)
+      .innerJoin(schema.organizations, eq(schema.organizations.id, schema.agents.orgId))
+      .where(or(eq(schema.organizations.agencyId, agencyId), eq(schema.organizations.id, agencyId)))
+      .limit(2000),
+    database
+      .select({ name: schema.users.name })
+      .from(schema.memberships)
+      .innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId))
+      .where(inArray(schema.memberships.orgId, memberOrgs))
+      .limit(2000),
+    database.select({ name: schema.contacts.name }).from(schema.contacts).where(eq(schema.contacts.orgId, org.id)).limit(2000),
+  ]);
+  return [...agents, ...members, ...contacts].map((r) => r.name).filter((n): n is string => !!n);
+}
+
 /** Run the Architect synchronously (used by the worker job and by tests). Stores the proposal. */
 export async function analyzeDiscovery(discoveryId: string): Promise<AgentSpec> {
   parse(uuid, discoveryId);
@@ -124,7 +149,8 @@ export async function analyzeDiscovery(discoveryId: string): Promise<AgentSpec> 
   const org = await getOrg(database, d.orgId);
   await database.update(schema.discoveries).set({ status: "analyzing", error: null }).where(and(eq(schema.discoveries.id, d.id), eq(schema.discoveries.orgId, d.orgId)));
   try {
-    const { spec, model, usage } = await architect({ transcript: d.transcript, orgName: org.name, industry: org.industry });
+    const avoidNames = await namesInUse(database, org);
+    const { spec, model, usage } = await architect({ transcript: d.transcript, orgName: org.name, industry: org.industry, avoidNames });
     await database
       .update(schema.discoveries)
       .set({ status: d.status === "hired" ? "hired" : "ready", proposal: spec as unknown as Record<string, unknown>, error: null })

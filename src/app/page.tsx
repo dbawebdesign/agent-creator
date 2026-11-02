@@ -75,13 +75,15 @@ export default async function Root() {
                     { name: "Quote deck from request", when: "When an email arrives", icon: Inbox, out: "Email draft → Email" },
                     { name: "Friday order status", when: "Fridays at 3:00 PM", icon: CalendarClock, out: "Report → Slack" },
                   ].map((w) => (
-                    <li key={w.name} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line px-4 py-3">
-                      <span className="min-w-0 flex-1 text-[13.5px] font-medium text-ink">{w.name}</span>
-                      <span className="inline-flex h-6 items-center gap-1.5 rounded-full border border-accent/25 bg-accent-soft px-2.5 text-[12px] font-medium text-accent">
+                    <li key={w.name} className="flex items-center gap-3 rounded-lg border border-line px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13.5px] font-medium text-ink">{w.name}</p>
+                        <p className="truncate text-[12px] text-ink-3">{w.out}</p>
+                      </div>
+                      <span className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-accent/25 bg-accent-soft px-2.5 text-[12px] font-medium text-accent">
                         <w.icon className="size-3" aria-hidden />
                         {w.when}
                       </span>
-                      <span className="text-[12px] text-ink-4 max-sm:w-full">{w.out}</span>
                     </li>
                   ))}
                 </ul>

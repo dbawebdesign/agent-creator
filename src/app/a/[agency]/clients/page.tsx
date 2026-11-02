@@ -4,7 +4,8 @@ import { and, asc, eq } from "drizzle-orm";
 import { Building2 } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
 import { db, schema } from "@/server/db/client";
-import { listClients } from "@/server/queries/studio";
+import { clientTotals, listClients } from "@/server/queries/studio";
+import { ListSearch, Pager, parsePage } from "@/components/studio/list-controls";
 import { EmptyState } from "@/components/ui/empty";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { NewClientButton } from "@/components/studio/client-dialogs";
@@ -12,15 +13,18 @@ import { ClientStatus, money, OrgMark } from "@/components/studio/bits";
 
 export const metadata = { title: "Clients" };
 
-export default async function ClientsPage({ params }: { params: Promise<{ agency: string }> }) {
-  const { agency: slug } = await params;
+export default async function ClientsPage({ params, searchParams }: { params: Promise<{ agency: string }>; searchParams: Promise<{ q?: string; page?: string }> }) {
+  const [{ agency: slug }, sp] = await Promise.all([params, searchParams]);
   const { org } = await requireOrg(slug, "viewer");
-  const [clients, plans] = await Promise.all([
-    listClients(org.id),
+  const q = typeof sp.q === "string" ? sp.q.slice(0, 80) : undefined;
+  const page = parsePage(sp.page);
+  const [list, totals, plans] = await Promise.all([
+    listClients(org.id, { page, q }),
+    clientTotals(org.id),
     db().select().from(schema.plans).where(and(eq(schema.plans.orgId, org.id), eq(schema.plans.active, true))).orderBy(asc(schema.plans.priceCents)),
   ]);
   const planOpts = plans.map((p) => ({ id: p.id, name: p.name, price: money(p.priceCents) }));
-  const mrr = clients.reduce((s, c) => s + c.mrrCents, 0);
+  const clients = list.items;
 
   return (
     <div className="mx-auto w-full max-w-[1080px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
@@ -28,12 +32,15 @@ export default async function ClientsPage({ params }: { params: Promise<{ agency
         <div>
           <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">Clients</h1>
           <p className="mt-1 text-[14px] text-ink-3">
-            {clients.length} client{clients.length === 1 ? "" : "s"} · {money(mrr)} / month
+            {totals.count.toLocaleString()} client{totals.count === 1 ? "" : "s"} · {money(totals.mrrCents)} / month
           </p>
         </div>
-        <Suspense>
-          <NewClientButton agency={slug} plans={planOpts} defaultTimezone={org.timezone} />
-        </Suspense>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          {totals.count > 10 || q ? <ListSearch action={`/a/${slug}/clients`} q={q} placeholder="Search clients" /> : null}
+          <Suspense>
+            <NewClientButton agency={slug} plans={planOpts} defaultTimezone={org.timezone} />
+          </Suspense>
+        </div>
       </header>
 
       {clients.length ? (
@@ -83,11 +90,14 @@ export default async function ClientsPage({ params }: { params: Promise<{ agency
             ))}
           </ul>
         </div>
+      ) : q ? (
+        <p className="rounded-xl border border-dashed border-line px-5 py-8 text-center text-[13.5px] text-ink-3">No clients match “{q}”.</p>
       ) : (
         <div className="rounded-xl border border-dashed border-line">
           <EmptyState icon={<Building2 />} title="No clients yet" body="Add the businesses you staff. Each gets a white-labeled portal for their AI employees’ work." />
         </div>
       )}
+      <Pager base={`/a/${slug}/clients`} page={list.page} more={list.more} q={q} shown={clients.length} />
     </div>
   );
 }

@@ -10,16 +10,26 @@ import { ConnectStripeButton, RefreshConnectButton } from "./billing-buttons";
  * Seller payouts: Stripe Connect status + "Connect Stripe". Server component.
  * Mount on Studio → Billing (sellerOrgId = agency id) and Portal → Resell (sellerOrgId = client id).
  */
-export async function ConnectStripeCard({ sellerOrgId, returnPath, className }: { sellerOrgId: string; returnPath: string; className?: string }) {
+export async function ConnectStripeCard({
+  sellerOrgId,
+  returnPath,
+  className,
+}: {
+  sellerOrgId: string;
+  returnPath: string;
+  className?: string;
+}) {
   const access = await requireOrgById(sellerOrgId, "viewer");
   const status = await getBillingStatus(sellerOrgId);
   const s = status.seller;
-  const canConnect = hasRole(access, "admin") && (!access.inherited || access.user.isPlatformAdmin);
+  const canConnect =
+    hasRole(access, "admin") &&
+    (!access.inherited || access.user.isPlatformAdmin);
   const ready = !!s?.chargesEnabled;
   const started = !!s?.connected;
   const description =
     status.mode === "disabled"
-      ? "Stripe isn't connected to Roster yet, so nobody is charged. Plans and subscriptions still work as records."
+      ? "Payments aren't set up yet, so nobody is charged. Plans and subscriptions still work as records."
       : ready
         ? `Payments go straight to your Stripe account${s?.accountHint ? ` (${s.accountHint})` : ""}. Flat monthly rate, billed by Stripe.`
         : started
@@ -34,7 +44,11 @@ export async function ConnectStripeCard({ sellerOrgId, returnPath, className }: 
         action={
           <div className="flex shrink-0 items-center gap-2">
             <BillingModeBadge mode={status.mode} />
-            {started && status.mode !== "disabled" && hasRole(access, "admin") ? <RefreshConnectButton sellerOrgId={sellerOrgId} /> : null}
+            {started &&
+            status.mode !== "disabled" &&
+            hasRole(access, "admin") ? (
+              <RefreshConnectButton sellerOrgId={sellerOrgId} />
+            ) : null}
           </div>
         }
       />
@@ -47,11 +61,23 @@ export async function ConnectStripeCard({ sellerOrgId, returnPath, className }: 
             <Step done={!!s?.payoutsEnabled} label="Payouts enabled" />
           </ul>
           {canConnect ? (
-            <ConnectStripeButton sellerOrgId={sellerOrgId} returnPath={returnPath} variant={ready ? "ghost" : "primary"} size={ready ? "sm" : "md"} className={ready ? "text-ink-3" : undefined}>
-              {ready ? "Update details" : started ? "Finish Stripe setup" : "Connect Stripe"}
+            <ConnectStripeButton
+              sellerOrgId={sellerOrgId}
+              returnPath={returnPath}
+              variant={ready ? "ghost" : "primary"}
+              size={ready ? "sm" : "md"}
+              className={ready ? "text-ink-3" : undefined}
+            >
+              {ready
+                ? "Update details"
+                : started
+                  ? "Finish Stripe setup"
+                  : "Connect Stripe"}
             </ConnectStripeButton>
           ) : !ready ? (
-            <span className="text-[12.5px] text-ink-4">An admin of {status.org.name} can connect Stripe</span>
+            <span className="text-[12.5px] text-ink-4">
+              An admin of {status.org.name} can connect Stripe
+            </span>
           ) : null}
         </div>
       )}
@@ -61,8 +87,17 @@ export async function ConnectStripeCard({ sellerOrgId, returnPath, className }: 
 
 function Step({ done, label }: { done: boolean; label: string }) {
   return (
-    <li className={cn("inline-flex items-center gap-1.5", done ? "text-ink-2" : "text-ink-4")}>
-      {done ? <Check className="size-3.5 text-good" aria-hidden /> : <span className="size-1.5 rounded-full bg-ink-4/60" aria-hidden />}
+    <li
+      className={cn(
+        "inline-flex items-center gap-1.5",
+        done ? "text-ink-2" : "text-ink-4",
+      )}
+    >
+      {done ? (
+        <Check className="size-3.5 text-good" aria-hidden />
+      ) : (
+        <span className="size-1.5 rounded-full bg-ink-4/60" aria-hidden />
+      )}
       {label}
       <span className="sr-only">{done ? "(done)" : "(not yet)"}</span>
     </li>

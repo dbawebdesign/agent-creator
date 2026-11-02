@@ -4,16 +4,37 @@ import { useTransition } from "react";
 import { toast } from "sonner";
 import { ArrowUpRight, CreditCard, Link2, RefreshCw } from "lucide-react";
 import { Button, type ButtonProps } from "@/components/ui/button";
-import { openBillingPortal, refreshStripeAccount, startCheckout, startStripeConnect, syncPlan } from "@/server/billing/actions";
+import {
+  openBillingPortal,
+  refreshStripeAccount,
+  startCheckout,
+  startStripeConnect,
+  syncPlan,
+} from "@/server/billing/actions";
 
-type Common = { className?: string; variant?: ButtonProps["variant"]; size?: ButtonProps["size"]; children?: React.ReactNode };
+type Common = {
+  className?: string;
+  variant?: ButtonProps["variant"];
+  size?: ButtonProps["size"];
+  children?: React.ReactNode;
+};
 
 function currentPath() {
-  return typeof window === "undefined" ? "/" : window.location.pathname + window.location.search;
+  return typeof window === "undefined"
+    ? "/"
+    : window.location.pathname + window.location.search;
 }
 
 /** Buyer-side: opens Stripe Checkout for `planId` on the seller's account. */
-export function SubscribeButton({ buyerOrgId, planId, returnPath, className, variant = "primary", size = "md", children }: Common & { buyerOrgId: string; planId: string; returnPath?: string }) {
+export function SubscribeButton({
+  buyerOrgId,
+  planId,
+  returnPath,
+  className,
+  variant = "primary",
+  size = "md",
+  children,
+}: Common & { buyerOrgId: string; planId: string; returnPath?: string }) {
   const [pending, start] = useTransition();
   return (
     <Button
@@ -25,7 +46,9 @@ export function SubscribeButton({ buyerOrgId, planId, returnPath, className, var
       aria-busy={pending}
       onClick={() =>
         start(async () => {
-          const r = await startCheckout(buyerOrgId, planId, { returnPath: returnPath ?? currentPath() });
+          const r = await startCheckout(buyerOrgId, planId, {
+            returnPath: returnPath ?? currentPath(),
+          });
           if (!r.ok) return void toast.error(r.error);
           window.location.assign(r.url);
         })
@@ -38,7 +61,15 @@ export function SubscribeButton({ buyerOrgId, planId, returnPath, className, var
 }
 
 /** Seller-side (agency → client, client → customer): creates a checkout link and copies it to send. */
-export function CheckoutLinkButton({ buyerOrgId, planId, returnPath, className, variant = "secondary", size = "md", children }: Common & { buyerOrgId: string; planId: string; returnPath?: string }) {
+export function CheckoutLinkButton({
+  buyerOrgId,
+  planId,
+  returnPath,
+  className,
+  variant = "secondary",
+  size = "md",
+  children,
+}: Common & { buyerOrgId: string; planId: string; returnPath?: string }) {
   const [pending, start] = useTransition();
   return (
     <Button
@@ -50,11 +81,16 @@ export function CheckoutLinkButton({ buyerOrgId, planId, returnPath, className, 
       aria-busy={pending}
       onClick={() =>
         start(async () => {
-          const r = await startCheckout(buyerOrgId, planId, { returnPath: returnPath ?? currentPath() });
+          const r = await startCheckout(buyerOrgId, planId, {
+            returnPath: returnPath ?? currentPath(),
+          });
           if (!r.ok) return void toast.error(r.error);
           try {
             await navigator.clipboard.writeText(r.url);
-            toast.success("Checkout link copied", { description: "Send it to your client. It stays valid for 24 hours." });
+            toast.success("Checkout link copied", {
+              description:
+                "Send it to your client. It stays valid for 24 hours.",
+            });
           } catch {
             toast("Checkout link", { description: r.url, duration: 30_000 });
           }
@@ -68,7 +104,14 @@ export function CheckoutLinkButton({ buyerOrgId, planId, returnPath, className, 
 }
 
 /** Buyer-side: Stripe customer portal (card, invoices, cancel). */
-export function ManageBillingButton({ buyerOrgId, returnPath, className, variant = "secondary", size = "md", children }: Common & { buyerOrgId: string; returnPath?: string }) {
+export function ManageBillingButton({
+  buyerOrgId,
+  returnPath,
+  className,
+  variant = "secondary",
+  size = "md",
+  children,
+}: Common & { buyerOrgId: string; returnPath?: string }) {
   const [pending, start] = useTransition();
   return (
     <Button
@@ -80,7 +123,10 @@ export function ManageBillingButton({ buyerOrgId, returnPath, className, variant
       aria-busy={pending}
       onClick={() =>
         start(async () => {
-          const r = await openBillingPortal(buyerOrgId, returnPath ?? currentPath());
+          const r = await openBillingPortal(
+            buyerOrgId,
+            returnPath ?? currentPath(),
+          );
           if (!r.ok) return void toast.error(r.error);
           window.location.assign(r.url);
         })
@@ -92,7 +138,13 @@ export function ManageBillingButton({ buyerOrgId, returnPath, className, variant
 }
 
 /** Seller-side: push a plan's price to Stripe (also happens automatically at first checkout). */
-export function SyncPlanButton({ planId, className, variant = "ghost", size = "sm", children }: Common & { planId: string }) {
+export function SyncPlanButton({
+  planId,
+  className,
+  variant = "ghost",
+  size = "sm",
+  children,
+}: Common & { planId: string }) {
   const [pending, start] = useTransition();
   return (
     <Button
@@ -117,7 +169,13 @@ export function SyncPlanButton({ planId, className, variant = "ghost", size = "s
 }
 
 /** Seller-side: re-read Connect status from Stripe. */
-export function RefreshConnectButton({ sellerOrgId, className }: { sellerOrgId: string; className?: string }) {
+export function RefreshConnectButton({
+  sellerOrgId,
+  className,
+}: {
+  sellerOrgId: string;
+  className?: string;
+}) {
   const [pending, start] = useTransition();
   return (
     <Button
@@ -131,7 +189,11 @@ export function RefreshConnectButton({ sellerOrgId, className }: { sellerOrgId: 
         start(async () => {
           const r = await refreshStripeAccount(sellerOrgId, currentPath());
           if (!r.ok) return void toast.error(r.error);
-          toast.success(r.chargesEnabled ? "Stripe is ready for payments" : "Stripe still needs a few details");
+          toast.success(
+            r.chargesEnabled
+              ? "Stripe is ready for payments"
+              : "Stripe still needs a few details",
+          );
         })
       }
     >
@@ -142,7 +204,14 @@ export function RefreshConnectButton({ sellerOrgId, className }: { sellerOrgId: 
 }
 
 /** Seller-side: start or resume Stripe Connect onboarding (navigates to Stripe). */
-export function ConnectStripeButton({ sellerOrgId, returnPath, className, variant = "primary", size = "md", children }: Common & { sellerOrgId: string; returnPath?: string }) {
+export function ConnectStripeButton({
+  sellerOrgId,
+  returnPath,
+  className,
+  variant = "primary",
+  size = "md",
+  children,
+}: Common & { sellerOrgId: string; returnPath?: string }) {
   const [pending, start] = useTransition();
   return (
     <Button
@@ -154,7 +223,10 @@ export function ConnectStripeButton({ sellerOrgId, returnPath, className, varian
       aria-busy={pending}
       onClick={() =>
         start(async () => {
-          const r = await startStripeConnect(sellerOrgId, returnPath ?? currentPath());
+          const r = await startStripeConnect(
+            sellerOrgId,
+            returnPath ?? currentPath(),
+          );
           if (!r.ok) return void toast.error(r.error);
           window.location.assign(r.url);
         })

@@ -68,7 +68,7 @@ export default async function InvitePage({
           </p>
           <Link
             href="/login"
-            className="mt-6 inline-block text-[13.5px] font-medium text-accent-text hover:underline"
+            className="mt-6 inline-block text-[13.5px] font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
           >
             Sign in
           </Link>

@@ -72,6 +72,8 @@ export const organizations = pgTable(
     uniqueIndex("organizations_custom_domain_uq").on(t.customDomain),
     index("organizations_parent_idx").on(t.parentId),
     index("organizations_agency_idx").on(t.agencyId),
+    // The proxy's custom-domain lookup is case-insensitive.
+    index("organizations_custom_domain_lower_idx").on(sql`lower(${t.customDomain})`).where(sql`${t.customDomain} is not null`),
   ],
 );
 
@@ -143,7 +145,7 @@ export const sessions = pgTable(
     createdAt: createdAt(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("sessions_token_uq").on(t.tokenHash), index("sessions_user_idx").on(t.userId)],
+  (t) => [uniqueIndex("sessions_token_uq").on(t.tokenHash), index("sessions_user_idx").on(t.userId), index("sessions_expires_idx").on(t.expiresAt)],
 );
 
 /** Single-use tokens: magic links, email verification, password reset. */
@@ -158,7 +160,7 @@ export const authTokens = pgTable(
     usedAt: timestamp("used_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("auth_tokens_token_uq").on(t.tokenHash)],
+  (t) => [uniqueIndex("auth_tokens_token_uq").on(t.tokenHash), index("auth_tokens_expires_idx").on(t.expiresAt)],
 );
 
 export const apiKeys = pgTable(

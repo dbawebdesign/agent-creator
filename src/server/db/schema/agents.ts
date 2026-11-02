@@ -131,11 +131,16 @@ export const agents = pgTable(
       .default("none"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
+    /** Denormalized by the `deliverables_after_insert` trigger (migration 0004): newest deliverable's created_at. */
+    lastDeliveredAt: timestamp("last_delivered_at", { withTimezone: true }),
+    /** Denormalized by the same trigger: lifetime deliverable count. Never write these from app code. */
+    deliveredCount: integer("delivered_count").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     index("agents_org_idx").on(t.orgId),
+    index("agents_blueprint_idx").on(t.blueprintId).where(sql`${t.blueprintId} is not null`),
     uniqueIndex("agents_email_handle_uq").on(t.emailHandle),
     uniqueIndex("agents_phone_uq").on(t.phoneNumber),
   ],
@@ -197,6 +202,7 @@ export const workflows = pgTable(
   },
   (t) => [
     index("workflows_agent_idx").on(t.agentId),
+    index("workflows_org_idx").on(t.orgId),
     index("workflows_due_idx").on(t.nextRunAt).where(sql`${t.enabled} = true`),
   ],
 );
@@ -233,6 +239,7 @@ export const runs = pgTable(
     index("runs_agent_created_idx").on(t.agentId, t.createdAt),
     index("runs_org_created_idx").on(t.orgId, t.createdAt),
     index("runs_conversation_idx").on(t.conversationId),
+    index("runs_workflow_idx").on(t.workflowId).where(sql`${t.workflowId} is not null`),
   ],
 );
 
@@ -286,12 +293,20 @@ export const deliverables = pgTable(
     hoursSaved: real("hours_saved").notNull().default(0),
     feedback: text("feedback"),
     seenAt: timestamp("seen_at", { withTimezone: true }),
+    /** The org's agency (organizations.agency_id), set by the `deliverables_before_insert` trigger. Agency-wide reads use it. */
+    agencyId: uuid("agency_id"),
     createdAt: createdAt(),
   },
   (t) => [
     index("deliverables_org_created_idx").on(t.orgId, t.createdAt),
     index("deliverables_agent_created_idx").on(t.agentId, t.createdAt),
     index("deliverables_run_idx").on(t.runId),
+    // Keyset pages: order by created_at desc, id desc; cursor `(created_at, id) < ($t, $id)`.
+    index("deliverables_org_created_id_idx").on(t.orgId, t.createdAt.desc(), t.id.desc()),
+    index("deliverables_agency_created_idx").on(t.agencyId, t.createdAt.desc()),
+    index("deliverables_agency_changes_idx").on(t.agencyId, t.createdAt.desc()).where(sql`${t.status} = 'changes_requested'`),
+    index("deliverables_review_idx").on(t.orgId).where(sql`${t.needsReview} and ${t.status} in ('new','seen')`),
+    index("deliverables_workflow_idx").on(t.workflowId).where(sql`${t.workflowId} is not null`),
   ],
 );
 
@@ -320,6 +335,8 @@ export const approvals = pgTable(
     index("approvals_org_status_idx").on(t.orgId, t.status),
     // Expiry sweep (scheduler.expireApprovals) scans only pending rows by age.
     index("approvals_pending_created_idx").on(t.createdAt).where(sql`${t.status} = 'pending'`),
+    index("approvals_run_idx").on(t.runId),
+    index("approvals_agent_idx").on(t.agentId),
   ],
 );
 

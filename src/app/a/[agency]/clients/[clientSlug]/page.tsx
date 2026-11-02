@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { CheckoutLinksCard } from "@/components/billing/checkout-links-card";
+import { billingMode } from "@/server/billing/stripe";
 import { BillingFlags } from "@/components/studio/billing-flags";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -40,16 +41,16 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
       </nav>
       <header className="flex flex-wrap items-start gap-4">
         <OrgMark name={org.name} size={48} className="rounded-lg text-[16px]" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">{org.name}</h1>
+        <div className="min-w-0 flex-1 basis-64">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="min-w-0 text-[24px] font-semibold tracking-[-0.025em] break-words text-ink">{org.name}</h1>
             <ClientStatus status={org.status === "active" && !active ? "no plan" : org.status} />
           </div>
           <p className="mt-0.5 text-[14px] text-ink-3">
             {[org.industry, org.website?.replace(/^https?:\/\//, "").replace(/\/$/, ""), tzLabel(org.timezone), customers.length ? `${customers.length} resale customer${customers.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Client"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 max-sm:w-full max-sm:[&>*]:flex-1">
           <a href={`/p/${org.slug}`} target="_blank" rel="noreferrer" className={buttonClass("secondary", "md")}>
             Open portal <ArrowUpRight />
           </a>
@@ -133,7 +134,8 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
               <PlanSelect agency={slug} clientId={org.id} clientName={org.name} current={active?.planId ?? null} plans={plans.map((p) => ({ id: p.id, name: p.name, price: money(p.priceCents) }))} />
               <p className="mt-2 text-[12px] text-ink-3">Flat rate. No setup fee, no token billing.</p>
             </div>
-            <CheckoutLinksCard buyerOrgId={org.id} returnPath={`/a/${slug}/clients/${org.slug}`} className="mt-3" />
+            {/* Checkout links only mean something once Stripe is set up; otherwise the plan card above says it all. */}
+            {billingMode() !== "disabled" ? <CheckoutLinksCard buyerOrgId={org.id} returnPath={`/a/${slug}/clients/${org.slug}`} className="mt-3" /> : null}
             <Suspense>
               <BillingFlags />
             </Suspense>

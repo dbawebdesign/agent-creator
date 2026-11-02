@@ -107,13 +107,8 @@ function Row({
         toast.error(res.error);
         return;
       }
+      // The row's own "Approved" / "Declined" state is the one confirmation.
       onDone(kind === "approve" ? "approved" : "declined");
-      toast.success(kind === "approve" ? "Approved" : "Declined", {
-        description:
-          kind === "approve"
-            ? `${item.agent.name} will take it from here.`
-            : `${item.agent.name} won't go ahead.`,
-      });
     });
   };
 

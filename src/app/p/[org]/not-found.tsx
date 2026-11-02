@@ -9,7 +9,7 @@ export default function NotFound() {
       <p className="mt-1.5 text-[13.5px] text-ink-3">
         It may have been archived, or the link is out of date.
       </p>
-      <PortalHomeLink className="mt-6 text-[13.5px] font-medium text-accent-text hover:underline">
+      <PortalHomeLink className="mt-6 text-[13.5px] font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink">
         Back to Today
       </PortalHomeLink>
     </div>

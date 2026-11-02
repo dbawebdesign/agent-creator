@@ -53,8 +53,13 @@ export const agentSpec = z.object({
   resaleIdea: z.string().max(600).default(""),
   /** Estimated weekly hours saved across workflows. */
   weeklyHoursSaved: z.number().min(0).max(400).default(0),
-  /** Open questions the agency should confirm with the client. */
+  /** Open questions the agency should confirm with the client. Client-safe: they can be copied into an email to them. */
   openQuestions: z.array(z.string().max(300)).max(10).default([]),
+  /**
+   * How this proposal was drafted (e.g. "drafted offline, no AI model used"). For the agency's review screen only:
+   * never shown to clients, never part of openQuestions. Set by the Architect, not by the model.
+   */
+  draftNote: z.string().max(300).optional(),
 });
 
 /**

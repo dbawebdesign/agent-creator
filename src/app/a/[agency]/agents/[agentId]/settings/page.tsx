@@ -36,7 +36,7 @@ export default async function AgentSettingsPage({ params }: { params: Promise<{ 
         agent={{ id: a.id, name: a.name, role: a.role, summary: a.summary, instructions: a.instructions, status: a.status, config: { voice: a.config.voice, requireApprovalFor: a.config.requireApprovalFor } }}
       />
 
-      <section aria-labelledby="channels-h" className="max-w-[640px]">
+      <section aria-labelledby="channels-h" className="max-w-[720px]">
         <h2 id="channels-h" className="text-[14px] font-semibold text-ink">
           Channels
         </h2>

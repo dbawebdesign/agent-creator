@@ -156,7 +156,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
           >
             <Plus className="size-4" aria-hidden />
             New agent
-            <kbd className="ml-auto rounded border border-canvas/20 px-1 font-sans text-[10.5px] text-canvas/60" aria-label="Shortcut C">C</kbd>
+            <kbd className="ml-auto rounded border max-lg:hidden [@media(pointer:coarse)]:hidden border-canvas/20 px-1 font-sans text-[10.5px] text-canvas/60" aria-label="Shortcut C">C</kbd>
           </Link>
           <SearchButton />
         </div>
@@ -240,7 +240,7 @@ function SearchButton({ compact }: { compact?: boolean }) {
     >
       <Search className="size-3.5" aria-hidden />
       Search
-      <kbd className="ml-auto font-sans text-[11px] text-ink-3">{mac ? "⌘K" : "Ctrl K"}</kbd>
+      <kbd className="ml-auto font-sans max-lg:hidden [@media(pointer:coarse)]:hidden text-[11px] text-ink-3">{mac ? "⌘K" : "Ctrl K"}</kbd>
     </button>
   );
 }

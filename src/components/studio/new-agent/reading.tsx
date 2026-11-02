@@ -23,6 +23,13 @@ export function cleanLine(line: string): string {
     .trim();
 }
 
+/** Close a quotation the Architect opened but didn't close: “… → “…” */
+export function balanceQuotes(text: string): string {
+  const opens = (text.match(/“/g) ?? []).length;
+  const closes = (text.match(/”/g) ?? []).length;
+  return opens > closes ? `${text.replace(/[\s.]+$/, (m) => m.trim())}”` : text;
+}
+
 /** Pull a few quotable pain-point lines from the transcript, client-side, for the live reading state. */
 export function extractItches(transcript: string, max = 3): string[] {
   const lines = transcript
@@ -79,7 +86,7 @@ export function ArchitectReading({
   const fromProposal = useMemo(() => {
     const seen = new Set<string>();
     return (found ?? [])
-      .map((f) => ({ ...f, problem: cleanLine(f.problem).replace(/^["“]|["”]$/g, "") }))
+      .map((f) => ({ ...f, problem: balanceQuotes(cleanLine(f.problem)) }))
       .filter((f) => f.problem && !seen.has(f.problem) && seen.add(f.problem))
       .slice(0, 4);
   }, [found]);
@@ -102,7 +109,7 @@ export function ArchitectReading({
       <div className="mb-10 flex items-center gap-4">
         <ArchitectOrb active={!finished && !failed} />
         <div>
-          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">{failed ? "The Architect hit a snag" : finished ? "Proposal ready" : done ? "Finishing the proposal" : "The Architect is reading the call"}</h1>
+          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-ink">{failed ? "The Architect hit a snag" : finished ? "Proposal ready" : "The Architect is reading the call"}</h1>
           <p className="mt-0.5 text-[14px] text-ink-3">
             {failed ? failed : `${clientName} · ${stats.words.toLocaleString()} words · about ${stats.minutes} min of conversation`}
           </p>

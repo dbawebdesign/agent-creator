@@ -79,7 +79,10 @@ export function ReviewPanel({
               Approved. {agentName} is sending it to{" "}
               <span className="font-semibold">{sendTo}</span>
               {sendTestMode ? (
-                <span className="font-normal"> in test mode, so no real email goes out.</span>
+                <span className="font-normal">
+                  {" "}
+                  in test mode, so no real email goes out.
+                </span>
               ) : (
                 " now."
               )}
@@ -88,7 +91,9 @@ export function ReviewPanel({
             <span>
               Approved and sent to{" "}
               <span className="font-semibold">{sendTo}</span>
-              {sendTestMode ? <span className="font-normal"> (test mode)</span> : null}
+              {sendTestMode ? (
+                <span className="font-normal"> (test mode)</span>
+              ) : null}
               {sentAt ? <span className="font-normal"> · {sentAt}</span> : null}
             </span>
           )
@@ -133,22 +138,8 @@ export function ReviewPanel({
         toast.error(res.error);
         return;
       }
+      // The inline receipt below is the one confirmation.
       setLocal(action === "approve" ? "approved" : "changes_requested");
-      toast.success(
-        action === "approve"
-          ? sendsOnApprove
-            ? "Approved and sending"
-            : "Approved"
-          : `Sent to ${agentName}`,
-        {
-          description:
-            action === "approve"
-              ? sendsOnApprove && sendTo
-                ? `On its way to ${sendTo}.`
-                : `${agentName} will remember you liked this.`
-              : `${agentName} will revise it and deliver a new version.`,
-        },
-      );
       router.refresh();
     });
   };

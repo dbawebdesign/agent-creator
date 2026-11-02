@@ -51,7 +51,7 @@ export async function startDiscovery(raw: z.input<typeof startInput>): Promise<R
     } else {
       return { ok: false, error: "Choose a client first." };
     }
-    const title = parsed.data.title || `Discovery call — ${orgName}`;
+    const title = parsed.data.title || `${orgName} · ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
     const { discoveryId } = await createDiscovery({ orgId, title, transcript, actor: ctx.actor });
     revalidatePath(`/a/${slug}`, "layout");
     return { ok: true, discoveryId, clientId: orgId };

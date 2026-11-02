@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { architect, heuristicSpec, runsPerWeek } from "@/server/agents/architect";
+import { architect, finalizeSpec, heuristicSpec, pickAgentName, runsPerWeek, tidyText } from "@/server/agents/architect";
 import { agentSpec, type AgentSpec } from "@/server/agents/spec";
 import { db, schema } from "@/server/db/client";
 import { runJobsOnce } from "@/server/jobs/handlers";
 import { isValidCron } from "@/server/jobs/scheduler";
-import { analyzeDiscovery, createDiscovery } from "@/server/services/engine";
+import { analyzeDiscovery, createDiscovery, hireAgent } from "@/server/services/engine";
 import { makeOrgs, resetDb } from "./engine.helpers";
 
 const fixture = (f: string) => readFileSync(path.join(__dirname, "fixtures", f), "utf8");
@@ -32,6 +32,23 @@ type Rubric = {
   extra?: (spec: AgentSpec) => void;
 };
 
+function allText(spec: AgentSpec): string[] {
+  return [
+    spec.role,
+    spec.summary,
+    spec.instructions,
+    spec.voice,
+    spec.resaleIdea,
+    ...spec.workflows.flatMap((w) => [w.name, w.problem, w.instructions]),
+    ...spec.knowledgeNeeds.flatMap((k) => [k.title, k.why]),
+    ...spec.seedMemories,
+    spec.firstDeliverable.title,
+    spec.firstDeliverable.description,
+    spec.firstDeliverable.instructions,
+    ...spec.openQuestions,
+  ];
+}
+
 function checkRubric(r: Rubric): AgentSpec {
   const spec = heuristicSpec({ transcript: fixture(r.file), orgName: r.org, industry: r.industry ?? null });
   expect(() => agentSpec.parse(spec)).not.toThrow();
@@ -54,7 +71,11 @@ function checkRubric(r: Rubric): AgentSpec {
   }
   expect(spec.requireApprovalFor).toEqual(expect.arrayContaining(["send_external_email", "send_external_sms"]));
   if (spec.tools.some((t) => t.startsWith("computer_"))) expect(spec.requireApprovalFor).toContain("write_client_system");
-  expect(spec.openQuestions[0]).toMatch(/offline/i);
+  // The "drafted offline" notice is for the agency's review only; open questions get copied to the client.
+  expect(spec.draftNote).toMatch(/offline/i);
+  expect(spec.openQuestions.join(" ")).not.toMatch(/offline|AI model|extractor/i);
+  // Template wording is clean English ("The the weekly…", "a operations…" never reach the client).
+  for (const text of allText(spec)) expect(tidyText(text)).toBe(text);
   r.extra?.(spec);
   return spec;
 }
@@ -240,7 +261,8 @@ describe("Architect (offline) — podcast transcript", () => {
     expect(spec.requireApprovalFor).toEqual(expect.arrayContaining(["send_external_email", "send_external_sms"]));
     const all = JSON.stringify(spec);
     expect(all).not.toMatch(/Carson|Brandlord|Four Corners|law firm|\$10,000|pulling records/i);
-    expect(spec.openQuestions[0]).toMatch(/offline/i);
+    expect(spec.draftNote).toMatch(/offline/i);
+    expect(spec.openQuestions.join(" ")).not.toMatch(/offline/i);
   });
 
   it("finds the insurance data-migration itch when the client is the insurance software company", () => {
@@ -273,5 +295,58 @@ describe("discovery → proposal", () => {
     expect(agentSpec.parse(d!.proposal).role).toBe("Quoting Specialist");
     // Running it again is safe (idempotent overwrite).
     await analyzeDiscovery(discoveryId);
+  });
+});
+
+describe("Architect output polish (design critique r3 H4)", () => {
+  beforeEach(resetDb);
+
+  it("never reuses a name already taken in the agency, by a person on the call, or by a member; Lena is out of the pool", () => {
+    const base = heuristicSpec({ transcript: PODCAST, orgName: "Summit Promo Co", industry: "Promotional products distribution" });
+    const other = heuristicSpec({ transcript: PODCAST, orgName: "Summit Promo Co", industry: "Promotional products distribution", avoidNames: [base.name, "Rachel Kim"] });
+    expect(other.name).not.toBe(base.name);
+    expect(other.instructions).toContain(`You are ${other.name},`);
+    expect(other.summary.startsWith(`${other.name} `)).toBe(true);
+    for (let i = 0; i < 200; i++) expect(pickAgentName(`seed-${i}`, [])).not.toBe("Lena");
+    expect(pickAgentName("x", ["quinn", "Dr. Maya Chen"])).not.toMatch(/^(?:Quinn|Maya)$/);
+  });
+
+  it("a model-designed agent whose name is taken is renamed where it names itself", () => {
+    const base = heuristicSpec({ transcript: PODCAST, orgName: "Summit Promo Co" });
+    const fromModel = { ...base, name: "Quinn", summary: `Quinn drafts quotes for Summit Promo Co.`, instructions: `You are Quinn, the quoting specialist. Ask Quinn Rivera in finance before discounts.` };
+    const s = finalizeSpec(fromModel, { avoidNames: ["Quinn"] });
+    expect(s.name).not.toBe("Quinn");
+    expect(s.summary).toBe(`${s.name} drafts quotes for Summit Promo Co.`);
+    expect(s.instructions).toBe(`You are ${s.name}, the quoting specialist. Ask Quinn Rivera in finance before discounts.`);
+    expect(finalizeSpec(fromModel).name).toBe("Quinn");
+  });
+
+  it("analyzeDiscovery avoids names used by agents elsewhere in the agency and by the client's people", async () => {
+    const { agency, client, user } = await makeOrgs({ clientName: "Summit Promo Co", industry: "Promotional products distribution" });
+    const [sibling] = await db()
+      .insert(schema.organizations)
+      .values({ kind: "client", name: "Coastal Promo Co.", slug: `coastal-${Date.now()}`, parentId: agency.id, agencyId: agency.id })
+      .returning();
+    const taken = heuristicSpec({ transcript: PODCAST, orgName: "Summit Promo Co", industry: "Promotional products distribution" });
+    await hireAgent({ orgId: sibling!.id, spec: taken, actor: { type: "system" } });
+    const next = pickAgentName("Summit Promo Co:quote", [taken.name]);
+    await db().update(schema.users).set({ name: `${next} Park` }).where(eq(schema.users.id, user.id));
+    const { discoveryId } = await createDiscovery({ orgId: client.id, title: "Kickoff", transcript: PODCAST, actor: { type: "user", userId: user.id } });
+    const spec = await analyzeDiscovery(discoveryId);
+    expect(spec.name).not.toBe(taken.name);
+    expect(spec.name).not.toBe(next);
+    expect(spec.draftNote).toMatch(/offline/i);
+    expect(spec.openQuestions.join(" ")).not.toMatch(/offline/i);
+  });
+
+  it("dedupes articles from templates: no “The the weekly operations summary”", () => {
+    expect(tidyText("The the weekly operations summary process. Do the the a report for a operations team.")).toBe("The weekly operations summary process. Do the report for an operations team.");
+    expect(tidyText("Plan A or B for the A team; quote “the the thing” exactly.")).toBe("Plan A or B for the A team; quote “the the thing” exactly.");
+    const spec = heuristicSpec({ transcript: "We talked about the weather, the weekend, and how the kids are doing in school this year.", orgName: "Four Corners Coffee" });
+    expect(spec.workflows[0]!.name).toBe("Weekly operations summary");
+    for (const text of allText(spec)) {
+      expect(text).not.toMatch(/\b(?:the|a|an) (?:the|a|an)\b/i);
+      expect(tidyText(text)).toBe(text);
+    }
   });
 });

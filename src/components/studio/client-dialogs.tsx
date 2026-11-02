@@ -192,7 +192,7 @@ export function PlanSelect({
       </Dialog>
       {current ? (
         <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-          <Button variant="ghost" size="sm" className="text-bad hover:bg-bad-soft hover:text-bad" onClick={() => setCancelOpen(true)}>
+          <Button variant="ghost" size="sm" className="text-ink-3" onClick={() => setCancelOpen(true)}>
             Cancel subscription
           </Button>
           <DialogContent title="Cancel this subscription?" description={`${clientName} stops being billed. Their agents keep running until you pause them.`}>

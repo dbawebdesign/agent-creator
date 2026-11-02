@@ -40,7 +40,8 @@ export function AgentTabs({ base }: { base: string }) {
     { href: `${base}/settings`, label: "Settings" },
   ];
   const navRef = useRef<HTMLElement>(null);
-  const [fade, setFade] = useState({ left: false, right: false });
+  // null until measured: CSS gives phones a right-edge fade on first paint, before JS knows the overflow.
+  const [fade, setFade] = useState<{ left: boolean; right: boolean } | null>(null);
   useEffect(() => {
     const el = navRef.current;
     if (!el) return;
@@ -54,11 +55,14 @@ export function AgentTabs({ base }: { base: string }) {
       window.removeEventListener("resize", update);
     };
   }, [pathname]);
-  const mask = fade.left && fade.right ? "linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)" : fade.right ? "linear-gradient(90deg,#000 calc(100% - 36px),transparent)" : fade.left ? "linear-gradient(90deg,transparent,#000 36px)" : undefined;
+  const mask = !fade ? undefined : fade.left && fade.right ? "linear-gradient(90deg,transparent,#000 40px,#000 calc(100% - 40px),transparent)" : fade.right ? "linear-gradient(90deg,#000 calc(100% - 56px),transparent)" : fade.left ? "linear-gradient(90deg,transparent,#000 36px)" : undefined;
   return (
     <nav
       ref={navRef}
-      className="-mb-px flex gap-5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className={cn(
+        "-mb-px flex gap-5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        !fade && "max-sm:[mask-image:linear-gradient(90deg,#000_calc(100%-56px),transparent)]",
+      )}
       style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
       aria-label="Agent sections"
     >

@@ -20,7 +20,13 @@ import { hash32, normalizeWhitespace, truncate } from "@/server/llm/text";
 import type { LlmUsage } from "@/server/llm/types";
 import { agentSpec, normalizeApprovals, type AgentSpec, type WorkflowSpec } from "./spec";
 
-export type ArchitectInput = { transcript: string; orgName?: string | null; industry?: string | null };
+export type ArchitectInput = {
+  transcript: string;
+  orgName?: string | null;
+  industry?: string | null;
+  /** Names the new agent must not take: other agents in the agency, and the people at the client and agency. */
+  avoidNames?: string[];
+};
 export type ArchitectResult = { spec: AgentSpec; model: string; usage: LlmUsage };
 
 const ZERO_USAGE: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
@@ -48,16 +54,20 @@ How to design:
 Write instructions as a job description in second person. Be specific to this business; never generic filler. Name: a short human first name. Voice: how it should sound to this owner.`;
 
 async function modelSpec(input: ArchitectInput): Promise<ArchitectResult> {
-  const format = zodOutputFormat(agentSpec);
+  const format = zodOutputFormat(agentSpec.omit({ draftNote: true }));
+  const avoid = firstNames(input.avoidNames ?? []);
   const user = [
     `Client: ${input.orgName ?? "(unknown)"}${input.industry ? ` — industry: ${input.industry}` : ""}`,
+    avoid.length ? `Names already taken by other agents or by people at the business (pick a different first name): ${avoid.join(", ")}` : null,
     "",
     "<transcript>",
     input.transcript,
     "</transcript>",
     "",
     "Design the AI employee. Return only the JSON object.",
-  ].join("\n");
+  ]
+    .filter((l): l is string => l !== null)
+    .join("\n");
   const usage = { ...ZERO_USAGE };
   const add = (u: LlmUsage) => {
     usage.inputTokens += u.inputTokens;
@@ -85,15 +95,12 @@ async function modelSpec(input: ArchitectInput): Promise<ArchitectResult> {
       continue;
     }
     const parsed = agentSpec.safeParse(clampSpecShape(json));
-    if (parsed.success) return { spec: finalizeSpec(parsed.data), model, usage };
+    if (parsed.success) return { spec: finalizeSpec(parsed.data, { avoidNames: input.avoidNames }), model, usage };
     lastError = z.prettifyError(parsed.error).slice(0, 2000);
   }
   // The model could not produce a valid spec twice: fall back to the deterministic extractor, flagged for review.
   const spec = heuristicSpec(input);
-  spec.openQuestions = [
-    "This proposal was drafted by the offline extractor because the model output failed validation — review closely.",
-    ...spec.openQuestions,
-  ].slice(0, 10);
+  spec.draftNote = "Drafted by the offline extractor because the model's output failed validation — review every workflow closely.";
   return { spec, model, usage };
 }
 
@@ -112,11 +119,16 @@ function clampSpecShape(raw: unknown): unknown {
   if (Array.isArray(o.seedMemories)) o.seedMemories = o.seedMemories.slice(0, 40).map((m) => clip(m, 500));
   if (Array.isArray(o.openQuestions)) o.openQuestions = o.openQuestions.slice(0, 10).map((m) => clip(m, 300));
   if (Array.isArray(o.knowledgeNeeds)) o.knowledgeNeeds = o.knowledgeNeeds.slice(0, 20);
+  delete o.draftNote; // ours, not the model's
   return o;
 }
 
-/** Normalize a validated spec: always-on core tools, approval defaults, weekly hours. */
-export function finalizeSpec(spec: AgentSpec): AgentSpec {
+/**
+ * Normalize a validated spec: always-on core tools, approval defaults, weekly hours, and a name no other agent in
+ * the agency (or person at the business) already has.
+ */
+export function finalizeSpec(input: AgentSpec, opts: { avoidNames?: string[] } = {}): AgentSpec {
+  const spec = opts.avoidNames?.length && nameTaken(input.name, opts.avoidNames) ? renameSpec(input, pickAgentName(`${input.name}:${input.role}`, opts.avoidNames)) : input;
   const core = ["knowledge_search", "memory_recall", "memory_save", "create_deliverable", "send_message", "request_approval", "schedule_followup"];
   const tools = [...new Set([...core, ...spec.tools, ...spec.workflows.flatMap((w) => w.tools)])];
   const channels = [...new Set(["portal" as const, ...spec.channels])];
@@ -162,7 +174,55 @@ const VERTICALS: Vertical[] = [
   { id: "construction", label: "Construction & contracting", re: /construction|general contractor|subcontractors?|takeoffs?/gi, customers: "project owners" },
 ];
 
-const NAMES = ["Maya", "Quinn", "Theo", "Iris", "Jonah", "Nora", "Eli", "Ava", "Rhea", "Milo", "Tess", "Owen", "Lena", "Sage"];
+const NAMES = ["Maya", "Quinn", "Theo", "Iris", "Jonah", "Nora", "Eli", "Ava", "Rhea", "Milo", "Tess", "Owen", "Sage", "Wren", "Arlo", "Juno", "Cora", "Felix", "Hazel", "Nico", "Ezra", "Ruby", "Silas", "Elsie"];
+
+/** "Quinn", "quinn", "Quinn (ops)" → "quinn"; titles like "Dr." are skipped. */
+function nameKey(n: string): string {
+  const words = normalizeWhitespace(n).split(" ").filter((w) => !/^(?:dr|mr|mrs|ms|mx)\.?$/i.test(w));
+  return (words[0] ?? "").toLowerCase().replace(/[^\p{L}'-]/gu, "");
+}
+
+/** Unique first names, capped, for the Architect prompt. */
+function firstNames(names: string[]): string[] {
+  const out = new Map<string, string>();
+  for (const n of names) {
+    const k = nameKey(n);
+    if (k && !out.has(k)) out.set(k, cap(k));
+  }
+  return [...out.values()].slice(0, 200);
+}
+
+function nameTaken(name: string, avoid: Iterable<string>): boolean {
+  const k = nameKey(name);
+  for (const a of avoid) if (nameKey(a) === k) return true;
+  return false;
+}
+
+/** A first name from the pool that no other agent in the agency, and no person at the business, already uses. */
+export function pickAgentName(seed: string, avoid: Iterable<string>): string {
+  const taken = new Set([...avoid].map(nameKey).filter(Boolean));
+  const start = hash32(seed) % NAMES.length;
+  for (let i = 0; i < NAMES.length; i++) {
+    const n = NAMES[(start + i) % NAMES.length]!;
+    if (!taken.has(nameKey(n))) return n;
+  }
+  return NAMES[start]!;
+}
+
+/** Give a model-designed agent a new name where it names itself (not where the same name refers to a person). */
+function renameSpec(spec: AgentSpec, to: string): AgentSpec {
+  const from = normalizeWhitespace(spec.name).split(" ")[0] ?? spec.name;
+  const esc = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const self = new RegExp(`\\b(You are|you are|I'm|I am|This is|this is|Hi, I'm|Meet)\\s+${esc}\\b`, "g");
+  const fix = (t: string) => t.replace(self, `$1 ${to}`);
+  return {
+    ...spec,
+    name: to,
+    summary: fix(spec.summary.replace(new RegExp(`^${esc}\\b`), to)),
+    instructions: fix(spec.instructions),
+    voice: spec.voice ? fix(spec.voice) : spec.voice,
+  };
+}
 
 function countMatches(re: RegExp, s: string): number {
   re.lastIndex = 0;
@@ -965,7 +1025,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     ? null
     : {
         action: "manual",
-        phrase: "the weekly operations summary",
+        phrase: "weekly operations summary",
         qualifier: "",
         sentences: d.sentences.slice(0, 3),
         first: d.sentences[0] ?? { text: "", turn: 0, idx: 0, speaker: null, afterItch: false },
@@ -1011,7 +1071,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     const outbound = p.tools.includes("send_message");
     if (outbound && d.guardrails.length) steps.push(`Hard rules from the call, in every draft: ${d.guardrails.map((g) => `“${quoteOf(g, 160)}”`).join(" ")}`);
     return {
-      name: truncate(p.name(t, ctx), 80),
+      name: truncate(titleOf(p.name(t, ctx)), 80),
       problem,
       instructions: truncate(steps.map((s, i) => `${i + 1}. ${s}`).join("\n"), 6000),
       trigger,
@@ -1023,7 +1083,8 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   });
 
   const weeklyHoursSaved = Math.round(workflows.reduce((n, w) => n + w.hoursSavedPerRun * runsPerWeek(w.trigger), 0) * 10) / 10;
-  const name = NAMES[hash32(`${orgName}:${primary.action}`) % NAMES.length]!;
+  // Never a name another agent in the agency already has, nor the name of someone at the business or on the call.
+  const name = pickAgentName(`${orgName}:${primary.action}`, [...(input.avoidNames ?? []), ...d.people.map((p) => p.name), ...(d.owner ? [d.owner] : [])]);
   const role = truncate(PLAYS[primary.action].role(primary, ctx), 80);
   const verticalLabel = vertical?.label ?? (input.industry ? truncate(input.industry, 80) : "");
 
@@ -1068,7 +1129,6 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   if (d.compliance.includes("contract")) compliance.push("Confirm the approval limits in the management agreement per owner before the agent drafts any dispatch.");
   const openQuestions = dedupeBy(
     [
-      "Drafted offline from the transcript (no AI model was used) — review every workflow before hiring.",
       ...compliance,
       ...topics.flatMap((t) => PLAYS[t.action].questions(t, ctx)),
       d.recipient.name ? null : `Who at ${orgName} should receive the morning deliverables, and by what time?`,
@@ -1120,12 +1180,78 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     channels,
     tools: specTools,
     requireApprovalFor,
-    firstDeliverable: { title: truncate(first.title, 120), description: truncate(first.description, 600), instructions: truncate(first.instructions, 4000) },
+    firstDeliverable: { title: truncate(titleOf(first.title), 120), description: truncate(first.description, 600), instructions: truncate(first.instructions, 4000) },
     resaleIdea,
     weeklyHoursSaved: Math.min(400, weeklyHoursSaved),
     openQuestions,
+    // For the agency's review screen only; openQuestions stay client-safe (they get copied into an email to the client).
+    draftNote: "Drafted offline from the transcript (no AI model was used) — review every workflow before hiring.",
   };
-  return agentSpec.parse(spec);
+  return agentSpec.parse(tidySpec(spec));
+}
+
+// ───────────────────────────── wording clean-up ─────────────────────────────
+// Templates meet the owner's own phrases ("the weekly summary", "a operations report"): fix what that produces.
+
+/** Every client-visible string, with the owner's quoted words left exactly as said. */
+function tidySpec(spec: AgentSpec): AgentSpec {
+  return {
+    ...spec,
+    role: tidyText(spec.role),
+    summary: tidyText(spec.summary),
+    instructions: tidyText(spec.instructions),
+    voice: tidyText(spec.voice),
+    workflows: spec.workflows.map((w) => ({ ...w, name: tidyText(w.name), problem: tidyText(w.problem), instructions: tidyText(w.instructions) })),
+    knowledgeNeeds: spec.knowledgeNeeds.map((k) => ({ title: tidyText(k.title), why: tidyText(k.why) })),
+    seedMemories: spec.seedMemories.map(tidyText),
+    firstDeliverable: { title: tidyText(spec.firstDeliverable.title), description: tidyText(spec.firstDeliverable.description), instructions: tidyText(spec.firstDeliverable.instructions) },
+    resaleIdea: tidyText(spec.resaleIdea),
+    openQuestions: spec.openQuestions.map(tidyText),
+  };
+}
+
+/** "the weekly operations summary" → "Weekly operations summary". */
+function titleOf(s: string): string {
+  return cap(tidyText(normalizeWhitespace(s)).replace(/^(?:the|a|an)\s+(?=\S)/i, ""));
+}
+
+function wantsAn(word: string): boolean {
+  const w = word.toLowerCase();
+  if (/^[aeiou]/.test(w)) return !/^(?:uni|use|usa|usu|ute|uti|uro|eu|ewe|one\b|once)/.test(w);
+  return /^(?:hour|honest|hono|heir)/.test(w);
+}
+
+/**
+ * "The the weekly…" → "The weekly…", "a the report" → "a report", "the our team" → "our team", "to to" → "to",
+ * "a operations summary" → "an operations summary". Text inside “curly quotes” (the owner's words) is untouched.
+ */
+export function tidyText(s: string): string {
+  return s
+    .split(/(“[^”]*”)/)
+    .map((part, i) => (i % 2 ? part : tidyPart(part)))
+    .join("");
+}
+
+function tidyPart(input: string): string {
+  let t = input;
+  for (let i = 0; i < 3; i++) {
+    const before = t;
+    // The second word must be lowercase, so labels survive ("the A team", "Plan A").
+    t = t.replace(/\b([Tt]he|[Aa]n?)\s+(?:the|an?)\b/g, "$1");
+    t = t.replace(/\b([Tt]he|[Aa]n?)\s+(our|your|their|my|his|her|its)\b/g, (_m, art: string, pos: string) => (art[0] === art[0]!.toUpperCase() ? cap(pos) : pos));
+    t = t.replace(/\b(to|of|for|in|on|with|and|our|your|is)\s+\1(?![\w-])/gi, "$1");
+    if (t === before) break;
+  }
+  const article = (art: string, word: string) => {
+    const an = wantsAn(word);
+    if (/^an$/i.test(art) === an) return art;
+    const fixed = an ? "an" : "a";
+    return art[0] === "A" ? cap(fixed) : fixed;
+  };
+  // Lowercase a/an anywhere; capitalized A/An only where a sentence or list item starts ("Plan A or B" stays).
+  t = t.replace(/(^|[\s(“"'])(a|an)\s+([a-z][\w-]*)/g, (_m, pre: string, art: string, word: string) => `${pre}${article(art, word)} ${word}`);
+  t = t.replace(/(^[ \t]*(?:[-*][ \t]+|\d+\.[ \t]+)?|[.!?:][ \t]+)(A|An)[ \t]+([a-z][\w-]*)/gm, (_m, pre: string, art: string, word: string) => `${pre}${article(art, word)} ${word}`);
+  return t;
 }
 
 function painScore(s: string): number {

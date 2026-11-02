@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { Bot, Plus } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
-import { listAgents } from "@/server/queries/studio";
+import { agentTotals, listAgents } from "@/server/queries/studio";
+import { ListSearch, Pager, parsePage } from "@/components/studio/list-controls";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { buttonClass } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty";
@@ -10,23 +11,28 @@ import { AgentStatus, hours } from "@/components/studio/bits";
 
 export const metadata = { title: "Agents" };
 
-export default async function AgentsPage({ params }: { params: Promise<{ agency: string }> }) {
-  const { agency: slug } = await params;
+export default async function AgentsPage({ params, searchParams }: { params: Promise<{ agency: string }>; searchParams: Promise<{ q?: string; page?: string }> }) {
+  const [{ agency: slug }, sp] = await Promise.all([params, searchParams]);
   const { org } = await requireOrg(slug, "viewer");
-  const agents = await listAgents(org.id);
-  const week = agents.reduce((s, a) => s + a.hoursWeek, 0);
+  const q = typeof sp.q === "string" ? sp.q.slice(0, 80) : undefined;
+  const page = parsePage(sp.page);
+  const [list, totals] = await Promise.all([listAgents(org.id, { page, q }), agentTotals(org.id)]);
+  const agents = list.items;
   return (
     <div className="mx-auto w-full max-w-[1080px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
       <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">Agents</h1>
           <p className="mt-1 text-[14px] text-ink-3">
-            {agents.length} on the roster · {hours(week)} saved this week
+            {totals.count.toLocaleString()} on the roster · {hours(totals.hoursWeek)} saved this week
           </p>
         </div>
-        <Link href={`/a/${slug}/agents/new`} className={buttonClass("primary", "md")}>
-          <Plus /> New agent
-        </Link>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          {totals.count > 10 || q ? <ListSearch action={`/a/${slug}/agents`} q={q} placeholder="Search agents or clients" /> : null}
+          <Link href={`/a/${slug}/agents/new`} className={buttonClass("primary", "md", "shrink-0")}>
+            <Plus /> New agent
+          </Link>
+        </div>
       </header>
       {agents.length ? (
         <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
@@ -69,6 +75,8 @@ export default async function AgentsPage({ params }: { params: Promise<{ agency:
             ))}
           </ul>
         </div>
+      ) : q ? (
+        <p className="rounded-xl border border-dashed border-line px-5 py-8 text-center text-[13.5px] text-ink-3">No agents match “{q}”.</p>
       ) : (
         <div className="rounded-xl border border-dashed border-line">
           <EmptyState
@@ -83,6 +91,7 @@ export default async function AgentsPage({ params }: { params: Promise<{ agency:
           />
         </div>
       )}
+      <Pager base={`/a/${slug}/agents`} page={list.page} more={list.more} q={q} shown={agents.length} />
     </div>
   );
 }

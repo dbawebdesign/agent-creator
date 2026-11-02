@@ -228,7 +228,7 @@ export function PrefsForm({
               className={cn(
                 "flex cursor-pointer gap-3 rounded-xl border p-3.5 transition-colors",
                 cadence === o.id
-                  ? "border-accent bg-accent-soft"
+                  ? "border-ink bg-surface-2"
                   : "border-line hover:border-line-strong",
               )}
             >
@@ -241,7 +241,7 @@ export function PrefsForm({
                   setCadence(o.id);
                   save({ channels, cadence: o.id });
                 }}
-                className="mt-0.5 accent-[var(--accent)]"
+                className="mt-0.5 accent-[var(--ink)]"
               />
               <span>
                 <span className="block text-[13.5px] font-medium text-ink">

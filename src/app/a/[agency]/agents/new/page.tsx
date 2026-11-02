@@ -57,7 +57,7 @@ export default async function NewAgentPage({
   const initialClientId = sp.client ? clients.find((c) => c.slug === sp.client)?.id : undefined;
 
   return (
-    <div className="mx-auto w-full max-w-[1120px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
+    <div className="mx-auto w-full max-w-[1080px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
       <NewAgentFlow
         key={resume?.discoveryId ?? blueprint?.id ?? "new"}
         agency={slug}

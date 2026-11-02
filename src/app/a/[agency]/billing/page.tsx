@@ -95,7 +95,34 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
 
         <section>
           <SectionHeading title="Clients and margin" count={margin.length} action={<Badge tone="accent">Agency only</Badge>} />
-          <div className="relative overflow-x-auto rounded-xl border border-line bg-surface shadow-xs">
+          <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-xs sm:hidden">
+            {margin.map((m) => {
+              const mg = m.priceCents ? ((m.priceCents - m.costCents) / m.priceCents) * 100 : null;
+              const sub = subByOrg.get(m.slug);
+              return (
+                <li key={m.id}>
+                  <Link href={`/a/${slug}/clients/${m.slug}`} className="tabular flex items-start gap-3 px-4 py-3 text-[13px]">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium text-ink">{m.name}</p>
+                      <p className="mt-0.5 text-[12px] text-ink-3">
+                        {sub ? `${sub.planName} · ${money(m.priceCents)}/mo` : "No plan"} · {money(Math.round(m.costCents))} cost
+                      </p>
+                      {sub && sub.sub.status !== "active" ? (
+                        <div className="mt-1">
+                          <BillingStatusBadge status={sub.sub.status} cancelAtPeriodEnd={sub.sub.cancelAtPeriodEnd} />
+                        </div>
+                      ) : null}
+                    </div>
+                    <span className={cn("shrink-0 text-right text-[14px] font-semibold", mg === null ? "text-ink-3" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>
+                      {mg === null ? "—" : pct(mg)}
+                      <span className="block text-[11px] font-normal text-ink-3">margin</span>
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="relative overflow-x-auto rounded-xl border border-line bg-surface shadow-xs max-sm:hidden">
             <table className="w-full min-w-[620px] text-[13px]">
               <thead>
                 <tr className="border-b border-line text-left text-[12px] text-ink-3">

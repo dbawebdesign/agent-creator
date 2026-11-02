@@ -113,7 +113,7 @@ export default async function AgentPage({
             ) : null}
             <Link
               href={`/p/${slug}/connect`}
-              className="inline-flex h-8 items-center rounded-full px-2 text-[13px] font-medium text-accent-text hover:bg-accent-soft"
+              className="inline-flex h-8 items-center px-1 text-[13px] font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
             >
               More ways to reach {agent.name}
             </Link>

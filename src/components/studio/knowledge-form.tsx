@@ -44,7 +44,7 @@ export function KnowledgeForm({ agency, agentId }: { agency: string; agentId: st
       </div>
       <div className="space-y-3">
         {kind === "url" ? (
-          <div className="grid gap-3 sm:grid-cols-[1fr_200px]">
+          <div className="grid gap-3">
             <Input type="url" required placeholder="https://brandlord.co/pricing" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="URL" />
             <Input placeholder="Title (optional)" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Title" />
           </div>

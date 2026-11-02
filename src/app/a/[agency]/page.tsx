@@ -86,16 +86,21 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                   <Link href={`${base}/agents/${d.agentId}?d=${d.id}`} className="group flex items-start gap-3.5 px-4 py-3.5 transition-colors hover:bg-surface-2/50 sm:px-5">
                     <AgentOrb seed={d.agentSeed ?? d.agentId} name={d.agentName} size={28} className="mt-0.5" />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <p className="truncate text-[14px] font-medium text-ink">{d.title}</p>
-                        {d.needsReview ? <span className="shrink-0 rounded-full bg-warn-soft px-1.5 text-[11px] font-medium text-warn">Needs review</span> : null}
-                      </div>
+                      <p className="line-clamp-2 text-[14px] leading-snug font-medium text-ink">
+                        {d.title}
+                        {d.needsReview ? <span className="ml-2 inline-block rounded-full bg-warn-soft px-1.5 align-[1px] text-[11px] font-medium text-warn">Needs review</span> : null}
+                      </p>
                       {d.preview ? <p className="mt-0.5 line-clamp-1 text-[13px] text-ink-3">{d.preview}</p> : null}
                       <p className="mt-1 text-[12px] text-ink-3">
                         {d.agentName} for {d.orgName} · {OUTPUT_LABEL[d.kind] ?? d.kind}
+                        <span className="sm:hidden">
+                          {" · "}
+                          <RelativeTime date={d.createdAt} />
+                          {d.hoursSaved ? <span className="font-medium text-good"> · +{hours(d.hoursSaved)}</span> : null}
+                        </span>
                       </p>
                     </div>
-                    <div className="shrink-0 text-right">
+                    <div className="shrink-0 text-right max-sm:hidden">
                       <RelativeTime date={d.createdAt} className="text-[12px] text-ink-3" />
                       {d.hoursSaved ? <p className="tabular mt-1 text-[12px] font-medium text-good">+{hours(d.hoursSaved)}</p> : null}
                     </div>
@@ -147,7 +152,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                       <div className="min-w-0 flex-1">
                         <p className="text-[13.5px] font-medium text-ink">{d.orgName} asked for changes</p>
                         <p className="truncate text-[12px] text-ink-3">
-                          {d.title} · {d.agentName} · <RelativeTime date={d.seenAt ?? d.createdAt} />
+                          {d.title} · {d.agentName} · <RelativeTime date={d.requestedAt ?? d.seenAt ?? d.createdAt} />
                         </p>
                         {d.feedback ? <p className="mt-2 line-clamp-3 border-l-2 border-warn/40 pl-2.5 text-[13px] leading-relaxed text-ink-2">“{d.feedback}”</p> : null}
                       </div>

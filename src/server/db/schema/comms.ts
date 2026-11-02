@@ -2,6 +2,7 @@
  * Channels and conversations. Agents meet people where they already are:
  * email, SMS, Slack, the web portal, the REST API and MCP.
  */
+import { sql } from "drizzle-orm";
 import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { agents, type ChannelKind } from "./agents";
 import { createdAt, id, organizations, updatedAt, users } from "./core";
@@ -74,6 +75,8 @@ export const conversations = pgTable(
   (t) => [
     index("conversations_agent_last_idx").on(t.agentId, t.lastMessageAt),
     uniqueIndex("conversations_thread_uq").on(t.agentId, t.channel, t.externalThreadId),
+    index("conversations_org_idx").on(t.orgId),
+    index("conversations_contact_idx").on(t.contactId).where(sql`${t.contactId} is not null`),
   ],
 );
 
@@ -119,5 +122,5 @@ export const webhookEvents = pgTable(
     processedAt: timestamp("processed_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("webhook_events_provider_external_uq").on(t.provider, t.externalId)],
+  (t) => [uniqueIndex("webhook_events_provider_external_uq").on(t.provider, t.externalId), index("webhook_events_created_idx").on(t.createdAt)],
 );

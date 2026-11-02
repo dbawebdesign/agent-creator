@@ -34,6 +34,7 @@ export function ConnectKeys({
   providerName,
   agentName,
   userFirstName,
+  serverName,
 }: {
   slug: string;
   appUrl: string;
@@ -43,6 +44,8 @@ export function ConnectKeys({
   /** A real teammate's name for the example prompt; null when the team is empty. */
   agentName: string | null;
   userFirstName: string | null;
+  /** MCP server name shown in the person's assistant, from their brand (never "roster"). */
+  serverName?: string;
 }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("claudeCode");
   const [creating, setCreating] = useState(false);
@@ -53,7 +56,11 @@ export function ConnectKeys({
   const [pending, start] = useTransition();
   const router = useRouter();
   const active = keys.filter((k) => k.status === "active");
-  const snippets = mcpConfigSnippet(appUrl, fresh?.key ?? "rk_live_YOUR_KEY");
+  const snippets = mcpConfigSnippet(
+    appUrl,
+    fresh?.key ?? "rk_live_YOUR_KEY",
+    serverName,
+  );
   const snippet = snippets[tab];
 
   const create = () => {
@@ -117,15 +124,15 @@ export function ConnectKeys({
             </button>
           ))}
         </div>
-        <div className="relative mt-2 rounded-lg border border-line bg-surface-2/60">
-          <pre className="overflow-x-auto px-4 py-3.5 pr-12 font-mono text-[12px] leading-relaxed whitespace-pre text-ink-2">
+        <div className="mt-2 flex items-start gap-1 rounded-lg border border-line bg-surface-2/60 p-1.5 pl-0">
+          <pre className="min-w-0 flex-1 overflow-x-auto py-2 pl-4 font-mono text-[12px] leading-relaxed whitespace-pre text-ink-2">
             <code>{snippet}</code>
           </pre>
           <CopyButton
             value={snippet}
             label="Copy setup snippet"
             toastLabel="Copied"
-            className="absolute top-2 right-2"
+            className="shrink-0"
           />
         </div>
         <p className="mt-2 text-[12.5px] text-ink-3">

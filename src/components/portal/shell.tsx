@@ -191,7 +191,7 @@ export function PortalShell({
                   href={it.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "relative inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[13.5px] transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                    "relative inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[13.5px] transition-colors duration-150",
                     active
                       ? "bg-surface-2 font-medium text-ink"
                       : "text-ink-3 hover:bg-surface-2/60 hover:text-ink",
@@ -270,7 +270,7 @@ export function PortalShell({
                   href={it.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "relative flex h-16 flex-col items-center justify-center gap-1 rounded-lg text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+                    "relative flex h-16 flex-col items-center justify-center gap-1 rounded-lg text-[11px] font-medium transition-colors",
                     active ? "text-ink" : "text-ink-3 hover:text-ink-2",
                   )}
                 >

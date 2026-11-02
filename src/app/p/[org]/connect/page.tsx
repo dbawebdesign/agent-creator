@@ -9,8 +9,16 @@ import { timeAgo } from "@/lib/utils";
 import { providerStatus } from "@/server/channels/service";
 import { SmsConnect } from "@/components/shared/sms-connect";
 import { slackConfigured } from "@/server/channels/slack";
+import { orgChain } from "@/server/auth/access";
+import { slugify } from "@/lib/utils";
 
 export const metadata = { title: "Connect" };
+
+function listNames(names: string[]): string {
+  return names.length > 1
+    ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`
+    : (names[0] ?? "your team");
+}
 
 function Section({
   icon,
@@ -81,6 +89,16 @@ export default async function ConnectPage({
     }
   }
   const withPhone = c.agents.filter((a) => a.phone);
+  const withoutPhone = c.agents.filter((a) => !a.phone);
+  // Who hands out numbers: the reseller for a customer, otherwise the agency.
+  const chain = await orgChain(p.org.id);
+  const agencyOrg = chain.find((o) => o.kind === "agency");
+  const numbersFrom =
+    p.org.kind === "customer"
+      ? p.brand.name
+      : agencyOrg?.branding?.displayName?.trim() ||
+        agencyOrg?.name ||
+        "your agency";
   const slackReady = slackConfigured();
   const smsLive = providerStatus().sms;
   const provider = p.org.kind === "customer" ? p.brand.name : "your provider";
@@ -141,10 +159,10 @@ export default async function ConnectPage({
           title="Text"
           body="Text a teammate from your phone like you would a colleague — great for quick asks on the go."
         >
-          {p.isAdmin && c.agents.length ? (
-            // Admins give each teammate a number right here; everyone else sees the numbers to text.
-            <ul className="space-y-4">
-              {c.agents.map((a) => (
+          {/* Numbers are the agency's job (Twilio lives in Studio). Here: the number to text, or who to ask. */}
+          {withPhone.length ? (
+            <ul className="space-y-3">
+              {withPhone.map((a) => (
                 <li
                   key={a.id}
                   className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4"
@@ -156,42 +174,27 @@ export default async function ConnectPage({
                     </span>
                   </div>
                   <SmsConnect
+                    audience="client"
                     orgId={p.org.id}
                     agentId={a.id}
                     phone={a.phone}
-                    connectionId={a.smsConnectionId}
                     live={smsLive}
+                    agentName={a.name}
+                    providerName={numbersFrom}
                     className="min-w-0 flex-1"
                   />
                 </li>
               ))}
             </ul>
-          ) : withPhone.length ? (
-            <ul className="space-y-2.5">
-              {withPhone.map((a) => (
-                <li
-                  key={a.id}
-                  className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
-                >
-                  <div className="flex min-w-0 items-center gap-2.5 sm:w-44">
-                    <AgentOrb seed={a.seed} name={a.name} size={24} />
-                    <span className="truncate text-[13.5px] font-medium text-ink">
-                      {a.name}
-                    </span>
-                  </div>
-                  <CopyField
-                    value={a.phone!}
-                    label={`Copy ${a.name}'s number`}
-                    className="flex-1 tabular"
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="rounded-lg bg-surface-2/70 px-3.5 py-3 text-[13px] text-ink-3">
-              No numbers yet. A workspace admin can give {first} a number here.
+          ) : null}
+          {withoutPhone.length ? (
+            <p
+              className={`rounded-lg bg-surface-2/70 px-3.5 py-3 text-[13px] text-ink-3 ${withPhone.length ? "mt-3" : ""}`}
+            >
+              Ask {numbersFrom} to give{" "}
+              {listNames(withoutPhone.map((a) => a.name))} a texting number.
             </p>
-          )}
+          ) : null}
         </Section>
 
         <Section
@@ -236,6 +239,7 @@ export default async function ConnectPage({
             providerName={provider}
             agentName={c.agents[0]?.name ?? null}
             userFirstName={p.user.name ? p.user.firstName : null}
+            serverName={`${slugify(p.brand.name) || "my"}-team`}
           />
         </Section>
       </div>

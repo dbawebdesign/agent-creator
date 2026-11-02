@@ -74,8 +74,24 @@
 .portal-bubble.prose-roster > :first-child { margin-top: 0; }
 .portal-bubble.prose-roster > :last-child { margin-bottom: 0; }
 
-/* Links in agent work read as links, in the readable accent shade. */
-.portal-root .prose-roster a { color: var(--accent-text); }
+/*
+ * The tenant colour is identity, not state. It fills only the logo mark, the primary button, the active tab
+ * and the "new" dot. Controls, focus and links use ink, so a red brand never reads as an error.
+ */
+.portal-root .prose-roster a {
+  color: var(--ink);
+  text-decoration-color: var(--line-strong);
+}
+.portal-root .prose-roster a:hover { text-decoration-color: var(--ink); }
+.portal-root :focus-visible,
+:root:has(.portal-root) :focus-visible {
+  outline-color: color-mix(in oklab, var(--ink) 55%, transparent);
+}
+.portal-root [role="switch"][data-state="checked"] { background: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .portal-root [role="switch"][data-state="checked"] { background: var(--ink-3); }
+}
+:root[data-theme="dark"] .portal-root [role="switch"][data-state="checked"] { background: var(--ink-3); }
 
 /* Reading view: a document that opens with a heading starts flush with the card. */
 .portal-reading.prose-roster > :first-child { margin-top: 0; }
@@ -88,4 +104,9 @@
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
     padding-right: 20px;
   }
+}
+/* Text fields (ui/field) focus in ink too, including inside portaled dialogs. */
+:root:has(.portal-root) .focus\:border-accent:focus {
+  border-color: var(--ink-3);
+  --tw-ring-color: color-mix(in oklab, var(--ink) 12%, transparent);
 }

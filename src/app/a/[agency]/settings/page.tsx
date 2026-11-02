@@ -27,7 +27,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
   const b = org.branding;
 
   return (
-    <div className="mx-auto w-full max-w-[880px] px-4 py-8 sm:px-6 md:px-10 md:py-12">
+    <div className="mx-auto w-full max-w-[1080px] px-4 py-8 sm:px-6 md:px-10 md:py-12 [&>*]:max-w-[800px]">
       <header className="mb-10">
         <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">Settings</h1>
         <p className="mt-1 text-[14px] text-ink-3">Your agency, your brand, your team and API access.</p>

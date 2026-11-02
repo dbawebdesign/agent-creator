@@ -30,7 +30,10 @@ export const jobs = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (t) => [
-    index("jobs_ready_idx").on(t.queue, t.priority, t.runAt).where(sql`${t.status} = 'queued'`),
+    // Matches the claim's `order by priority desc, run_at` (a plain priority-asc index forced a full sort of the backlog).
+    index("jobs_claim_idx").on(t.queue, t.priority.desc(), t.runAt).where(sql`${t.status} = 'queued'`),
+    // Retention: maintenance.prune deletes finished jobs by age.
+    index("jobs_finished_idx").on(t.finishedAt).where(sql`${t.status} in ('succeeded','failed','dead')`),
     index("jobs_locked_idx").on(t.lockedUntil).where(sql`${t.status} = 'running'`),
     uniqueIndex("jobs_idempotency_uq")
       .on(t.idempotencyKey)
@@ -79,5 +82,5 @@ export const notifications = pgTable(
     readAt: timestamp("read_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [index("notifications_user_created_idx").on(t.userId, t.createdAt)],
+  (t) => [index("notifications_user_created_idx").on(t.userId, t.createdAt), index("notifications_org_kind_idx").on(t.orgId, t.kind)],
 );

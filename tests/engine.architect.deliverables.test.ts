@@ -41,13 +41,13 @@ describe("offline deliverables", () => {
   });
 
   it("answers 'draft a follow-up email to the State Farm adjuster, #SF-44821' with a real email built from the claims CSV", () => {
-    const { system, chunks, memories } = roofer();
+    const { spec, system, chunks, memories } = roofer();
     const d = compose({ kind: "message", title: titleFromRequest("Draft a follow-up email to the State Farm adjuster, #SF-44821"), output: "email_draft", body: "Draft a follow-up email to the State Farm adjuster, #SF-44821", system, knowledge: [CSV, ...chunks.slice(0, 2)], memories, now: NOW });
     expect(d.body).toMatch(/\*\*To:\*\* Kyle Benson <kbenson@statefarm\.example>/);
     expect(d.body).toMatch(/\*\*Subject:\*\* Claim SF-44821/);
     expect(d.body).toMatch(/> Hi Kyle,/);
     expect(d.body).toMatch(/12 days since we last heard back/);
-    expect(d.body).toMatch(/> Milo\n> Summit Peak Roofing/);
+    expect(d.body).toContain(`> ${spec.name}\n> Summit Peak Roofing`); // signed by the agent
     expect(d.body).not.toMatch(/AL-1209|SF-45002/); // only the claim asked about
     expect(d.body).toMatch(/## Needs your decision[\s\S]*deductibles/);
     expect(d.title.length).toBeLessThanOrEqual(60);

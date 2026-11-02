@@ -81,16 +81,8 @@ export function AskComposer({
       }
       setText("");
       setSent({ name: agent.name, conversationId: res.conversationId });
+      // One confirmation: the inline "{name} is on it. Follow along" line (or the thread itself, via onSent).
       if (onSent) onSent(res.conversationId);
-      else
-        toast.success(`Sent to ${agent.name}`, {
-          description: "They'll reply here and in Requests.",
-          action: {
-            label: "View",
-            onClick: () =>
-              router.push(`/p/${slug}/requests/${res.conversationId}`),
-          },
-        });
       router.refresh();
     });
   };
@@ -104,7 +96,7 @@ export function AskComposer({
         }}
         className={cn(
           "flex items-end gap-1.5 rounded-xl border border-line bg-surface p-1.5 shadow-sm transition-[border-color,box-shadow] duration-150",
-          "focus-within:border-accent focus-within:shadow-md focus-within:ring-3 focus-within:ring-[var(--accent-soft)]",
+          "focus-within:border-ink-3 focus-within:shadow-md focus-within:ring-3 focus-within:ring-[color-mix(in_oklab,var(--ink)_12%,transparent)]",
         )}
       >
         {lockAgent || agents.length < 2 ? (
@@ -139,7 +131,7 @@ export function AskComposer({
                     </span>
                   </span>
                   {a.id === agent.id ? (
-                    <Check className="!text-accent-text" aria-hidden />
+                    <Check className="!text-ink" aria-hidden />
                   ) : null}
                 </MenuItem>
               ))}

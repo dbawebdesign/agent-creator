@@ -151,7 +151,7 @@ export default async function TodayPage({
         ))
       ) : !needs.length ? (
         <div className="mt-10 rounded-xl border border-dashed border-line-strong px-6 py-12 text-center">
-          <span className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-accent-soft text-accent-text">
+          <span className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-surface-2 text-ink-2">
             <CalendarClock className="size-5" aria-hidden />
           </span>
           <p className="text-[14.5px] font-medium text-ink">
@@ -166,7 +166,7 @@ export default async function TodayPage({
           </p>
           <Link
             href={`/p/${slug}/team`}
-            className="mt-5 inline-block text-[13px] font-medium text-accent-text hover:underline"
+            className="mt-5 inline-block text-[13px] font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
           >
             Meet your team
           </Link>

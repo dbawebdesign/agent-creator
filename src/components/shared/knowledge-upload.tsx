@@ -9,7 +9,6 @@
 import { CheckCircle2, FileUp, Loader2, X, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useId, useRef, useState } from "react";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 const ACCEPT = ".csv,.tsv,.txt,.md,.json,.html,.htm,.pdf,.docx";
@@ -102,10 +101,8 @@ export function KnowledgeUpload({ orgId, agentId, className }: { orgId: string; 
           update(item.key, { state: "error", message: res.message });
         }
       }
-      if (added > 0) {
-        toast.success(added === 1 ? "File added to knowledge" : `${added} files added to knowledge`);
-        router.refresh();
-      }
+      // Each row already confirms inline; refresh so the sources list picks up the new files (no extra toast).
+      if (added > 0) router.refresh();
     },
     [orgId, agentId, router],
   );

@@ -238,7 +238,7 @@ export function NewAgentFlow({
 
   // Compose
   return (
-    <div className="mx-auto max-w-[720px] animate-rise">
+    <div className="max-w-[720px] animate-rise">
       <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink">Hire a new AI employee</h1>
       <p className="mt-1.5 text-[14.5px] text-ink-3">Paste the discovery call. The Architect turns it into a proposal you can edit, then hire.</p>
 
