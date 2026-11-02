@@ -17,7 +17,8 @@ export type ComposeInput = {
   memories: Snip[];
   now?: Date;
 };
-export type Composed = { title: string; kind: string; body: string; preview: string };
+/** `trace` is the agency-facing "how I put this together" table: recorded in run_steps, never in the client's body. */
+export type Composed = { title: string; kind: string; body: string; preview: string; trace?: string };
 
 // ───────────────────────────────────────────── context ─────────────────────────────────────────────
 
@@ -608,7 +609,7 @@ export function compose(input: ComposeInput): Composed {
   if (!decisions.length && rules.length) decisions.push(`Nothing goes out without approval, per your rule: “${truncate(rules[0]!, 160)}”.`);
   if (decisions.length) lines.push("", "## Needs your decision", "", ...[...new Set(decisions)].map((d) => `- ${d}`));
   if (needs.length) lines.push("", "## What I need from you", "", ...[...new Set(needs)].slice(0, 6).map((n) => `- ${n}`));
-  lines.push("", "## How I put this together", "", "| # | Step | Status | Based on |", "|---|---|---|---|", ...sources.map((s, i) => `| ${i + 1} | ${cell(s.step)} | ${cell(s.status)} | ${cell(s.basis)} |`));
+  const trace = ["| # | Step | Status | Based on |", "|---|---|---|---|", ...sources.map((s, i) => `| ${i + 1} | ${cell(s.step)} | ${cell(s.status)} | ${cell(s.basis)} |`)].join("\n");
 
   const preview = truncate(
     wantsEmail
@@ -616,7 +617,7 @@ export function compose(input: ComposeInput): Composed {
       : `${input.title} is ready${decisions.length ? ` — ${decisions.length} ${decisions.length === 1 ? "item needs" : "items need"} your decision` : ""}.`,
     200,
   );
-  return { title: input.title, kind: input.output, body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), preview };
+  return { title: input.title, kind: input.output, body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), preview, ...(sources.length ? { trace } : {}) };
 }
 
 function needsFrom(step: string, memories: Snip[]): string[] {

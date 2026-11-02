@@ -214,7 +214,7 @@ export async function createApiKeyAction(
       orgId: access.org.id,
       name,
       agentId: agentId ?? null,
-      scopes: ["agents:read", "agents:invoke", "deliverables:read"],
+      // Omitted → DEFAULT_API_SCOPES (includes workflows:run so MCP's run_workflow works).
       createdBy: access.user.id,
       ip: clientIp(h),
     });
@@ -293,7 +293,37 @@ async function issueInvite(
       invitedBy,
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14),
     });
-  return `${env().APP_URL.replace(/\/+$/, "")}/invite/${token}`;
+  const url = `${env().APP_URL.replace(/\/+$/, "")}/invite/${token}`;
+  await emailInvite(orgId, email, url).catch((err) =>
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "invite email failed"),
+  );
+  return url;
+}
+
+/**
+ * Email the invite to the invitee (when an email provider is configured), in the inviting org's brand.
+ * The copyable link the inviter also sees is harmless on its own: accepting needs a verified account.
+ */
+async function emailInvite(orgId: string, to: string, url: string) {
+  const e = env();
+  if (!e.RESEND_API_KEY) return;
+  const [{ orgChain }, { resolveBrand }, { formatFrom, sendEmail }] = await Promise.all([
+    import("@/server/auth/access"),
+    import("@/server/queries/portal"),
+    import("@/server/channels/email"),
+  ]);
+  const chain = await orgChain(orgId);
+  const org = chain[0];
+  if (!org) return;
+  const brand = resolveBrand(chain);
+  await sendEmail({
+    from: formatFrom(brand.name, `team@${e.EMAIL_DOMAIN}`),
+    to: [to],
+    subject: `You're invited to ${org.name}`,
+    text: `You've been invited to join ${org.name} on ${brand.name}.\n\nAccept the invitation:\n${url}\n\nThe link works once and expires in 14 days. If you weren't expecting this, you can ignore it.`,
+    messageId: `<invite-${randomToken(12)}@${e.EMAIL_DOMAIN}>`,
+    idempotencyKey: `invite:${sha256(url)}`,
+  });
 }
 
 const customerInput = z.object({

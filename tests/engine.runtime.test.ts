@@ -137,7 +137,10 @@ describe("runtime (offline model)", () => {
 
     const [d] = await db().select().from(schema.deliverables).where(eq(schema.deliverables.agentId, agentId));
     expect(d!.title).toMatch(/quote kit/i);
-    expect(d!.body).toMatch(/\| # \| Step \| Status \| Based on \|/);
+    // The step trace is agency-facing (run_steps / Activity), never part of the client deliverable.
+    expect(d!.body).not.toMatch(/\| # \| Step \| Status \| Based on \|/);
+    expect(d!.body).not.toMatch(/How I put this together/);
+    expect(steps.some((s) => s.kind === "message" && JSON.stringify(s.data ?? s).includes("How I put this together"))).toBe(true);
     expect(d!.body).toMatch(/## The work/);
     expect(d!.body).toMatch(/20 hours a week/); // grounded in the transcript via knowledge_search
     expect(d!.needsReview).toBe(true);

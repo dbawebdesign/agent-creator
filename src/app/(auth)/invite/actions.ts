@@ -21,6 +21,8 @@ export async function acceptInvite(_prev: { error?: string } | undefined, formDa
     .limit(1);
   if (!inv) return { error: "This invitation has expired or was already used." };
   if (inv.inv.email.toLowerCase() !== user.email.toLowerCase()) return { error: `This invitation is for ${inv.inv.email}. Sign in with that address to accept it.` };
+  // Accepting grants access to someone else's org: the address must be proven, not just typed at sign-up.
+  if (!user.emailVerifiedAt) return { error: "Confirm your email first: sign in with an email link (“Continue with email”), then accept." };
   await db().transaction(async (tx) => {
     await tx.insert(schema.memberships).values({ userId: user.id, orgId: inv.org.id, role: inv.inv.role }).onConflictDoNothing();
     await tx.update(schema.invitations).set({ acceptedAt: new Date() }).where(eq(schema.invitations.id, inv.inv.id));

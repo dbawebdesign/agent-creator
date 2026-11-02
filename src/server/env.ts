@@ -13,6 +13,12 @@ const schema = z.object({
   EMAIL_DOMAIN: z.string().default("agents.roster.local"),
   RESEND_API_KEY: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
+  /**
+   * authserv-id(s) of YOUR receiving MTA's Authentication-Results header (comma-separated, e.g. "mx.resend.com").
+   * Inbound mail is only treated as sender-verified (DMARC/SPF/DKIM) by a header with this id; unset = no
+   * email is ever verified, so members' mail is handled like a stranger's. Required in production with Resend.
+   */
+  EMAIL_AUTHSERV_ID: z.string().optional(),
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),
   TWILIO_MESSAGING_SERVICE_SID: z.string().optional(),
@@ -41,7 +47,9 @@ export function env(): Env {
   if (cached) return cached;
   const parsed = schema.parse(Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== "")));
   if (parsed.NODE_ENV === "production" && process.env.ROSTER_ALLOW_INSECURE_DEFAULTS !== "1") {
-    const missing = (["ENCRYPTION_KEY", "AUTH_SECRET"] as const).filter((k) => !parsed[k]);
+    const missing: string[] = (["ENCRYPTION_KEY", "AUTH_SECRET"] as const).filter((k) => !parsed[k]);
+    // Without it, inbound sender verification fails closed (no email is trusted) — refuse to boot half-configured.
+    if ((parsed.RESEND_API_KEY || parsed.RESEND_WEBHOOK_SECRET) && !parsed.EMAIL_AUTHSERV_ID) missing.push("EMAIL_AUTHSERV_ID");
     if (missing.length) throw new Error(`Missing required env in production: ${missing.join(", ")}`);
   }
   cached = parsed;

@@ -52,6 +52,9 @@ export const memorySave = defineTool({
     kind: z.enum(["fact", "preference", "person", "episode"]).optional(),
     importance: z.number().int().min(1).max(5).optional(),
   }),
+  // Payment details (bank, IBAN, routing/account numbers, "pay to" changes) are a fraud vector: never saved silently.
+  approvalAction: (input) => (mentionsPaymentDetails(input.content) ? "change_payment_details" : null),
+  describe: (i) => `Remember: “${truncate(i.content, 240)}”`,
   async run(input, ctx) {
     const existing = await ctx.db
       .select({ id: schema.memories.id })
@@ -67,12 +70,31 @@ export const memorySave = defineTool({
         kind: input.kind ?? "fact",
         content: input.content,
         importance: input.importance ?? 3,
-        source: `run:${ctx.run.id}`,
+        // Learned from an email/SMS conversation: kept out of prompts and recall until a member confirms it.
+        source: memoryNeedsConfirmation(ctx) ? UNCONFIRMED_MEMORY_SOURCE : `run:${ctx.run.id}`,
       })
       .returning({ id: schema.memories.id });
-    return ok({ saved: true, id: row?.id });
+    return ok({ saved: true, id: row?.id, ...(memoryNeedsConfirmation(ctx) ? { pendingConfirmation: true } : {}) });
   },
 });
+
+/** memories.source for facts learned over email/SMS that a member has not confirmed yet (see knowledge.recallMemories). */
+export const UNCONFIRMED_MEMORY_SOURCE = "unconfirmed";
+
+/** Email and SMS senders can be spoofed, so what a message-triggered run learns there is held for confirmation. */
+function memoryNeedsConfirmation(ctx: ToolContext): boolean {
+  if (ctx.run.input?.kind !== "message") return false;
+  const channel = ctx.trust.participant?.channel;
+  return channel === "email" || channel === "sms";
+}
+
+const PAYMENT_RE =
+  /\b(?:iban|swift(?: code)?|bic(?: code)?|routing (?:number|no)|aba (?:number|routing)|sort code|bank (?:account|details|info(?:rmation)?|transfer|wire)|wire (?:transfer|instructions|details)|ach (?:transfer|details|payment)|remit(?:tance)? (?:to|address|details)|payment (?:details|instructions|info(?:rmation)?))\b|\b(?:pay|paid|payments?|invoices?|deposit)\b[^.\n]{0,40}\b(?:to|into) (?:account|our new account|the new account|a new account)\b|\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){10,30}\b|\baccount (?:number|no\.?|#)\D{0,6}\d{4,}/i;
+
+/** Does this text carry bank/payment details or a change of where money goes? */
+export function mentionsPaymentDetails(text: string): boolean {
+  return PAYMENT_RE.test(text.slice(0, 5_000));
+}
 
 export const createDeliverable = defineTool({
   name: "create_deliverable",
@@ -239,6 +261,7 @@ export const sendMessage = defineTool({
    * org's own default recipient and, on runs without a conversation, email to a member of the org.
    */
   async approvalAction(input, ctx) {
+    if (mentionsPaymentDetails(`${input.subject ?? ""}\n${input.text}`)) return "change_payment_details";
     if (input.channel === "portal") return null;
     const action = `send_external_${input.channel}`;
     const p = ctx.trust.participant;

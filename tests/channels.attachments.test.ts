@@ -8,7 +8,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupOrgs, makeAgent, makeOrg, rid, TEST_ENV, truncateChannelTables } from "./channels.fixtures";
 
 vi.hoisted(() => {
-  Object.assign(process.env, { APP_URL: "https://app.roster.test", EMAIL_DOMAIN: "agents.roster.test", AUTH_SECRET: "test-auth-secret" });
+  Object.assign(process.env, { APP_URL: "https://app.roster.test", EMAIL_DOMAIN: "agents.roster.test", AUTH_SECRET: "test-auth-secret", EMAIL_AUTHSERV_ID: "mx.resend.com" });
   for (const k of ["RESEND_API_KEY", "ANTHROPIC_API_KEY", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_SIGNING_SECRET", "ATTACHMENT_DOWNLOAD_HOSTS"]) delete process.env[k];
 });
 

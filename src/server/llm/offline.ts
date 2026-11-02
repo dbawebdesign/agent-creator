@@ -254,8 +254,9 @@ export const offlineProvider: LlmProvider = {
     const needsDeliverable = brief.kind !== "message" || wantsDocument(brief.body);
     if (needsDeliverable && has("create_deliverable") && !called("create_deliverable")) {
       const title = brief.kind === "message" ? titleFromRequest(brief.body) : brief.title;
-      const d = compose({ kind: brief.kind, title, output: brief.kind === "message" ? (/\b(?:email|letter|reply)\b/i.test(brief.body) ? "email_draft" : "document") : brief.output, body: brief.body, system: req.system, knowledge, memories });
-      return makeResponse(req, "Writing it up.", [{ name: "create_deliverable", input: d }]);
+      const { trace, ...d } = compose({ kind: brief.kind, title, output: brief.kind === "message" ? (/\b(?:email|letter|reply)\b/i.test(brief.body) ? "email_draft" : "document") : brief.output, body: brief.body, system: req.system, knowledge, memories });
+      // The step trace goes in this turn's text (run_steps → agency Activity view), not in the client's deliverable.
+      return makeResponse(req, trace ? `Writing it up. How I put this together:\n${trace}` : "Writing it up.", [{ name: "create_deliverable", input: d }]);
     }
 
     // 4. Wrap up with a short, specific summary (this is the chat reply for message runs).

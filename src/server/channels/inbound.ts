@@ -289,6 +289,28 @@ function header(headers: unknown, name: string): string | null {
   return v === null ? null : v.slice(0, 8192);
 }
 
+/** Every value of a repeated header, topmost first (array form, or an object whose value is an array). Max 20. */
+function headerAll(headers: unknown, name: string): string[] {
+  const n = name.toLowerCase();
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    const s = str(v);
+    if (s && out.length < 20) out.push(s.slice(0, 8192));
+  };
+  if (Array.isArray(headers)) {
+    for (const h of headers) {
+      if (h && typeof h === "object" && String((h as { name?: unknown }).name ?? "").toLowerCase() === n) push((h as { value?: unknown }).value);
+    }
+  } else if (headers && typeof headers === "object") {
+    for (const [k, v] of Object.entries(headers as Record<string, unknown>)) {
+      if (k.toLowerCase() !== n) continue;
+      if (Array.isArray(v)) v.forEach(push);
+      else push(v);
+    }
+  }
+  return out;
+}
+
 function headerRaw(headers: unknown, name: string): string | null {
   const n = name.toLowerCase();
   if (Array.isArray(headers)) {
@@ -446,7 +468,7 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const inReplyTo = parseMessageIds(header(headers, "in-reply-to") ?? str(full.in_reply_to));
   const references = parseMessageIds(header(headers, "references") ?? str(full.references));
   const isAuto = isAutomatedEmail(headers, from.email, header(headers, "content-type"));
-  const senderAuth = emailSenderAuth(header(headers, "authentication-results"), from.email);
+  const senderAuth = emailSenderAuth(headerAll(headers, "authentication-results"), from.email);
 
   const subject = str(full.subject)?.slice(0, 300) ?? null;
   // Both helpers cap their input before parsing (see email.ts); never feed unbounded HTML to regexes.
@@ -502,19 +524,26 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
 }
 
 /**
- * Sender authentication verdict from the receiving MTA's Authentication-Results header (the topmost one, which
- * our provider adds). DMARC decides when present; otherwise an SPF or DKIM pass counts only when its domain
- * aligns with the From domain. Missing/neutral results are "none" (unverified), never "pass".
- * Set EMAIL_AUTHSERV_ID to only trust results stamped by your receiving MTA.
+ * Sender authentication verdict from Authentication-Results (RFC 8601), FAIL-CLOSED:
+ * - Only headers whose authserv-id is in EMAIL_AUTHSERV_ID (comma-separated; e.g. "mx.resend.com") count, and
+ *   of those only the topmost — the one our receiving MTA prepended. Anything the sender wrote with another
+ *   id ("mx.evil.example; dmarc=pass") is ignored.
+ * - EMAIL_AUTHSERV_ID unset → always "none" (unverified): such mail is never trusted as a member. env()
+ *   requires it in production whenever Resend is configured.
+ * Within the trusted header, DMARC decides when present; otherwise an SPF or DKIM pass counts only when its
+ * domain aligns with the From domain. Missing/neutral results are "none", never "pass".
+ * Resend's webhook/API carry no structured SPF/DKIM/DMARC fields today, so the header is the only source.
  */
-export function emailSenderAuth(authResults: string | null, fromEmail: string): SenderAuth {
-  if (!authResults) return "none";
-  const r = authResults.slice(0, 4096).toLowerCase();
-  const trusted = process.env.EMAIL_AUTHSERV_ID?.trim().toLowerCase();
-  if (trusted) {
-    const servId = r.split(";", 1)[0]!.trim().split(/\s/, 1)[0];
-    if (servId !== trusted) return "none";
-  }
+export function emailSenderAuth(authResults: string | readonly string[] | null, fromEmail: string, authservIds = process.env.EMAIL_AUTHSERV_ID): SenderAuth {
+  const trusted = (authservIds ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (trusted.length === 0) return "none";
+  const all = authResults === null ? [] : typeof authResults === "string" ? [authResults] : authResults;
+  const mine = all.find((h) => trusted.includes(authservId(h)));
+  if (!mine) return "none";
+  const r = mine.slice(0, 4096).toLowerCase();
   const fromDomain = fromEmail.split("@")[1] ?? "";
   const aligned = (d: string | undefined) => !!d && !!fromDomain && (d === fromDomain || d.endsWith(`.${fromDomain}`) || fromDomain.endsWith(`.${d}`));
   const dmarc = /\bdmarc=([a-z]+)/.exec(r)?.[1];
@@ -527,6 +556,14 @@ export function emailSenderAuth(authResults: string | null, fromEmail: string): 
   if (dkimPass || (spf === "pass" && aligned(mailFrom))) return "pass";
   if ((spf === "fail" || spf === "softfail") && !/\bdkim=pass\b/.test(r)) return "fail";
   return "none";
+}
+
+/** The authserv-id of one Authentication-Results value: its first token, before any ";" or version/comment. */
+function authservId(value: string): string {
+  const head = value.slice(0, 300).split(";", 1)[0]!.trim();
+  let end = 0;
+  while (end < head.length && end < 255 && !/[\s(]/.test(head[end]!)) end++;
+  return head.slice(0, end).toLowerCase();
 }
 
 const AUTO_SENDER = /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|bounces?|notifications?)([+._-]|@|$)/;

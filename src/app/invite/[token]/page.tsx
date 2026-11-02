@@ -81,15 +81,17 @@ export default async function InvitePage({
   const email = row.inv.email.toLowerCase();
   const current = await getCurrentUser();
   const mismatch = current && current.email.toLowerCase() !== email;
+  // Joining needs a signed-in, verified account for the invited address. Anyone else confirms the address by
+  // email link first (the link visible to the inviter proves nothing on its own).
   const existing = current ? null : await findUserByEmail(email);
-  // Accounts that only ever signed in by email link have no password: send them a link instead of asking for one.
-  const mode = current
-    ? "join"
-    : existing
-      ? existing.passwordHash
+  const mode: "join" | "verify" | "signin" | "magic" =
+    current && !mismatch
+      ? current.emailVerifiedAt
+        ? "join"
+        : "verify"
+      : existing?.passwordHash && existing.emailVerifiedAt
         ? "signin"
-        : "magic"
-      : "signup";
+        : "magic";
   const inviter = row.inviter?.split(/\s+/)[0];
   const forCustomer = org.kind === "customer";
 

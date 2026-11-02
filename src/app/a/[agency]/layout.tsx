@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { StudioShell } from "@/components/studio/shell";
 import { Toaster } from "@/components/shared/toaster";
@@ -22,6 +23,14 @@ export default async function StudioLayout({ children, params }: { children: Rea
         agents={shell.agents}
         signOut={signOut}
       >
+        {!access.user.emailVerifiedAt ? (
+          <div role="status" className="border-b border-warn/25 bg-warn-soft px-4 py-2.5 text-[13px] text-ink-2 sm:px-6 md:px-10">
+            <span className="font-medium text-ink">Verify your email.</span> Inviting people and billing unlock once you confirm {access.user.email}.{" "}
+            <Link href={`/magic-link?next=${encodeURIComponent(`/a/${slug}`)}`} className="font-medium text-ink underline underline-offset-2">
+              Send me a link
+            </Link>
+          </div>
+        ) : null}
         {children}
       </StudioShell>
       <Toaster />

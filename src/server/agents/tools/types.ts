@@ -49,8 +49,11 @@ export type ToolDef<S extends z.ZodType = z.ZodType> = {
  * "send_external_email" (on by default) is the umbrella switch for every send that leaves the run's conversation,
  * so send_external_sms / send_external_slack are gated by it too; write_client_system also gates computer_bash.
  */
+/** Gated for every agent regardless of configuration. */
+export const ALWAYS_GATED = new Set(["change_payment_details"]);
+
 export function requiresApproval(action: string, requireApprovalFor: ReadonlySet<string>): boolean {
-  if (requireApprovalFor.has(action)) return true;
+  if (ALWAYS_GATED.has(action) || requireApprovalFor.has(action)) return true;
   if (action.startsWith("send_external_") && requireApprovalFor.has("send_external_email")) return true;
   // Shell commands can change client systems too.
   return action === "computer_bash" && requireApprovalFor.has("write_client_system");

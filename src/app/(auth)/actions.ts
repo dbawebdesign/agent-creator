@@ -26,9 +26,29 @@ export type AuthState = { error?: string; fieldErrors?: Record<string, string>; 
 
 const email = z.string().trim().toLowerCase().email("Enter a valid email address").max(254);
 
-function safeNext(next: unknown): string | null {
-  if (typeof next !== "string" || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return null;
-  return next;
+/**
+ * Same-origin path only. Rejects backslashes and control characters outright (browsers strip tabs/newlines, so
+ * "/\t/evil.example" would become "//evil.example"), then parses against APP_URL and returns pathname + search.
+ */
+async function safeNext(next: unknown): Promise<string | null> {
+  if (typeof next !== "string" || next.length === 0 || next.length > 500) return null;
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return null;
+  if (!next.startsWith("/") || next.startsWith("//")) return null;
+  try {
+    const base = new URL(env().APP_URL);
+    const u = new URL(next, base);
+    if (u.origin !== base.origin) return null;
+    const out = u.pathname + u.search;
+    return out.startsWith("/") && !out.startsWith("//") ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Per-IP limiter, skipped when the IP is unknown (a shared "unknown" bucket would let one client lock out everyone). */
+async function ipLimit(prefix: string, ip: string | null, limit: number, windowSec: number) {
+  if (!ip) return { ok: true as const, resetAt: new Date() };
+  return rateLimit(`${prefix}:${ip}`, limit, windowSec);
 }
 
 function fieldErrors(err: z.ZodError): Record<string, string> {
@@ -56,10 +76,10 @@ const signInSchema = z.object({ email, password: z.string().min(1, "Enter your p
 export async function signIn(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const parsed = signInSchema.safeParse({ email: formData.get("email"), password: formData.get("password") });
   if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error), email: String(formData.get("email") ?? "") };
-  const ip = clientIp(await headers()) ?? "unknown";
+  const ip = clientIp(await headers());
   const failKey = `login:fail:${parsed.data.email}`;
   // Every attempt counts against the network; only failures count against the account.
-  const byIp = await rateLimit(`login:ip:${ip}`, 100, 15 * 60);
+  const byIp = await ipLimit("login:ip", ip, 100, 15 * 60);
   const locked = await failuresLocked(failKey, 8);
   if (!byIp.ok || locked) {
     const resetAt = locked ?? byIp.resetAt;
@@ -74,7 +94,7 @@ export async function signIn(_prev: AuthState, formData: FormData): Promise<Auth
   }
   await createSession(user.id);
   await audit({ actorType: "user", actorId: user.id, action: "auth.login", ip });
-  redirect(safeNext(formData.get("next")) ?? (await homePathFor(user.id)));
+  redirect((await safeNext(formData.get("next"))) ?? (await homePathFor(user.id)));
 }
 
 const signUpSchema = z.object({
@@ -90,8 +110,8 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
     password: formData.get("password"),
   });
   if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error), email: String(formData.get("email") ?? "") };
-  const ip = clientIp(await headers()) ?? "unknown";
-  const rl = await rateLimit(`signup:ip:${ip}`, 10, 60 * 60);
+  const ip = clientIp(await headers());
+  const rl = await ipLimit("signup:ip", ip, 10, 60 * 60);
   if (!rl.ok) return { error: "Too many sign-ups from this network. Try again later." };
   if (await findUserByEmail(parsed.data.email)) {
     return { fieldErrors: { email: "An account with this email already exists. Sign in instead." }, email: parsed.data.email };
@@ -105,14 +125,11 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
 export async function requestMagicLink(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const parsed = email.safeParse(formData.get("email"));
   if (!parsed.success) return { fieldErrors: { email: parsed.error.issues[0]?.message ?? "Enter a valid email" } };
-  const ip = clientIp(await headers()) ?? "unknown";
-  const [a, b] = await Promise.all([
-    rateLimit(`magic:email:${parsed.data}`, 5, 15 * 60),
-    rateLimit(`magic:ip:${ip}`, 20, 15 * 60),
-  ]);
+  const ip = clientIp(await headers());
+  const [a, b] = await Promise.all([rateLimit(`magic:email:${parsed.data}`, 5, 15 * 60), ipLimit("magic:ip", ip, 20, 15 * 60)]);
   if (!a.ok || !b.ok) return { error: "Too many links requested. Try again in a few minutes.", email: parsed.data };
   const token = await issueMagicLink(parsed.data);
-  const next = safeNext(formData.get("next"));
+  const next = await safeNext(formData.get("next"));
   const link = `${env().APP_URL}/magic-link/verify?token=${encodeURIComponent(token)}${next ? `&next=${encodeURIComponent(next)}` : ""}`;
   const e = env();
   if (e.RESEND_API_KEY) {
@@ -150,12 +167,19 @@ export async function verifyMagicLink(_prev: AuthState, formData: FormData): Pro
     user = await createUser({ email: addr });
     isNew = true;
   }
+  const ip = clientIp(await headers());
   if (!user.emailVerifiedAt) {
-    await db().update(schema.users).set({ emailVerifiedAt: new Date() }).where(eq(schema.users.id, user.id));
+    // First proof that this person owns the address. Anyone who pre-registered it with a password must not keep
+    // access: drop the unverified password and every existing session before signing the real owner in.
+    await db().update(schema.users).set({ emailVerifiedAt: new Date(), ...(isNew ? {} : { passwordHash: null }) }).where(eq(schema.users.id, user.id));
+    if (!isNew) {
+      const killed = await db().delete(schema.sessions).where(eq(schema.sessions.userId, user.id)).returning({ id: schema.sessions.id });
+      await audit({ actorType: "user", actorId: user.id, action: "auth.email_verified", metadata: { clearedPassword: !!user.passwordHash, sessionsRevoked: killed.length }, ip });
+    }
   }
   await createSession(user.id);
-  await audit({ actorType: "user", actorId: user.id, action: "auth.magic_link", ip: clientIp(await headers()) });
-  redirect(safeNext(formData.get("next")) ?? (isNew ? "/onboarding" : await homePathFor(user.id)));
+  await audit({ actorType: "user", actorId: user.id, action: "auth.magic_link", ip });
+  redirect((await safeNext(formData.get("next"))) ?? (isNew ? "/onboarding" : await homePathFor(user.id)));
 }
 
 export async function signOut(): Promise<void> {

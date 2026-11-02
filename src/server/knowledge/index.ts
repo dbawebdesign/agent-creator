@@ -187,6 +187,7 @@ export async function recallMemories(
           + 1.0 / (1 + extract(epoch from (now() - coalesce(last_recalled_at, created_at))) / 86400 / 30)) as score
       from memories
       where org_id = ${input.orgId} and agent_id = ${input.agentId}
+        and source is distinct from 'unconfirmed' -- learned over email/SMS, waiting for a member to confirm
       order by score desc, created_at desc
       limit ${limit}`)
   ).rows as MemoryHit[];

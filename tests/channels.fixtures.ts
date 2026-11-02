@@ -13,6 +13,7 @@ export const TEST_ENV = {
   TWILIO_AUTH_TOKEN: "twilio-test-auth-token",
   TWILIO_ACCOUNT_SID: "AC00000000000000000000000000000000",
   SLACK_SIGNING_SECRET: "slack-test-signing-secret",
+  EMAIL_AUTHSERV_ID: "mx.resend.com",
 };
 
 export function applyTestEnv(extra: Record<string, string | undefined> = {}) {

@@ -10,7 +10,7 @@ import { clientIp } from "@/server/auth/session";
 import { audit } from "@/server/security/audit";
 import { randomToken, sha256 } from "@/server/security/crypto";
 import { API_SCOPES, apiScope, createApiKey, revokeApiKey } from "@/server/api/keys";
-import { fail, insertClientOrg, studio, studioClient, type Result } from "./ctx";
+import { fail, insertClientOrg, requireVerified, studio, studioClient, type Result } from "./ctx";
 
 const uuid = z.uuid();
 const INVITE_TTL = 1000 * 60 * 60 * 24 * 7;
@@ -59,6 +59,7 @@ export async function createClient(slug: string, raw: z.input<typeof clientInput
 export async function setClientPlan(slug: string, clientId: string, planId: string | null): Promise<Result> {
   try {
     const ctx = await studioClient(slug, clientId, "admin");
+    requireVerified(ctx);
     await db()
       .update(schema.subscriptions)
       .set({ status: "canceled", canceledAt: new Date() })
@@ -102,9 +103,12 @@ export async function inviteClientOwner(slug: string, clientId: string, email: s
   const parsed = inviteInput.safeParse({ email, role: "owner" });
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a valid email" };
   try {
-    const ctx = await studioClient(slug, clientId, "member");
-    const link = await createInvite(ctx.client.id, parsed.data.email, "owner", ctx.access.user.id);
-    await audit({ orgId: ctx.client.id, actorType: "user", actorId: ctx.access.user.id, action: "invitation.created", metadata: { email: parsed.data.email, role: "owner" }, ip: clientIp(await headers()) });
+    const ctx = await studioClient(slug, clientId, "admin");
+    requireVerified(ctx);
+    // Never grant more than the inviter holds: agency owners invite client owners, agency admins invite client admins.
+    const role = ctx.access.role === "owner" ? "owner" : "admin";
+    const link = await createInvite(ctx.client.id, parsed.data.email, role, ctx.access.user.id);
+    await audit({ orgId: ctx.client.id, actorType: "user", actorId: ctx.access.user.id, action: "invitation.created", metadata: { email: parsed.data.email, role }, ip: clientIp(await headers()) });
     revalidatePath(`/a/${slug}/clients`, "layout");
     return { ok: true, link: env().NODE_ENV === "production" ? null : link };
   } catch (err) {
@@ -119,6 +123,7 @@ export async function inviteMember(slug: string, raw: z.input<typeof inviteInput
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a valid email" };
   try {
     const ctx = await studio(slug, "admin");
+    requireVerified(ctx);
     if (parsed.data.role === "owner" && ctx.access.role !== "owner") return { ok: false, error: "Only owners can invite owners" };
     const link = await createInvite(ctx.agency.id, parsed.data.email, parsed.data.role, ctx.access.user.id);
     await audit({ orgId: ctx.agency.id, actorType: "user", actorId: ctx.access.user.id, action: "invitation.created", metadata: { email: parsed.data.email, role: parsed.data.role } });
@@ -206,6 +211,7 @@ export async function savePlan(slug: string, planId: string | null, raw: z.input
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the form" };
   try {
     const ctx = await studio(slug, "admin");
+    requireVerified(ctx);
     const values = {
       name: parsed.data.name,
       description: parsed.data.description || null,
@@ -231,6 +237,7 @@ export async function savePlan(slug: string, planId: string | null, raw: z.input
 export async function setPlanActive(slug: string, planId: string, active: boolean): Promise<Result> {
   try {
     const ctx = await studio(slug, "admin");
+    requireVerified(ctx);
     await db().update(schema.plans).set({ active: !!active }).where(and(eq(schema.plans.id, planId), eq(schema.plans.orgId, ctx.agency.id)));
     revalidatePath(`/a/${slug}/billing`);
     return { ok: true };

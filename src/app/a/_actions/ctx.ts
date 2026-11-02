@@ -5,7 +5,10 @@ import { db, schema } from "@/server/db/client";
 import { slugify } from "@/lib/utils";
 import { notFound } from "next/navigation";
 import { requireOrg, type Role } from "@/server/auth/access";
-import type { Actor } from "@/server/services/engine";
+import { EngineInputError, EngineNotFoundError, type Actor } from "@/server/services/engine";
+import { ApiKeyError } from "@/server/api/keys";
+import { ChannelError } from "@/server/channels/service";
+import { logger } from "@/server/lib/logger";
 import { agencyOrgs, getAgent } from "@/server/queries/studio";
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
@@ -33,13 +36,28 @@ export async function studioClient(slug: string, clientId: string, min: Role = "
   return { ...ctx, client: org };
 }
 
+/** An error whose message is written for the person using the Studio. Everything else is logged, not shown. */
+export class UserError extends Error {}
+
+const SAFE_ERRORS = [UserError, EngineInputError, EngineNotFoundError, ApiKeyError, ChannelError];
+
 export function fail(err: unknown, fallback = "Something went wrong. Try again."): { ok: false; error: string } {
   if (err && typeof err === "object" && "digest" in err && typeof (err as { digest?: unknown }).digest === "string") {
     const d = (err as { digest: string }).digest;
     if (d.startsWith("NEXT_REDIRECT") || d.startsWith("NEXT_HTTP_ERROR_FALLBACK") || d === "NEXT_NOT_FOUND") throw err;
   }
-  const msg = err instanceof Error && err.message && err.message !== "not implemented" ? err.message : fallback;
-  return { ok: false, error: msg.length > 160 ? fallback : msg };
+  if (err instanceof Error && SAFE_ERRORS.some((C) => err instanceof C) && err.message) {
+    return { ok: false, error: err.message.length > 160 ? fallback : err.message };
+  }
+  // Database and library errors can carry SQL text and parameters: keep them server-side, trimmed of params.
+  const e = err instanceof Error ? err : new Error(String(err));
+  logger.error({ err: { name: e.name, message: e.message.split(/\nparams:/i)[0]?.slice(0, 300), code: (e as { code?: unknown }).code } }, "studio action failed");
+  return { ok: false, error: fallback };
+}
+
+/** Inviting people and billing need a proven email address (blocks pre-registration takeover of an agency). */
+export function requireVerified(ctx: { access: { user: { emailVerifiedAt: Date | null } } }) {
+  if (!ctx.access.user.emailVerifiedAt) throw new UserError("Verify your email first. Use the link in the banner at the top of the Studio.");
 }
 
 async function uniqueSlug(base: string) {

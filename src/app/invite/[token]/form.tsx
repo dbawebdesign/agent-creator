@@ -4,7 +4,6 @@ import { useActionState } from "react";
 import { Mail } from "lucide-react";
 import { requestMagicLink, type AuthState } from "@/app/(auth)/actions";
 import { SubmitButton } from "@/components/shared/submit-button";
-import { Field, Input } from "@/components/ui/field";
 import { acceptInvite, type InviteState } from "./actions";
 
 export function InviteForm({
@@ -14,7 +13,8 @@ export function InviteForm({
   orgName,
 }: {
   token: string;
-  mode: "join" | "signin" | "signup" | "magic";
+  /** join: signed in and verified. verify: signed in, email unconfirmed. signin: has a password. magic: everyone else. */
+  mode: "join" | "verify" | "signin" | "magic";
   email: string;
   orgName: string;
 }) {
@@ -22,73 +22,49 @@ export function InviteForm({
     acceptInvite,
     undefined,
   );
-  if (mode === "magic")
-    return <EmailLink token={token} email={email} primary />;
-  return (
-    <>
-      <form action={action} className="space-y-4">
-        <input type="hidden" name="token" value={token} />
-        {mode !== "join" ? (
-          <Field label="Email" htmlFor="inv-email">
-            <Input
-              id="inv-email"
-              value={email}
-              readOnly
-              disabled
-              className="bg-surface-2"
-            />
-          </Field>
-        ) : null}
-        {mode === "signup" ? (
-          <Field label="Your name" htmlFor="inv-name">
-            <Input
-              id="inv-name"
-              name="name"
-              autoComplete="name"
-              placeholder="Jordan Lee"
-              maxLength={80}
-              autoFocus
-            />
-          </Field>
-        ) : null}
-        {mode !== "join" ? (
-          <Field
-            label={mode === "signup" ? "Create a password" : "Password"}
-            htmlFor="inv-pw"
-            hint={mode === "signup" ? "At least 8 characters." : undefined}
-          >
-            <Input
-              id="inv-pw"
-              name="password"
-              type="password"
-              required
-              minLength={mode === "signup" ? 8 : 1}
-              autoComplete={
-                mode === "signup" ? "new-password" : "current-password"
-              }
-              autoFocus={mode === "signin"}
-            />
-          </Field>
-        ) : null}
-        {state?.error ? (
-          <p
-            className="rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad"
-            role="alert"
-          >
-            {state.error}
+  if (mode !== "join") {
+    return (
+      <div>
+        <EmailLink
+          token={token}
+          email={email}
+          primary
+          verify={mode === "verify"}
+        />
+        {mode === "signin" ? (
+          <p className="mt-5 text-center text-[13px] text-ink-3">
+            Or{" "}
+            <a
+              href={`/login?next=${encodeURIComponent(`/invite/${token}`)}`}
+              className="font-medium text-ink-2 underline-offset-2 hover:underline"
+            >
+              sign in with your password
+            </a>
           </p>
         ) : null}
-        <SubmitButton
-          variant="accent"
-          size="lg"
-          className="w-full"
-          pendingLabel="Joining…"
+      </div>
+    );
+  }
+  return (
+    <form action={action} className="space-y-4">
+      <input type="hidden" name="token" value={token} />
+      {state?.error ? (
+        <p
+          className="rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad"
+          role="alert"
         >
-          Join {orgName}
-        </SubmitButton>
-      </form>
-      {mode !== "join" ? <EmailLink token={token} email={email} /> : null}
-    </>
+          {state.error}
+        </p>
+      ) : null}
+      <SubmitButton
+        variant="accent"
+        size="lg"
+        className="w-full"
+        pendingLabel="Joining…"
+      >
+        Join {orgName}
+      </SubmitButton>
+    </form>
   );
 }
 
@@ -101,10 +77,12 @@ function EmailLink({
   token,
   email,
   primary,
+  verify,
 }: {
   token: string;
   email: string;
   primary?: boolean;
+  verify?: boolean;
 }) {
   const [state, action] = useActionState<AuthState, FormData>(
     requestMagicLink,
@@ -143,9 +121,12 @@ function EmailLink({
       <input type="hidden" name="next" value={`/invite/${token}`} />
       {primary ? (
         <p className="text-[13.5px] text-ink-3">
-          You already have an account as{" "}
-          <span className="font-medium text-ink-2">{email}</span>. We’ll email
-          you a sign-in link, then you can join.
+          {verify
+            ? "First, confirm it’s really you."
+            : "To keep this workspace safe, we confirm it’s you."}{" "}
+          We’ll email a sign-in link to{" "}
+          <span className="font-medium text-ink-2">{email}</span>. Open it and
+          you’ll come straight back here to join.
         </p>
       ) : null}
       {state?.error || state?.fieldErrors?.email ? (
@@ -162,8 +143,7 @@ function EmailLink({
         className="w-full"
         pendingLabel="Sending…"
       >
-        <Mail aria-hidden />{" "}
-        {primary ? "Email me a sign-in link" : "Use an email link instead"}
+        <Mail aria-hidden /> Email me a sign-in link
       </SubmitButton>
     </form>
   );

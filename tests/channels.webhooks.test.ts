@@ -255,17 +255,37 @@ describe("Resend (Svix) webhook", () => {
 describe("inbound trust signals and volume caps", () => {
   it("derives senderAuth from Authentication-Results (DMARC first, aligned SPF/DKIM, missing = none)", () => {
     const from = "dana@brandlord.co";
-    expect(emailSenderAuth(null, from)).toBe("none");
-    expect(emailSenderAuth("mx.resend.com; dmarc=pass header.from=brandlord.co", from)).toBe("pass");
-    expect(emailSenderAuth("mx.resend.com; spf=pass smtp.mailfrom=brandlord.co; dmarc=fail", from)).toBe("fail");
-    expect(emailSenderAuth("mx.resend.com; dkim=pass header.d=mail.brandlord.co", from)).toBe("pass");
-    expect(emailSenderAuth("mx.resend.com; dkim=pass header.d=evil.example; spf=pass smtp.mailfrom=bounce@evil.example", from)).toBe("none");
-    expect(emailSenderAuth("mx.resend.com; spf=softfail smtp.mailfrom=brandlord.co; dkim=none", from)).toBe("fail");
-    expect(emailSenderAuth("mx.resend.com; spf=neutral", from)).toBe("none");
-    process.env.EMAIL_AUTHSERV_ID = "mx.resend.com";
-    expect(emailSenderAuth("attacker.example; dmarc=pass", from)).toBe("none");
-    expect(emailSenderAuth("mx.resend.com; dmarc=pass", from)).toBe("pass");
+    const id = "mx.resend.com";
+    expect(emailSenderAuth(null, from, id)).toBe("none");
+    expect(emailSenderAuth("mx.resend.com; dmarc=pass header.from=brandlord.co", from, id)).toBe("pass");
+    expect(emailSenderAuth("mx.resend.com; spf=pass smtp.mailfrom=brandlord.co; dmarc=fail", from, id)).toBe("fail");
+    expect(emailSenderAuth("mx.resend.com; dkim=pass header.d=mail.brandlord.co", from, id)).toBe("pass");
+    expect(emailSenderAuth("mx.resend.com; dkim=pass header.d=evil.example; spf=pass smtp.mailfrom=bounce@evil.example", from, id)).toBe("none");
+    expect(emailSenderAuth("mx.resend.com; spf=softfail smtp.mailfrom=brandlord.co; dkim=none", from, id)).toBe("fail");
+    expect(emailSenderAuth("mx.resend.com; spf=neutral", from, id)).toBe("none");
+    expect(emailSenderAuth("MX.Resend.com 1; dmarc=pass", from, id)).toBe("pass"); // version token, case
+    expect(emailSenderAuth("mx.resend.com (comment); dmarc=pass", from, id)).toBe("pass");
+  });
+
+  it("security r2 H1: fails closed — only our receiver's authserv-id counts, and EMAIL_AUTHSERV_ID unset = none", () => {
+    const from = "owner@brandlord.co";
+    // Unset: nothing is ever verified, whatever the header says.
+    const saved = process.env.EMAIL_AUTHSERV_ID;
     delete process.env.EMAIL_AUTHSERV_ID;
+    try {
+      expect(emailSenderAuth("mx.resend.com; dmarc=pass header.from=brandlord.co", from)).toBe("none");
+    } finally {
+      if (saved !== undefined) process.env.EMAIL_AUTHSERV_ID = saved;
+    }
+    expect(emailSenderAuth("mx.resend.com; dmarc=pass header.from=brandlord.co", from, "")).toBe("none");
+    // The critic's forged header (attacker's own authserv-id).
+    expect(emailSenderAuth(["mx.evil.example; dmarc=pass header.from=brandlord.co"], from, "mx.resend.com")).toBe("none");
+    expect(emailSenderAuth(["mx.resend.com.evil.example; dmarc=pass"], from, "mx.resend.com")).toBe("none");
+    // Our receiver's header is topmost; a forged one with our id further down is ignored.
+    expect(emailSenderAuth(["mx.resend.com; dmarc=fail", "mx.resend.com; dmarc=pass"], from, "mx.resend.com")).toBe("fail");
+    expect(emailSenderAuth(["mx.evil.example; dmarc=pass", "mx.resend.com; dmarc=fail"], from, "mx.resend.com")).toBe("fail");
+    // Several ids may be configured.
+    expect(emailSenderAuth(["inbound.example; dmarc=pass"], from, "mx.resend.com, inbound.example")).toBe("pass");
   });
 
   it("recognizes automated mail (lists, bounces, auto-replies)", () => {
