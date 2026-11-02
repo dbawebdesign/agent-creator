@@ -112,7 +112,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
           <SectionHeading title="Clients and margin" count={totals.clients} action={<Badge tone="accent">Agency only</Badge>} />
           <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-xs sm:hidden">
             {rows.map((m) => {
-              const mg = m.priceCents ? ((m.priceCents - m.costCents) / m.priceCents) * 100 : null;
+              const mg = m.priceCents && m.billed ? ((m.priceCents - m.costCents) / m.priceCents) * 100 : null; // not-billed rows: "—", never a margin
               return (
                 <li key={m.id}>
                   <Link href={`/a/${slug}/clients/${m.slug}`} className="tabular flex items-start gap-3 px-4 py-3 text-[13px]">
@@ -128,7 +128,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
                         </div>
                       ) : null}
                     </div>
-                    <span className={cn("shrink-0 text-right text-[14px] font-semibold", mg === null || !m.billed ? "text-ink-3" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>
+                    <span className={cn("shrink-0 text-right text-[14px] font-semibold", mg === null ? "text-ink-3" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>
                       {mg === null ? "—" : pct(mg)}
                       <span className="block text-[11px] font-normal text-ink-3">margin</span>
                     </span>
@@ -150,7 +150,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
               </thead>
               <tbody className="divide-y divide-line">
                 {rows.map((m) => {
-                  const mg = m.priceCents ? ((m.priceCents - m.costCents) / m.priceCents) * 100 : null;
+                  const mg = m.priceCents && m.billed ? ((m.priceCents - m.costCents) / m.priceCents) * 100 : null; // not-billed rows: "—", never a margin
                   return (
                     <tr key={m.id} className="tabular">
                       <td className="px-5 py-3">
@@ -169,7 +169,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
                       </td>
                       <td className="px-3 py-3 text-right text-ink-2">{m.priceCents ? money(m.priceCents) : <span className="text-ink-3">—</span>}</td>
                       <td className="px-3 py-3 text-right text-ink-2">{money(Math.round(m.costCents))}</td>
-                      <td className={cn("px-5 py-3 text-right font-medium", mg === null || !m.billed ? "text-ink-3" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>{mg === null ? "—" : pct(mg)}</td>
+                      <td className={cn("px-5 py-3 text-right font-medium", mg === null ? "text-ink-3" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>{mg === null ? "—" : pct(mg)}</td>
                     </tr>
                   );
                 })}
