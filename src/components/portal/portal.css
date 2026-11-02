@@ -1,0 +1,57 @@
+/*
+ * Portal tenant branding. The layout sets --brand / --brand-ink on .portal-root; we re-point both the raw
+ * tokens and Tailwind's resolved --color-* tokens (those are computed at :root, so they must be re-declared).
+ */
+.portal-root[data-brand] {
+  --accent: var(--brand);
+  --accent-ink: var(--brand-ink);
+  --accent-soft: color-mix(in oklab, var(--brand) 9%, transparent);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .portal-root[data-brand] {
+    --accent: color-mix(in oklab, var(--brand) 72%, white);
+    --accent-ink: #0c0c0e;
+    --accent-soft: color-mix(in oklab, var(--brand) 20%, transparent);
+  }
+}
+:root[data-theme="dark"] .portal-root[data-brand] {
+  --accent: color-mix(in oklab, var(--brand) 72%, white);
+  --accent-ink: #0c0c0e;
+  --accent-soft: color-mix(in oklab, var(--brand) 20%, transparent);
+}
+
+.portal-root {
+  min-height: 100dvh;
+  background: var(--canvas);
+}
+
+/* Reading view: a little roomier than the default prose. */
+.portal-reading.prose-roster {
+  font-size: 15.5px;
+  line-height: 1.75;
+}
+.portal-reading.prose-roster h1 { font-size: 1.4em; }
+.portal-reading.prose-roster h2 { font-size: 1.15em; margin-top: 1.9em; }
+.portal-reading.prose-roster table { font-size: 13.5px; }
+.portal-reading.prose-roster th { white-space: nowrap; }
+.portal-reading.prose-roster td, .portal-reading.prose-roster th { padding: 9px 12px; }
+.portal-reading.prose-roster tr:last-child td { border-bottom: 0; }
+.portal-reading.prose-roster .overflow-x-auto {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 1.25em 0;
+}
+.portal-reading.prose-roster .overflow-x-auto table { margin: 0; }
+.portal-reading.prose-roster thead { background: var(--surface-2); }
+
+/* Bottom tab bar respects the iPhone home indicator. */
+.portal-tabbar {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
