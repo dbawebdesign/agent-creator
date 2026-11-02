@@ -210,7 +210,7 @@ export function namesIn(clause: string): string[] {
 
 const has = (hay: string, name: string) => new RegExp(`(?:^|[^\\p{L}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^\\p{L}])`, "iu").test(hay);
 
-export type Exclusion = { names: string[]; why: string };
+export type Exclusion = { names: string[]; why: string; rule?: boolean };
 export type Hold = { names: string[]; who: string | null; why: string };
 
 /** "Skip Biscuit…", "Leave Biscuit out", "never contact the Whitfield family about Biscuit" → names to leave out. */
@@ -225,7 +225,7 @@ export function exclusionsFrom(text: string, rules: string[]): Exclusion[] {
   for (const r of rules) {
     if (!/\bnever (?:contact|text|email|call|message|reach out to)\b|\bdo not (?:contact|text|email|call)\b|\bdon'?t (?:contact|text|email|call)\b/i.test(r)) continue;
     const names = namesIn(r.replace(/^.*?\b(?:contact|text|email|call|message|reach out to)\b/i, ""));
-    if (names.length) out.push({ names, why: `your rule: “${truncate(r.replace(/^[“"]|[”"]$/g, ""), 120)}”` });
+    if (names.length) out.push({ names, why: `your rule: “${truncate(r.replace(/^[“"]|[”"]$/g, ""), 120)}”`, rule: true });
   }
   return out;
 }
@@ -265,6 +265,8 @@ export type Plan = {
   /** Criteria the text asked for that no column could answer, with the column needed. */
   unmapped: string[];
   excluded: Array<{ row: string[]; why: string }>;
+  /** Rows a never-contact rule covers: they stay in the list (the facts are true) but get no draft. */
+  noContact: Array<{ row: string[]; why: string }>;
   held: Array<{ row: string[]; why: string; who: string | null }>;
   sortedBy: string | null;
   limit: number | null;
@@ -392,7 +394,12 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
 
   // 5. Exclusions and never-contact rules.
   const excluded: Plan["excluded"] = [];
+  const noContact: Plan["noContact"] = [];
   for (const ex of exclusionsFrom(text, rules)) {
+    if (ex.rule) {
+      for (const r of rows) if (ex.names.some((n) => has(r.join(" | "), n)) && !noContact.some((x) => x.row === r)) noContact.push({ row: r, why: ex.why });
+      continue;
+    }
     rows = rows.filter((r) => {
       const line = r.join(" | ");
       if (!ex.names.some((n) => has(line, n))) return true;
@@ -448,7 +455,7 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
   const held: Plan["held"] = [];
   for (const h of holdsFrom(text, rules)) for (const r of rows) if (h.names.some((n) => has(r.join(" | "), n)) && !held.some((x) => x.row === r)) held.push({ row: r, why: h.why, who: h.who });
 
-  return { table, cols, rows, applied, unmapped, excluded, held, sortedBy, limit, derived };
+  return { table, cols, rows, applied, unmapped, excluded, noContact: noContact.filter((x) => rows.includes(x.row)), held, sortedBy, limit, derived };
 }
 
 // ───────────────────────────────────────────── rendering ─────────────────────────────────────────────
@@ -470,9 +477,9 @@ export function planTable(p: Plan): string[] {
     headers.push(derived.header);
     p.rows.forEach((r, k) => rows[k]!.push(String(derived.values.get(r) ?? "—")));
   }
-  if (p.held.length) {
+  if (p.held.length || p.noContact.length) {
     headers.push("Note");
-    p.rows.forEach((r, k) => rows[k]!.push(p.held.find((h) => h.row === r)?.why ?? ""));
+    p.rows.forEach((r, k) => rows[k]!.push(p.noContact.some((x) => x.row === r) ? "Do not contact (your rule)" : (p.held.find((h) => h.row === r)?.why ?? "")));
   }
   return gfm(["#", ...headers], rows.map((r, k) => [String(k + 1), ...r]));
 }
@@ -497,7 +504,7 @@ export function linkFrom(snips: Snip[], kind: "book" | "pay" = "book"): string |
 }
 
 /** One reminder to the person behind a row (owner/client/contact; never the pet or the item). */
-export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; channel: "text" | "email"; link: string | null; topic: string | null; forbidden: string[]; now?: Date }): RowDraft {
+export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; channel: "text" | "email"; link: string | null; topic: string | null; forbidden: string[]; now?: Date; addressed?: boolean }): RowDraft {
   const { cols } = p;
   const H = p.table.headers;
   const personRaw = cols.person >= 0 ? (r[cols.person] ?? "").trim() : "";
@@ -525,7 +532,8 @@ export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; 
   const phone = cols.phone >= 0 ? (r[cols.phone] ?? "").trim() : "";
   const mail = cols.email >= 0 ? (r[cols.email] ?? "").trim() : "";
   const who = personRaw || subject || "the contact";
-  const to = o.channel === "text" ? `${who}${phone ? ` · ${phone}` : ""}` : mail ? `${who} <${mail}>` : who;
+  // Only a workflow run over the business's own file may address a draft (the send path re-checks it on approval).
+  const to = o.channel === "text" ? `${who}${phone ? ` · ${phone}` : ""}` : mail && o.addressed !== false ? `${who} <${mail}>` : who;
   const held = p.held.find((h) => h.row === r)?.why ?? null;
   const label = `${subject && subject !== personRaw ? `${subject} — ` : ""}${who}`;
   return { label, to, channel: o.channel, subject: o.channel === "email" ? `${cap(what)}${status.replace(/ \(it was due [^)]+\)/, "")}` : null, body, held };

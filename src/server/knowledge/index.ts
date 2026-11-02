@@ -224,6 +224,9 @@ export async function knowledgeIndexJob(database: DB, payload: Record<string, un
       .where(and(eq(schema.knowledgeSources.id, sourceId), eq(schema.knowledgeSources.orgId, orgId)));
     throw err;
   }
+  // A file that lands after hire should reach tonight's held first deliverable (offline model; never fails the job).
+  const { refreshHeldForOrg } = await import("@/server/llm/offline/refresh");
+  await refreshHeldForOrg(database, orgId);
 }
 
 export { embeddingsEnabled };

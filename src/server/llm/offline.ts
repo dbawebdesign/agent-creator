@@ -245,8 +245,14 @@ export const offlineProvider: LlmProvider = {
     const memories = snippetsFrom(events, "memory_recall");
     // A table came back in pieces ("rows 1–7 of 8"): fetch the rest before working on it (each block repeats the header).
     if (has("knowledge_search") && events.filter((e) => e.name === "knowledge_search").length === 1) {
-      const partial = collectTables(knowledge).find((t) => !isComplete(t));
+      const tables = collectTables(knowledge);
+      const partial = tables.find((t) => !isComplete(t));
       if (partial) return makeResponse(req, `Reading the rest of ${partial.title}.`, [{ name: "knowledge_search", input: { query: tableQuery(partial), limit: 10 } }]);
+      // The task names a file ("Read overdue_patients.csv") that the first search didn't bring back: look for it by name.
+      const file = /\b([\w-]+)\.(?:csv|tsv)\b/i.exec(brief.body);
+      if (file && !tables.some((t) => t.title.toLowerCase().startsWith(file[1]!.toLowerCase()))) {
+        return makeResponse(req, `Looking for ${file[0]}.`, [{ name: "knowledge_search", input: { query: file[1]!.replace(/[_-]+/g, " "), limit: 10 } }]);
+      }
     }
 
     // 2. Act on explicit requests in the brief.

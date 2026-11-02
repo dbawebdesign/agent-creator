@@ -6,7 +6,7 @@
  */
 import { cell, normalizeWhitespace, tokenize, truncate } from "../text";
 import { mentions, namedInTask } from "./quotes";
-import { answerFromRows, asksForRows, collectTables, columnsOf as tableColumns, describePlan, exclusionsFrom, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
+import { answerFromRows, asksForRows, collectTables, columnsOf as tableColumns, describePlan, exclusionsFrom, namesIn, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
 
 export type Snip = { title: string; text: string; kind?: string };
 export type ComposeInput = {
@@ -275,57 +275,161 @@ function renderEmail(e: EmailDraft, label: string): string[] {
 
 // ───────────────────────────────────────────── revision ─────────────────────────────────────────────
 
+const escRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const FORMAL: Array<[RegExp, string]> = [
+  [/\bHi ([^,\n]+),/g, "Dear $1,"],
+  [/\bHello,/g, "Good morning,"],
+  [/\bThanks so much,|\bThanks,|\bBest,/g, "Kind regards,"],
+  [/\bwe'll\b/gi, "we will"],
+  [/\bwe're\b/gi, "we are"],
+  [/\bdon't\b/gi, "do not"],
+  [/\bcan't\b/gi, "cannot"],
+  [/\bit's\b/gi, "it is"],
+  [/\bI'm\b/g, "I am"],
+  [/\byou're\b/gi, "you are"],
+  [/\blet's\b/gi, "let us"],
+];
+const FRIENDLY: Array<[RegExp, string]> = [
+  [/\bDear ([^,\n]+),/g, "Hi $1,"],
+  [/\bKind regards,|\bSincerely,|\bThank you,/g, "Thanks so much,"],
+  [/\bwe will\b/gi, "we'll"],
+  [/\bdo not\b/gi, "don't"],
+  [/\bcannot\b/gi, "can't"],
+];
+
+/** Apply a change request to the previous version and say, in one line, what changed. */
 function revise(input: ComposeInput, pool: Sent[]): Composed {
+  const now = input.now ?? new Date();
+  const who = whoAmI(input.system);
+  const rules = rulesFrom(input.memories);
+  const title = input.title.replace(/\s*\(revised\)$/i, "");
   const fb = normalizeWhitespace(/Feedback:\s*([\s\S]+?)(?:\n\s*\nOriginal|$)/.exec(input.body)?.[1] ?? "");
   let doc = /Original \([^\n]*\):\n([\s\S]*)$/.exec(input.body)?.[1] ?? "";
-  doc = doc.replace(/\n?## What changed[\s\S]*?(?=\n## |$)/, "").trim();
+  doc = doc.replace(/^\*\*What changed:\*\*[^\n]*\n+/, "").replace(/^\n?## What changed[\s\S]*?(?=\n## |$)/, "").trim();
+  const prefersText = input.memories.some((m) => m.kind === "preference" && /\btexts?\b|\balways text\b/i.test(m.text));
+
+  // Work over an uploaded table: redo it on the rows with the note as extra criteria (filters, order, rows to leave out).
+  const origSummary = /## Summary\s*\n+([^\n]+(?:\n[^\n#][^\n]*)*)/.exec(doc)?.[1] ?? "";
+  const fileTables = collectTables(input.knowledge);
+  const fbPlans = fileTables.map((t) => planRows(t, fb, [], now));
+  // Rows named in the note ("remove Tank") or criteria on the columns ("only rabies", "most overdue first").
+  const namesRows = fileTables.some((t) => namesIn(fb).some((n) => t.rows.some((r) => mentions(r.join(" | "), [n]))));
+  const rowsAsked = fbPlans.some((x) => x.applied.length || x.sortedBy || x.excluded.length) || namesRows || /\b(?:actual list|the list|one row per|rows?\b|sort(?:ed)?\b)/i.test(fb);
+  if (fileTables.length && rowsAsked) {
+    // A new value filter in the note ("only rabies") replaces the old one instead of adding to it.
+    const newValueFilter = fbPlans.some((x) => x.applied.some((a) => / is /.test(a)));
+    const summaryText = (newValueFilter ? origSummary.replace(/\s*\([^)]*\bis\b[^)]*\)/, "") : origSummary).replace(/\bLeft out: /g, "Leave out ");
+    // "Remove Tank" / "drop the Elm St. Rescue row" leave those rows out.
+    const fbRows = fb.replace(/\b(?:remove|drop|delete|cut|take out|get rid of)\b/gi, "Leave out");
+    const before = collectTables([{ title: "previous", text: doc }]).find((t) => t.headers.length > 2);
+    const redo = tableWork({ ...input, kind: "workflow", title, body: `${summaryText}\n\n${fbRows}` }, `${summaryText}\n\n${fbRows}`, rules, who, now, prefersText);
+    if (redo) {
+      const n = redo.data?.rows ?? 0;
+      const m = before ? before.rows.length : 0;
+      const changed = [
+        before ? (n !== m ? `${m} → ${n} rows` : `same ${n} rows`) : `turned it into the list from ${redo.data?.basis ?? "your file"} (${n} rows)`,
+        /\bleave|left out|skip|remove|drop|exclude\b/i.test(fb) ? `left out what you named` : null,
+        /\bfirst\b|\bsort|\border\b/i.test(fb) ? "re-sorted as asked" : null,
+        /\b(?:text|message|email|reminder)s?\b/i.test(fb) && /## (?:Reminder texts|Emails)/.test(redo.body) ? "one draft per row" : null,
+      ].filter(Boolean);
+      return { ...redo, title: input.title, body: `## What changed\n\n${cap(changed.join("; "))}.\n\n${redo.body}`, preview: truncate(`Revised “${title}”: ${changed.join("; ")}.`, 200) };
+    }
+  }
+
   const changes: string[] = [];
+  const couldnt: string[] = [];
   const directives = fb
-    .split(/(?<=[.!;])\s+|,?\s+and\s+(?=(?:use|show|add|include|remove|drop|make|change|replace|cut|keep|put|mention|say|lead)\b)/i)
+    .split(/(?<=[.!;])\s+|,?\s+and\s+(?=(?:use|show|add|include|remove|drop|make|change|replace|cut|keep|put|mention|say|lead|fix)\b)/i)
     .map((d) => d.trim().replace(/[.!;]+$/, ""))
     .filter((d) => d.length > 2);
   const addSections: string[] = [];
   const replacements: Array<[RegExp, string]> = [];
-  for (const d of directives) {
+  const replace = (from0: string, to: string) => {
+    let from = from0;
+    let re = new RegExp(escRe(from), "gi");
+    let n = (doc.match(re) ?? []).length;
+    // "The booking link should be X": swap the value of the same shape (link, email, phone) when the words aren't there.
+    if (!n) {
+      const shape = /^\S+@\S+\.\S+$/.test(to) ? EMAIL_IN.source : /^(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+\/\S*$/.test(to) ? "(?:https?:\\/\\/)?[\\w-]+(?:\\.[\\w-]+)+\\/[\\w\\-./?=&%#]*" : /^\+?[\d\s().-]{7,}$/.test(to) ? "\\+?\\d[\\d\\s().-]{6,}\\d" : null;
+      const host = /^(?:https?:\/\/)?([^/]+)/.exec(to)?.[1] ?? "";
+      const cands = shape ? [...new Set(doc.match(new RegExp(shape, "g")) ?? [])].filter((c) => c !== to && (!host || c.includes(host.split(".").slice(-2).join(".")) || !/\//.test(to))) : [];
+      if (cands.length === 1) {
+        re = new RegExp(escRe(cands[0]!), "g");
+        n = (doc.match(re) ?? []).length;
+        from = cands[0]!;
+      }
+    }
+    if (!n) {
+      couldnt.push(`“${from}” isn't in the draft, so there was nothing to change to “${to}”`);
+      return;
+    }
+    doc = doc.replace(re, to);
+    replacements.push([re, to]);
+    changes.push(`replaced “${from}” with “${to}” (${n} place${n === 1 ? "" : "s"})`);
+  };
+  for (const d0 of directives) {
+    const d = d0.replace(/^(?:please|can you|could you|pls)\s+/i, "");
     let m: RegExpExecArray | null;
-    if ((m = /\b(?:change|replace|swap)\s+["“]?(.+?)["”]?\s+(?:to|with|for)\s+["“]?(.+?)["”]?$/i.exec(d))) {
-      const re = new RegExp(m[1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-      const n = (doc.match(re) ?? []).length;
-      doc = doc.replace(re, m[2]!);
-      replacements.push([re, m[2]!]);
-      changes.push(n ? `Replaced “${m[1]}” with “${m[2]}” (${n} place${n === 1 ? "" : "s"}).` : `Looked for “${m[1]}” to replace with “${m[2]}” but it was not in the draft — added a note instead.`);
-      if (!n) addSections.push(`## Note\n\nUse “${m[2]}” in place of “${m[1]}” going forward.`);
-    } else if ((m = /\b(?:remove|drop|delete|cut|take out)\s+(?:the\s+)?(.+)$/i.exec(d))) {
-      const key = m[1]!.toLowerCase();
+    if ((m = /\b(?:change|replace|swap|update)\s+["“]?(.+?)["”]?\s+(?:to|with|for)\s+["“]?(.+?)["”]?$/i.exec(d))) replace(m[1]!, m[2]!);
+    else if ((m = /^["“]?(.+?)["”]?\s+(?:should be|should say|is actually|is really|needs to be)\s+["“]?(.+?)["”]?$/i.exec(d))) replace(m[1]!.replace(/^(?:the|it)\s+/i, ""), m[2]!);
+    else if ((m = /^(?:it'?s|it is|that'?s)\s+["“]?(.+?)["”]?,?\s+not\s+["“]?(.+?)["”]?$/i.exec(d))) replace(m[2]!, m[1]!);
+    else if ((m = /\bnot\s+["“]?(.+?)["”]?,?\s+but\s+["“]?(.+?)["”]?$/i.exec(d))) replace(m[1]!, m[2]!);
+    else if ((m = /\b(?:remove|drop|delete|cut|take out|leave out|get rid of)\s+(?:the\s+|all\s+)?(.+?)(?:\s+(?:row|rows|line|lines|entry|entries|section|part|bit))?(?:\s+(?:from (?:it|this|the \w+)|entirely|completely))?$/i.exec(d))) {
+      const key = m[1]!.toLowerCase().replace(/^["“]|["”]$/g, "");
       const before = doc.split("\n").length;
+      const sections = doc.split(/\n(?=## )/);
+      const kept = sections.filter((sec) => !sec.toLowerCase().split("\n")[0]!.replace(/^#+\s*/, "").includes(key));
+      doc = kept.join("\n");
+      // Rows and draft blocks that name it.
       doc = doc
-        .split(/\n(?=## )/)
-        .filter((sec) => !sec.toLowerCase().split("\n")[0]!.includes(key))
+        .split(/\n(?=#### )/)
+        .filter((blk) => !(/^#### /.test(blk) && blk.toLowerCase().split("\n")[0]!.includes(key)))
         .join("\n")
         .split("\n")
         .filter((l) => !l.toLowerCase().includes(key) || /^#/.test(l))
         .join("\n");
-      changes.push(`Removed ${m[1]} (${Math.max(0, before - doc.split("\n").length)} lines).`);
-    } else if (/\b(?:shorter|too long|trim|tighten|concise|cut it down)\b/i.test(d)) {
+      const gone = Math.max(0, before - doc.split("\n").length);
+      if (gone) changes.push(`removed ${m[1]} (${gone} line${gone === 1 ? "" : "s"})`);
+      else couldnt.push(`“${m[1]}” isn't in the draft, so nothing was removed`);
+    } else if (/\b(?:shorter|too long|trim|tighten|concise|cut it down|less wordy|brief)\b/i.test(d)) {
+      const before = doc.length;
       doc = doc
         .split(/\n(?=## )/)
         .map((sec) => {
-          const lines = sec.split("\n");
           let bullets = 0;
-          return lines.filter((l) => !/^\s*[-*] /.test(l) || ++bullets <= 2).join("\n");
+          return sec
+            .split("\n")
+            .filter((l) => !/^\s*[-*] /.test(l) || ++bullets <= 2)
+            .join("\n");
         })
-        .join("\n");
-      changes.push("Tightened every section to its two most important points; tables kept whole.");
-    } else if (/\b(?:generic|vague|more specific|specifics|be specific|not specific)\b/i.test(d)) {
-      const specifics = relevant(pool, `${input.title} ${doc.slice(0, 2000)}`, 5, new Set()).filter((s) => /\d|[A-Z][a-z]+ [A-Z]/.test(s.text));
-      if (specifics.length) {
-        addSections.unshift(["## Specific to you", "", ...specifics.map((s) => `- ${truncate(s.text, 240)}`)].join("\n"));
-        changes.push(`Made it specific: added ${specifics.length} facts from your own materials (names, numbers, systems) and tied the sections to them.`);
-      } else changes.push("Made it specific where I could; send me a recent example and I will match it exactly.");
+        .join("\n")
+        .replace(/^(?!\|)([^\n#>|-][^\n]{220,})$/gm, (para) => splitSentences(para).slice(0, 2).join(" "));
+      changes.push(`shorter (${Math.round((100 * (before - doc.length)) / Math.max(1, before))}% cut; tables kept whole)`);
+    } else if (/\b(?:longer|more detail|more detailed|expand|flesh (?:it )?out|elaborate)\b/i.test(d)) {
+      const more = relevant(pool, `${title} ${doc.slice(0, 1500)}`, 4, new Set()).filter((x) => !doc.includes(x.text));
+      if (more.length) {
+        addSections.push(["## More detail", "", ...more.map((x) => `- ${truncate(x.text, 240)}`)].join("\n"));
+        changes.push(`longer: added ${more.length} details from your files`);
+      } else couldnt.push("I have no more detail on file to add — send me what should go in and I'll add it");
+    } else if (/\b(?:more formal|formal|professional|less casual)\b/i.test(d)) {
+      const was = doc;
+      for (const [re, to] of FORMAL) doc = doc.replace(re, to);
+      changes.push(doc === was ? "tone was already formal" : "more formal tone (greetings, sign-offs, no contractions)");
+    } else if (/\b(?:friendlier|warmer|more casual|less formal|more personal|friendly|warm)\b/i.test(d)) {
+      const was = doc;
+      for (const [re, to] of FRIENDLY) doc = doc.replace(re, to);
+      changes.push(doc === was ? "tone kept warm (it already was)" : "friendlier tone (greetings, sign-offs, contractions)");
     } else if ((m = /\b(?:use|apply|switch to)\s+(?:our\s+|the\s+)?(.+?)\s+(?:brand\s+)?colou?rs?\b/i.exec(d))) {
       doc = doc.replace(/^(## [^\n]+\n)/, `$1\n**Brand:** ${m[1]} — headings and table headers in ${m[1]!.split(/\s+and\s+/)[0]}, accents in ${m[1]!.split(/\s+and\s+/)[1] ?? m[1]}.\n`);
-      changes.push(`Applied your ${m[1]} brand colors to the layout (headings, table headers, accents).`);
-    } else if ((m = /\b(?:show|add|include|list|break out|put in)\s+(.+)$/i.exec(d))) {
+      changes.push(`applied your ${m[1]} brand colors`);
+    } else if (/\b(?:generic|vague|more specific|specifics|be specific|not specific)\b/i.test(d)) {
+      const specifics = relevant(pool, `${title} ${doc.slice(0, 2000)}`, 5, new Set()).filter((x) => /\d|[A-Z][a-z]+ [A-Z]/.test(x.text));
+      if (specifics.length) {
+        addSections.unshift(["## Specific to you", "", ...specifics.map((x) => `- ${truncate(x.text, 240)}`)].join("\n"));
+        changes.push(`more specific: ${specifics.length} facts from your materials`);
+      } else couldnt.push("I have nothing more specific on file — send me a recent example and I'll match it");
+    } else if ((m = /\b(?:show|add|include|list|break out|put in|mention)\s+(.+)$/i.exec(d))) {
       const what = m[1]!.replace(/^(?:the|a|an)\s+/i, "");
       const nums = /(\d+(?:\s*\/\s*\d+)+)\s*([a-z]+)?/i.exec(what);
       const firstTable = /\n(\|[^\n]+\|)\n\|[-:| ]+\|\n((?:\|[^\n]+\|\n?)+)/.exec(`\n${doc}`);
@@ -336,21 +440,22 @@ function revise(input: ComposeInput, pool: Sent[]): Composed {
         const lines = [`## ${cap(what.replace(/\s+at\s+.*$/i, ""))}`, "", ...gfm(["Item", ...cols.map((c) => `${c} ${unit}`)], (rowNames.length ? rowNames : ["Option 1", "Option 2", "Option 3"]).map((r) => [r, ...cols.map(() => "price from list")]))];
         lines.push("", `_Unit prices fill in from your current price list; each break is shown at ${listJoin(cols.map((c) => `${c} ${unit}`))}._`);
         addSections.push(lines.join("\n"));
-        changes.push(`Added ${what} as a table (${cols.length} columns) for every option in the draft.`);
+        changes.push(`added ${what} (${cols.length} columns)`);
       } else {
         const ev = relevant(pool, what, 3, new Set());
-        addSections.push([`## ${cap(truncate(what, 60))}`, "", ...(ev.length ? ev.map((e) => `- ${truncate(e.text, 240)}`) : [`- Added at your request; send me the details for ${what} and I'll fill them in exactly.`])].join("\n"));
-        changes.push(`Added a ${what} section${ev.length ? ` built from ${ev.length} relevant notes` : ""}.`);
+        if (ev.length) {
+          addSections.push([`## ${cap(truncate(what, 60))}`, "", ...ev.map((e) => `- ${truncate(e.text, 240)}`)].join("\n"));
+          changes.push(`added a section on ${truncate(what.replace(/^(?:a\s+)?(?:section|part|note)\s+(?:on|about|for)\s+(?:the\s+)?/i, ""), 60)} (${ev.length} note${ev.length === 1 ? "" : "s"} from your files)`);
+        } else couldnt.push(`I have nothing on file for “${truncate(what, 80)}” — send me the details and I'll add them`);
       }
     } else {
-      const ev = relevant(pool, d, 2, new Set());
-      addSections.push([`## ${cap(truncate(d, 60))}`, "", ...(ev.length ? ev.map((e) => `- ${truncate(e.text, 240)}`) : [`- Revised as you asked: ${d}.`])].join("\n"));
-      changes.push(`Worked in your note: “${truncate(d, 140)}”.`);
+      couldnt.push(`I couldn't apply “${truncate(d, 120)}” on my own — tell me the exact change (e.g. “change X to Y”, “remove the Z rows”, “make it shorter”)`);
     }
   }
   const added = addSections.map((sec) => replacements.reduce((x, [re, to]) => x.replace(re, to), sec));
-  const body = ["## What changed", "", ...changes.map((c) => `- ${c}`), "", doc, ...added.map((s) => `\n${s}`)].join("\n").replace(/\n{3,}/g, "\n\n");
-  return { title: input.title, kind: input.output, body, preview: truncate(`Revised “${input.title.replace(/\s*\(revised\)$/, "")}”: ${changes[0] ?? "applied your feedback"}`, 200) };
+  const line = changes.length ? `${changes.map(cap).join("; ")}.${couldnt.length ? ` Not changed: ${couldnt.join("; ")}.` : ""}` : `Nothing changed: ${couldnt.join("; ") || "the note didn't ask for a change I could make"}.`;
+  const body = ["## What changed", "", line, "", doc, ...added.map((x) => `\n${x}`)].join("\n").replace(/\n{3,}/g, "\n\n");
+  return { title: input.title, kind: input.output, body, preview: truncate(`Revised “${title}”: ${changes[0] ?? "no change applied"}.`, 200), data: { substantive: changes.length > 0 } };
 }
 
 // ───────────────────────────────────────────── table work ─────────────────────────────────────────────
@@ -387,7 +492,9 @@ const wantsRowDrafts = (text: string) =>
 function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, now: Date, prefersText: boolean): Composed | null {
   const tables = collectTables(input.knowledge);
   if (!tables.length) return null;
-  const text = taskTextOf(input, own);
+  // Feedback the client gave on an earlier run of this same work applies to this run too.
+  const past = input.memories.map((m) => new RegExp(`^Feedback on “${escRe(input.title.replace(/\s*\(revised\)$/i, ""))}”:\s*(.+)$`, "i").exec(m.text)?.[1]).filter((x): x is string => !!x);
+  const text = [taskTextOf(input, own), ...past].join("\n\n");
   if (!asksForRows(text) && input.output !== "table") return null;
   const p = tableFor(text, tables, rules, now);
   if (!p) return null;
@@ -400,7 +507,7 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
   const odOf = (r: string[]) => (p.cols.overdue >= 0 ? Number(r[p.cols.overdue]) : p.derived?.values.get(r));
 
   const drafts = wantsRowDrafts(text)
-    ? p.rows.slice(0, 25).map((r) =>
+    ? p.rows.filter((r) => !p.noContact.some((x) => x.row === r)).slice(0, 25).map((r) =>
         rowDraft(p, r, {
           org: who.org,
           agent: who.agent,
@@ -409,6 +516,7 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
           topic: null,
           forbidden: forbiddenTopics(rules),
           now,
+          addressed: input.kind === "workflow",
         }),
       )
     : [];
@@ -420,6 +528,7 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
     const heldN = drafts.filter((d) => d.held).length;
     summary.push(`${drafts.length} ${drafts[0]!.channel === "text" ? (drafts.length === 1 ? "reminder text" : "reminder texts") : drafts.length === 1 ? "email" : "emails"} drafted below, one per ${p.cols.person >= 0 ? norm1(p.table.headers[p.cols.person]!) : noun}${heldN ? `; ${heldN} ${heldN === 1 ? "waits" : "wait"} for sign-off` : ""}. Nothing is sent until you approve.`);
   }
+  if (p.noContact.length) summary.push(`No draft for ${p.noContact.map((x) => nameOf(x.row)).join(", ")} — ${[...new Set(p.noContact.map((x) => x.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
   if (p.excluded.length) summary.push(`Left out: ${p.excluded.map((e) => nameOf(e.row)).join(", ")} — ${[...new Set(p.excluded.map((e) => e.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
   lines.push("## Summary", "", summary.join(" "));
   if (p.unmapped.length) lines.push("", `**Couldn't apply:** ${p.unmapped.join("; ")}. ${p.applied.length ? "The rest is applied." : "Showing every row instead."}`);
@@ -429,7 +538,9 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
   if (drafts.length) {
     lines.push("", `## ${drafts[0]!.channel === "text" ? "Reminder texts" : "Emails"}`, "");
     for (const d of drafts) lines.push(...renderDraft(d));
-    if (p.rows.length > drafts.length) lines.push(`_${p.rows.length - drafts.length} more rows are in the table above; I draft the first ${drafts.length} per run._`, "");
+    if (drafts[0]!.channel === "email" && input.kind !== "workflow") lines.push("_Not addressed yet: the addresses are in the table. Name one person in your request, or run this as a workflow, and I'll address the drafts for approval._", "");
+    const undrafted = p.rows.length - p.noContact.length - drafts.length;
+    if (undrafted > 0) lines.push(`_${undrafted} more rows are in the table above; I draft the first ${drafts.length} per run._`, "");
   }
   for (const h of p.held) decisions.push(`${nameOf(h.row)}: ${h.why}${h.who ? "" : ""} — the draft is ready but stays with you until it is signed off.`);
   const fb = forbiddenTopics(rules);
@@ -478,7 +589,7 @@ export function compose(input: ComposeInput): Composed {
   const wantsSummary = /\bsummari[sz]e|\bsummary of\b|\brecap\b/i.test(req);
   // Work over an uploaded table (filter, sort, one draft per row) is done on the rows themselves.
   const prefersText = input.memories.some((m) => m.kind === "preference" && /\btexts?\b|\balways text\b/i.test(m.text));
-  if (!wantsProposal && !(wantsEmail && (namedIn(req, who).length || input.output === "email_draft"))) {
+  if (!wantsProposal && !(wantsEmail && (namedIn(req, who).length || /#?\b[A-Z]{2,}-?\d{3,}\b/.test(req) || (input.kind !== "message" && input.output === "email_draft")))) {
     const tw = tableWork(input, own, rules, who, now, prefersText);
     if (tw) return tw;
   }
@@ -700,10 +811,13 @@ export function compose(input: ComposeInput): Composed {
           sources.push({ step: head, status: "Format ready — needs your price lists", basis: kinds[0] ?? "The call" });
           continue;
         }
-        const data = tables.find((t) => cols.some((c) => t.headers.some((h) => tokenize(h).some((w) => tokenize(c).includes(w)))) || (!cols.length && t.rows.length));
+        const matched = tables.find((t) => cols.some((c) => t.headers.some((h) => tokenize(h).some((w) => tokenize(c).includes(w)))) || (!cols.length && t.rows.length));
+        // Real rows on file always beat example rows: show the file, and say which columns it lacks.
+        const data = matched ?? tables.find((t) => t.rows.length);
         work.push("", `### ${head}`);
         if (data) {
-          work.push("", `From **${data.table.title}**: ${data.facts.join("; ")}.`, "", ...gfm(data.headers, data.rows.slice(0, 25)));
+          const missing = matched ? [] : cols.filter((c) => !data.headers.some((h) => tokenize(h).some((w) => tokenize(c).includes(w))));
+          work.push("", `From **${data.table.title}**: ${data.facts.join("; ")}.${missing.length ? ` It has no ${listJoin(missing.map((m) => m.toLowerCase()))} column, so those are left out — add them to the file and I'll fill them in.` : ""}`, "", ...gfm(data.headers, data.rows.slice(0, 25)));
           if (data.flagged) decisions.push(`${data.flagged} ${data.flagged === 1 ? "item needs" : "items need"} a follow-up today (flagged in “${head}”).`);
           sources.push({ step: head, status: "Built from your data", basis: data.table.title });
         } else {
@@ -727,10 +841,13 @@ export function compose(input: ComposeInput): Composed {
         // A process step (pull, compare, check…): report what happened this run instead of padding a section.
         const known = (input.memories.map((m) => /^Systems and tools mentioned: (.+)\.$/.exec(m.text)?.[1]).find(Boolean) ?? "").split(/,\s*/).filter(Boolean);
         const sys = known.find((k) => step.includes(k));
-        const hasData = tables.length > 0;
+        // Only a step the data on file actually covers (its words match a file's columns) counts as checked.
+        const covering = tables.find((t) => t.headers.filter((h) => tokenize(h.replace(/_/g, " ")).some((w) => w.length >= 4 && new RegExp(`\\b${w}`, "i").test(step))).length >= 2);
         const short = truncate(step.split(/\s*[(:;]|\s+—\s+/)[0]!.replace(/[.,]+$/, ""), 90);
-        did.push(`${short}: ${hasData ? "done from the data on file" : sys ? `ready — runs as soon as I have access to ${sys}` : "ready — runs on the next scheduled pass"}.`);
-        sources.push({ step: short, status: hasData ? "Done from your data" : "Waiting on access", basis: sys ?? "—" });
+        const wantedFile = /\b[\w.-]+\.(?:csv|tsv|xlsx?|docx|pdf)\b/i.exec(step)?.[0];
+        if (wantedFile && !covering) needs.push(`${wantedFile}: upload it to the knowledge base and the next run works on its rows.`);
+        did.push(`${short}: ${covering ? `checked against ${covering.table.title} (${covering.table.rows.length} rows)` : wantedFile ? `waiting for ${wantedFile} (it isn't in your files yet)` : sys ? `ready — runs as soon as I have access to ${sys}` : "ready — runs on the next scheduled pass"}.`);
+        sources.push({ step: short, status: covering ? "Checked against your data" : "Waiting on access", basis: covering?.table.title ?? sys ?? "—" });
       }
     }
     if (did.length) work.push("", "### What I checked this run", "", ...did.map((x) => `- ${x}`));
@@ -767,8 +884,8 @@ export function compose(input: ComposeInput): Composed {
   const body = noPlaceholders(lines.join("\n").replace(/\n{3,}/g, "\n\n"));
   // Real content: something built from data, a drafted message or a priced document — not a format waiting for data.
   const placeholder = /\(example\)|Format ready|needs your data|Not drafted|Waiting on access|figures fill/i;
-  const real = sources.filter((x) => !placeholder.test(x.status) && /data|Drafted|Priced|Scope|Written|Grounded/i.test(x.status));
-  const substantive = real.length > 0 && real.length >= sources.filter((x) => placeholder.test(x.status)).length && !/^No email drafted/m.test(body);
+  const real = sources.filter((x) => !placeholder.test(x.status) && /data|Priced|Scope from|Grounded|Checked against|Drafted from your request/i.test(x.status));
+  const substantive = real.length > 0 && !/\(example\)/.test(body) && !/^No email drafted/m.test(body);
   return { title: input.title, kind: wantsProposal ? "document" : input.output, body, preview, ...(sources.length ? { trace } : {}), data: { substantive } };
 }
 
@@ -823,7 +940,10 @@ function draftBlock(step: string, who: Who, people: Array<{ name: string; role: 
   const owe = /owe|money|balance/i.test(step);
   // What the message is about, from the step itself ("a reminder for each overdue invoice" → "overdue invoice").
   const topic = /\b(?:about|for|on|regarding)\s+(?:each |every |the |a |an |any |their |your )?([a-z][a-z' -]{3,50}?)(?:\s+(?:that|which|who|with|in|to|before|after|by|and)\b|[.,;:(—–]|$)/i.exec(step.replace(/\bone for\b.*$/i, ""))?.[1]?.trim() ?? null;
-  const about = topic && !/^(?:a|an|the|each|every)$/i.test(topic) ? topic.replace(/s$/, "") : null;
+  // Never write about a topic a rule forbids ("Never quote a price for surgery or dental work").
+  const banned = forbiddenTopics(rules);
+  const about0 = topic && !/^(?:a|an|the|each|every)$/i.test(topic) ? topic.replace(/s$/, "") : null;
+  const about = about0 && !banned.some((w) => new RegExp(`\\b${w}`, "i").test(about0)) && !/\b(?:rules?|price|quote)\b/i.test(about0) ? about0 : null;
   const out: string[] = [];
   const noMoney = rules.some((r) => /dollar amount|amounts?|price/i.test(r));
   variants.forEach((v, i) => {
@@ -838,7 +958,7 @@ function draftBlock(step: string, who: Who, people: Array<{ name: string; role: 
           ? `This is ${who.agent} from ${who.org}. Before your visit tomorrow we checked your benefits, and part of the visit may not be covered. We'd like to walk you through it before you come in — reply here or call us and we'll explain your options.`
           : about
             ? `This is ${who.agent} from ${who.org} about your ${about}. Could you let us know the next step that works for you? Reply here and we'll take care of the rest.`
-            : `This is ${who.agent} from ${who.org}. We have one open item with you and want to close it out — could you reply with the next step that works for you?`
+            : `This is ${who.agent} from ${who.org}. Reply here with any questions, or with a time that suits you, and we'll take it from there.`
         : i === 1
           ? `Following up on my note${about ? ` about your ${about}` : ""}: if anything is holding it up, tell me what you need from us and I'll sort it out today.`
           : `A last note${about ? ` on your ${about}` : ""} from me. If now isn't the right time, reply whenever you're ready and we'll pick it up from there.`;
