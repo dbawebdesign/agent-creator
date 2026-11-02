@@ -128,6 +128,12 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
   useEffect(() => setMobileOpen(false), [pathname]);
   useEffect(() => {
     document.body.style.overflow = mobileOpen ? "hidden" : "";
+    if (!mobileOpen) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
   }, [mobileOpen]);
 
   return (
