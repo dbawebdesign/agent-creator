@@ -12,8 +12,8 @@ type D = { id: string; title: string; preview: string | null; body: string; kind
 const ICON: Record<string, typeof FileText> = { table: Table2, email_draft: Mail, message: MessageSquare };
 const STATUS: Record<string, string> = { new: "New", seen: "Seen", approved: "Approved", changes_requested: "Changes requested", archived: "Archived" };
 
-export function DeliverableList({ items, empty }: { items: D[]; empty: React.ReactNode }) {
-  const [open, setOpen] = useState<D | null>(null);
+export function DeliverableList({ items, empty, initialOpenId }: { items: D[]; empty: React.ReactNode; initialOpenId?: string }) {
+  const [open, setOpen] = useState<D | null>(() => items.find((d) => d.id === initialOpenId) ?? null);
   if (!items.length) return <>{empty}</>;
   return (
     <>

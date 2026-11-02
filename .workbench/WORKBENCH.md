@@ -15,4 +15,5 @@ that judge the *running product* (screenshots, HTTP, tests), never builder summa
 | # | When (UTC) | What | Critic verdict / biggest gap |
 |---|---|---|---|
 | 0 | 04:00 | Scaffold: schema (30 tables), auth/session, access/tenancy, queue, crypto, design tokens, UI primitives | — |
-| 1a | 04:30 | Channels & API slice done (65 tests). Security critic launched on channels/API/auth. | pending |
+| 1a | 04:30 | Channels & API slice done (65 tests). Security critic r1 on channels/API/auth. | NOT production bar: prompt injection via inbound email (H), ReDoS in email/html parsing (H), MCP batch rate-limit bypass, no inbound caps, Slack sends ungated, XFF trust, fetch deadline. Fixes dispatched to engine + channels builders; XFF fixed by lead. |
+| 1b | 04:50 | Engine slice done (39 tests, 126 total). Engine/Architect critic r1 launched. | pending |

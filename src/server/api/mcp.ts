@@ -9,7 +9,8 @@ import "server-only";
 import { z } from "zod";
 import { logger } from "@/server/lib/logger";
 import { readTextCapped } from "./body";
-import { ApiError, authenticate, bearerToken, errorResponse } from "./http";
+import { rateLimit } from "@/server/security/rate-limit";
+import { ApiError, authenticate, bearerToken, errorResponse, RATE_LIMIT_PER_MIN } from "./http";
 import { hasScope, type ApiPrincipal, type ApiScope } from "./keys";
 import { getDeliverable, listAgents, listDeliverables, runWorkflow, sendMessage, workflowsFor } from "./v1";
 
@@ -31,6 +32,7 @@ const INVALID_REQUEST = -32600;
 const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
+const RATE_LIMITED = -32029;
 
 type JsonRpcId = string | number;
 type JsonRpcResponse =
@@ -221,7 +223,11 @@ function toolError(message: string) {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-async function handleOne(msg: unknown, p: ApiPrincipal, version: string): Promise<JsonRpcResponse | null> {
+/** Tools that start agent work (LLM spend): never accepted inside a JSON-RPC batch. */
+const UNBATCHABLE = new Set(["ask_agent", "run_workflow"]);
+export const MAX_BATCH = 10;
+
+async function handleOne(msg: unknown, p: ApiPrincipal, version: string, inBatch = false): Promise<JsonRpcResponse | null> {
   const parsed = rpcMessage.safeParse(msg);
   if (!parsed.success) {
     const id = (msg as { id?: unknown } | null)?.id;
@@ -260,6 +266,9 @@ async function handleOne(msg: unknown, p: ApiPrincipal, version: string): Promis
       const name = params?.name;
       const tool = TOOLS.find((t) => t.name === name);
       if (typeof name !== "string" || !tool) return rpcError(id, INVALID_PARAMS, `Unknown tool: ${String(name).slice(0, 80)}`);
+      if (inBatch && UNBATCHABLE.has(tool.name)) {
+        return rpcError(id, INVALID_REQUEST, `${tool.name} can't be sent in a batch; send it as its own request.`);
+      }
       if (!hasScope(p, tool.scope)) {
         return ok(id, toolError(`This API key is missing the "${tool.scope}" scope required by ${tool.name}.`));
       }
@@ -343,12 +352,21 @@ export async function handleMcpPost(req: Request, appUrl: string): Promise<Respo
   const headers = { ...JSON_HEADERS, ...rateHeaders };
 
   if (Array.isArray(body)) {
-    if (body.length === 0 || body.length > 20) {
-      return Response.json(rpcError(null, INVALID_REQUEST, "Invalid batch"), { status: 400, headers });
+    if (body.length === 0 || body.length > MAX_BATCH) {
+      return Response.json(rpcError(null, INVALID_REQUEST, `Invalid batch (1–${MAX_BATCH} messages)`), { status: 400, headers });
     }
     const results: JsonRpcResponse[] = [];
-    for (const m of body) {
-      const r = await handleOne(m, principal, version);
+    for (const [i, m] of body.entries()) {
+      // Every batch element costs one rate-limit unit (the first was charged by authenticate()).
+      if (i > 0) {
+        const rl = await rateLimit(`api:key:${principal.keyId}`, RATE_LIMIT_PER_MIN, 60);
+        if (!rl.ok) {
+          const mid = (m as { id?: unknown } | null)?.id;
+          results.push(rpcError(typeof mid === "string" || typeof mid === "number" ? mid : null, RATE_LIMITED, "Rate limit exceeded"));
+          continue;
+        }
+      }
+      const r = await handleOne(m, principal, version, body.length > 1);
       if (r) results.push(r);
     }
     if (!results.length) return new Response(null, { status: 202, headers: rateHeaders });

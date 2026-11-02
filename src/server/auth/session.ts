@@ -75,8 +75,23 @@ export async function requireUser(): Promise<SessionUser> {
   return user;
 }
 
+/**
+ * Client IP for rate limiting and audit. Only trusts proxy-appended entries: with TRUST_PROXY_HOPS=N
+ * (default 1 — one load balancer/CDN in front), the client is the Nth entry from the RIGHT of
+ * X-Forwarded-For, so values an attacker prepends are ignored. Set TRUST_PROXY_HOPS=0 when the app is
+ * exposed directly (no proxy): forwarded headers are then ignored entirely.
+ */
 export function clientIp(h: Headers): string | null {
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() ?? h.get("x-real-ip") ?? null;
+  const hops = Math.max(0, Number(process.env.TRUST_PROXY_HOPS ?? 1) | 0);
+  if (hops === 0) return null;
+  const chain = (h.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const ip = chain.length >= hops ? chain[chain.length - hops] : chain[0];
+  const candidate = ip ?? h.get("x-real-ip")?.trim() ?? null;
+  // Bound and sanity-check the value before it is used as a rate-limit key.
+  return candidate && /^[0-9a-fA-F:.]{2,45}$/.test(candidate) ? candidate : null;
 }
 
 export async function findUserByEmail(email: string) {

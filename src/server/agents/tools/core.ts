@@ -10,6 +10,7 @@ import { enqueue } from "@/server/jobs/queue";
 import { truncate } from "@/server/llm/text";
 import { recallMemories, searchKnowledge } from "@/server/knowledge";
 import { sha256 } from "@/server/security/crypto";
+import { normalizePhone, type Participant } from "../trust";
 import { defineTool, ok, toolError, type ToolContext } from "./types";
 
 const DELIVERABLE_KINDS = ["report", "document", "table", "email_draft", "message"] as const;
@@ -104,7 +105,8 @@ export const createDeliverable = defineTool({
         preview,
         body: input.body,
         data: input.data ?? null,
-        needsReview: kind === "email_draft" || run.trigger === "setup",
+        // Work requested by an unverified sender is never presented as the agent's own finished output.
+        needsReview: kind === "email_draft" || run.trigger === "setup" || !ctx.trust.trusted,
         deliveredVia: ["portal"],
         hoursSaved: Number.isFinite(hoursSaved) ? hoursSaved : 0,
       })
@@ -140,6 +142,15 @@ export const createDeliverable = defineTool({
   },
 });
 
+/** Does this send go back to the conversation's participant (same thread, or their own address/number/channel)? */
+function isConversationTarget(input: { channel: string; to?: string }, p: Participant): boolean {
+  if (!input.to) return input.channel === p.channel;
+  if (input.channel === "email") return p.email !== null && input.to.trim().toLowerCase() === p.email;
+  if (input.channel === "sms") return p.phone !== null && normalizePhone(input.to) === p.phone;
+  if (input.channel === "slack") return p.slackChannel !== null && input.to.trim() === p.slackChannel;
+  return false;
+}
+
 async function isInternalRecipient(ctx: ToolContext, to: string | undefined): Promise<boolean> {
   if (!to) return true; // channels slice resolves the org's own default recipient
   const rows = await ctx.db.execute(sql`
@@ -158,10 +169,20 @@ export const sendMessage = defineTool({
     subject: z.string().max(200).optional(),
     text: z.string().min(1).max(20_000),
   }),
+  /**
+   * Sends back to the person in this run's conversation are gated only when that person is outside the business.
+   * Sends anywhere else are gated (send_external_<channel>; see requiresApproval), except a `to`-less send to the
+   * org's own default recipient and, on runs without a conversation, email to a member of the org.
+   */
   async approvalAction(input, ctx) {
-    if (input.channel === "email" && !(await isInternalRecipient(ctx, input.to))) return "send_external_email";
-    if (input.channel === "sms" && input.to) return "send_external_sms";
-    return null;
+    if (input.channel === "portal") return null;
+    const action = `send_external_${input.channel}`;
+    const p = ctx.trust.participant;
+    if (p && isConversationTarget(input, p)) return p.internal ? null : action;
+    if (!input.to) return null;
+    if (ctx.run.conversationId) return action;
+    if (input.channel === "email" && (await isInternalRecipient(ctx, input.to))) return null;
+    return action;
   },
   describe: (i) => `Send ${i.channel}${i.to ? ` to ${i.to}` : ""}${i.subject ? `: “${truncate(i.subject, 80)}”` : ""} — ${truncate(i.text, 160)}`,
   async run(input, ctx) {

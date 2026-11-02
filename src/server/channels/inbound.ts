@@ -11,7 +11,7 @@ import type { ChannelKind } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
 import * as engine from "@/server/services/engine";
-import { fetchReceivedEmail, htmlToText, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "./email";
+import { fetchReceivedEmail, htmlToText, MAX_TEXT, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "./email";
 import { E164_RE, START_WORDS, STOP_WORDS } from "./sms";
 import { stripMention } from "./slack";
 
@@ -228,13 +228,18 @@ function str(v: unknown): string | null {
 }
 
 function addrList(v: unknown): string[] {
-  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
-  if (typeof v === "string") return v.split(",").map((s) => s.trim());
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string").slice(0, 50);
+  if (typeof v === "string") return v.slice(0, 20_000).split(",").slice(0, 50).map((s) => s.trim());
   return [];
 }
 
-/** Read a header from Resend's headers (object map or [{name,value}] array), case-insensitively. */
+/** Read a header from Resend's headers (object map or [{name,value}] array), case-insensitively; capped. */
 function header(headers: unknown, name: string): string | null {
+  const v = headerRaw(headers, name);
+  return v === null ? null : v.slice(0, 8192);
+}
+
+function headerRaw(headers: unknown, name: string): string | null {
   const n = name.toLowerCase();
   if (Array.isArray(headers)) {
     for (const h of headers) {
@@ -396,7 +401,8 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const authFailed = senderAuthFailed(header(headers, "authentication-results"));
 
   const subject = str(full.subject)?.slice(0, 300) ?? null;
-  const rawText = str(full.text) ?? (str(full.html) ? htmlToText(str(full.html)!) : "");
+  // Both helpers cap their input before parsing (see email.ts); never feed unbounded HTML to regexes.
+  const rawText = str(full.text)?.slice(0, MAX_TEXT) ?? (str(full.html) ? htmlToText(str(full.html)!) : "");
   const body = stripQuotedReply(rawText) || subject || "(empty message)";
 
   const ids = [...new Set([...inReplyTo, ...references])];

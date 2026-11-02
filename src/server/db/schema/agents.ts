@@ -61,6 +61,11 @@ export type AgentConfig = {
   voice?: string;
   /** Monthly cost guardrail in cents (internal; never shown to clients). */
   monthlyBudgetCents?: number;
+  /**
+   * Let the agent answer senders it cannot verify as members (customers, strangers) without a human approving each
+   * reply. Default false. Replies on email/SMS still need approval while send_external_* is in requireApprovalFor.
+   */
+  autoReplyUnknownSenders?: boolean;
 };
 
 export const blueprints = pgTable(

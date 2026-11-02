@@ -83,7 +83,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
             <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
               {home.delivered.map((d) => (
                 <li key={d.id}>
-                  <Link href={`${base}/agents/${d.agentId}`} className="group flex items-start gap-3.5 px-4 py-3.5 transition-colors hover:bg-surface-2/50 sm:px-5">
+                  <Link href={`${base}/agents/${d.agentId}?d=${d.id}`} className="group flex items-start gap-3.5 px-4 py-3.5 transition-colors hover:bg-surface-2/50 sm:px-5">
                     <AgentOrb seed={d.agentSeed ?? d.agentId} size={28} className="mt-0.5" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">

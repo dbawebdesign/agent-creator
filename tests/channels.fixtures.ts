@@ -91,5 +91,5 @@ export async function truncateChannelTables() {
   await db().execute(sql`truncate table webhook_events`);
   await db().execute(sql`delete from jobs where type = 'inbound.process'`);
   await db().execute(sql`create unlogged table if not exists rate_limits (key text primary key, count integer not null, reset_at timestamptz not null)`);
-  await db().execute(sql`delete from rate_limits where key like 'api:key:%'`);
+  await db().execute(sql`delete from rate_limits where key like 'api:key:%' or key like 'api:invoke:%' or key like 'inbound:%'`);
 }

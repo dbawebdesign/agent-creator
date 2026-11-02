@@ -85,7 +85,7 @@ export function ReviewPanel({
       className={cn(
         "z-20 mt-6 rounded-xl border border-line p-3",
         // Only work that's waiting on you follows you down the page.
-        needsReview ? "sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] bg-raised/95 shadow-lg backdrop-blur-md md:bottom-6" : "bg-surface shadow-sm",
+        needsReview ? "sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] bg-raised shadow-lg md:bottom-6" : "bg-surface shadow-sm",
       )}
     >
       {mode === "idle" ? (

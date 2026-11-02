@@ -1,13 +1,20 @@
 /**
- * Read a request body as text with a hard byte cap, streaming — so an unauthenticated caller can't make us
- * buffer an arbitrarily large (e.g. chunked, no Content-Length) body before signature checks.
+ * Read a request/response body as text with a hard byte cap, streaming — so an unauthenticated caller (or a
+ * provider response) can't make us buffer an arbitrarily large body (e.g. chunked, no Content-Length).
  * Returns null when the cap is exceeded.
  */
-export async function readTextCapped(req: Request, maxBytes: number): Promise<string | null> {
-  const declared = Number(req.headers.get("content-length") ?? 0);
-  if (Number.isFinite(declared) && declared > maxBytes) return null;
-  if (!req.body) return "";
-  const reader = req.body.getReader();
+export async function readStreamCapped(
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+  declaredLength?: string | null,
+): Promise<string | null> {
+  const declared = Number(declaredLength ?? 0);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await stream?.cancel().catch(() => {});
+    return null;
+  }
+  if (!stream) return "";
+  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
@@ -21,4 +28,8 @@ export async function readTextCapped(req: Request, maxBytes: number): Promise<st
     chunks.push(value);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+export function readTextCapped(req: Request | Response, maxBytes: number): Promise<string | null> {
+  return readStreamCapped(req.body, maxBytes, req.headers.get("content-length"));
 }

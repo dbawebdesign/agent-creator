@@ -10,7 +10,7 @@ import { CHANNEL_LABEL, hours, microsToDollars, SectionHeading, Stat, TextLink }
 import { describeTrigger } from "@/components/studio/cron";
 import { cn } from "@/lib/utils";
 
-export default async function AgentOverview({ params, searchParams }: { params: Promise<{ agency: string; agentId: string }>; searchParams: Promise<{ welcome?: string }> }) {
+export default async function AgentOverview({ params, searchParams }: { params: Promise<{ agency: string; agentId: string }>; searchParams: Promise<{ welcome?: string; d?: string }> }) {
   const [{ agency: slug, agentId }, sp] = await Promise.all([params, searchParams]);
   const { org: agency } = await requireOrg(slug, "viewer");
   const found = await getAgent(agency.id, agentId);
@@ -83,6 +83,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
           <SectionHeading title="Recent deliverables" count={value.delivered} />
           <DeliverableList
             items={deliverables}
+            initialOpenId={sp.d}
             empty={
               <div className="rounded-xl border border-dashed border-line px-6 py-12 text-center">
                 <Sparkles className="mx-auto size-5 text-ink-4" aria-hidden />

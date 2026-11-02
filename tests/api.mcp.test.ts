@@ -15,6 +15,8 @@ const engineMock = vi.hoisted(() => ({
 }));
 vi.mock("@/server/services/engine", () => engineMock);
 
+import { eq, sql } from "drizzle-orm";
+import { db, schema } from "@/server/db/client";
 import { createApiKey, type ApiScope } from "@/server/api/keys";
 import { GET, POST } from "@/app/api/mcp/route";
 
@@ -46,6 +48,7 @@ async function setup() {
 beforeEach(async () => {
   await truncateChannelTables();
   engineMock.messageAgent.mockClear();
+  engineMock.runWorkflowNow.mockClear();
 });
 afterAll(async () => {
   await cleanupOrgs();
@@ -170,5 +173,37 @@ describe("MCP tools", () => {
     expect(JSON.parse(got.result.content[0].text)).toMatchObject({ id: d.id, title: "Pipeline report" });
     const run = await call(key, "tools/call", { name: "run_workflow", arguments: { workflow_id: wf.id } });
     expect(JSON.parse(run.result.content[0].text)).toMatchObject({ workflowId: wf.id, status: "queued" });
+  });
+
+  it("charges every batch element, caps batch size, and refuses work-starting tools in batches", async () => {
+    const { agent, wf, key } = await setup();
+    const keyRow = (await db().select().from(schema.apiKeys).where(eq(schema.apiKeys.prefix, key.slice(0, 12))))[0]!;
+    const batch = [0, 1, 2].map((i) => ({ jsonrpc: "2.0", id: i, method: "ping" }));
+    const ok = await rpc(key, batch);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toHaveLength(3);
+    const [{ count }] = (await db().execute(sql`select count from rate_limits where key = ${`api:key:${keyRow.id}`}`)).rows as [{ count: number }];
+    expect(count).toBe(3);
+
+    const asks = [0, 1].map((i) => ({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "ask_agent", arguments: { agent_id: agent.id, message: `hi ${i}` } } }));
+    asks.push({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "run_workflow", arguments: { workflow_id: wf.id } } } as never);
+    const res = await (await rpc(key, asks)).json();
+    expect(res.map((r: { error?: { code: number } }) => r.error?.code)).toEqual([-32600, -32600, -32600]);
+    expect(engineMock.messageAgent).not.toHaveBeenCalled();
+    expect(engineMock.runWorkflowNow).not.toHaveBeenCalled();
+
+    const tooBig = Array.from({ length: 11 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" }));
+    expect((await rpc(key, tooBig)).status).toBe(400);
+  });
+
+  it("enforces a separate per-key budget for agent work", async () => {
+    const { agent, key } = await setup();
+    const keyRow = (await db().select().from(schema.apiKeys).where(eq(schema.apiKeys.prefix, key.slice(0, 12))))[0]!;
+    await db().execute(sql`insert into rate_limits (key, count, reset_at) values (${`api:invoke:${keyRow.id}`}, 20, now() + interval '60 seconds')
+      on conflict (key) do update set count = 20, reset_at = now() + interval '60 seconds'`);
+    const r = await call(key, "tools/call", { name: "ask_agent", arguments: { agent_id: agent.id, message: "hi" } });
+    expect(r.result.isError).toBe(true);
+    expect(r.result.content[0].text).toMatch(/Too many agent requests/);
+    expect(engineMock.messageAgent).not.toHaveBeenCalled();
   });
 });

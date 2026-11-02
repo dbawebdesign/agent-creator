@@ -9,19 +9,13 @@
 import { sql } from "drizzle-orm";
 import { db, pool, schema } from "./client";
 import { hashPassword } from "@/server/security/crypto";
+import { nextCronRun } from "@/server/jobs/scheduler";
 
 const PASSWORD = "roster-demo";
 const H = 3600_000;
 const now = Date.now();
 const ago = (hours: number) => new Date(now - hours * H);
 
-/** Next occurrence of HH:MM local (America/New_York approximated as UTC-5) for display data only. */
-function nextLocal(hour: number, minute = 0) {
-  const d = new Date();
-  d.setUTCHours(hour + 5, minute, 0, 0);
-  if (d.getTime() < now) d.setTime(d.getTime() + 24 * H);
-  return d;
-}
 
 async function reset() {
   const tables = Object.values(schema)
@@ -272,7 +266,6 @@ export async function seed() {
         outputKind: "document",
         deliverTo: ["portal", "email"],
         hoursSavedPerRun: 6,
-        nextRunAt: nextLocal(6),
         lastRunAt: ago(9),
       },
       {
@@ -284,7 +277,6 @@ export async function seed() {
         outputKind: "email_draft",
         deliverTo: ["portal"],
         hoursSavedPerRun: 2,
-        nextRunAt: nextLocal(15),
         lastRunAt: ago(5),
       },
       {
@@ -306,7 +298,6 @@ export async function seed() {
         outputKind: "report",
         deliverTo: ["portal", "slack"],
         hoursSavedPerRun: 0.75,
-        nextRunAt: nextLocal(6, 30),
         lastRunAt: ago(4),
       },
       {
@@ -329,7 +320,6 @@ export async function seed() {
         outputKind: "table",
         deliverTo: ["portal"],
         hoursSavedPerRun: 1.5,
-        nextRunAt: nextLocal(2),
         lastRunAt: ago(3),
       },
       {
@@ -341,7 +331,6 @@ export async function seed() {
         outputKind: "report",
         deliverTo: ["portal", "slack"],
         hoursSavedPerRun: 40,
-        nextRunAt: nextLocal(1),
         lastRunAt: ago(6),
       },
       {
@@ -353,11 +342,18 @@ export async function seed() {
         outputKind: "document",
         deliverTo: ["portal", "email"],
         hoursSavedPerRun: 4,
-        nextRunAt: nextLocal(8),
         lastRunAt: ago(10),
       },
     ])
     .returning();
+  for (const w of wf) {
+    if (w.trigger.type === "schedule") {
+      await d
+        .update(schema.workflows)
+        .set({ nextRunAt: nextCronRun(w.trigger.cron, w.trigger.timezone ?? "America/New_York") })
+        .where(sql`id = ${w.id}`);
+    }
+  }
   const [wfSocial, wfFriday, , wfBrief, wfQuote, wfPrice, wfMigrate, wfFc] = wf;
 
   // --- Runs + deliverables (a night of work) ------------------------------------
@@ -502,7 +498,7 @@ Maya at Brandlord`,
     agent: theo!.id,
     workflow: wfBrief!.id,
     hoursAgo: 4,
-    title: "Your Monday briefing",
+    title: "Your morning briefing",
     preview: "3 meetings, 2 replies drafted, and the Four Corners proofs land at 2 PM.",
     hoursSaved: 0.75,
     via: ["portal", "slack"],

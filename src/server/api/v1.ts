@@ -9,6 +9,7 @@ import { and, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm"
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { env } from "@/server/env";
+import { rateLimit } from "@/server/security/rate-limit";
 import * as engine from "@/server/services/engine";
 import { ApiError, decodeCursor, encodeCursor, listQuery, parseWith } from "./http";
 import type { ApiPrincipal } from "./keys";
@@ -22,6 +23,20 @@ async function engineCall<T>(fn: () => Promise<T>): Promise<T> {
     if (name === "EngineNotFoundError") throw new ApiError("not_found", "Not found.");
     if (name === "EngineInputError") throw new ApiError("invalid_request", (err as Error).message.slice(0, 300));
     throw err;
+  }
+}
+
+/**
+ * Work-starting calls (LLM spend) get their own, tighter per-key budget on top of the general request limit,
+ * shared by REST and MCP.
+ */
+export const INVOKE_LIMIT_PER_MIN = 20;
+async function chargeInvoke(p: ApiPrincipal) {
+  const rl = await rateLimit(`api:invoke:${p.keyId}`, INVOKE_LIMIT_PER_MIN, 60);
+  if (!rl.ok) {
+    throw new ApiError("rate_limited", `Too many agent requests (max ${INVOKE_LIMIT_PER_MIN}/min per key). Retry shortly.`, undefined, {
+      "Retry-After": String(Math.max(1, Math.ceil((rl.resetAt.getTime() - Date.now()) / 1000))),
+    });
   }
 }
 
@@ -227,6 +242,7 @@ export async function sendMessage(
       .limit(1);
     if (!conv) throw new ApiError("not_found", "Conversation not found.");
   }
+  await chargeInvoke(p);
   const res = await engineCall(() => engine.messageAgent({
     orgId: p.orgId,
     agentId: agent.id,
@@ -291,6 +307,7 @@ export async function runWorkflow(p: ApiPrincipal, workflowId: string): Promise<
   if (!agent) throw new ApiError("not_found", "Workflow not found.");
   if (agent.status !== "active") throw new ApiError("conflict", `Agent is ${agent.status}; workflows can't run right now.`);
   if (!w.enabled) throw new ApiError("conflict", "Workflow is disabled.");
+  await chargeInvoke(p);
   const { runId } = await engineCall(() => engine.runWorkflowNow({ orgId: p.orgId, workflowId: w.id, actor: { type: "api_key", keyId: p.keyId } }));
   return { runId, workflowId: w.id, status: "queued" };
 }

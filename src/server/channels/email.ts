@@ -8,6 +8,7 @@
  */
 import "server-only";
 import { randomBytes } from "node:crypto";
+import { readTextCapped } from "@/server/api/body";
 import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
 
@@ -34,13 +35,29 @@ export function formatFrom(displayName: string, address: string): string {
   return name ? `"${name}" <${address}>` : address;
 }
 
-/** Parse `Name <a@b.c>` or `a@b.c` into parts. Returns null for anything that isn't a single valid address. */
+/** Max length of an address header value we will even look at (RFC 5321 path limit is 256). */
+const MAX_ADDRESS_HEADER = 512;
+
+/**
+ * Parse `Name <a@b.c>`, `"Name" <a@b.c>` or `a@b.c`. Linear (no backtracking regex) and length-capped.
+ * Returns null for anything that isn't a single valid address.
+ */
 export function parseAddress(raw: string): { name: string | null; email: string } | null {
+  if (typeof raw !== "string" || raw.length > MAX_ADDRESS_HEADER) return null;
   const s = raw.trim();
-  const m = /^(?:"?([^"<]*)"?\s*)?<([^<>\s]+)>$/.exec(s);
-  const email = (m ? m[2] : s)?.trim().toLowerCase() ?? "";
+  let email = s;
+  let name: string | null = null;
+  if (s.endsWith(">")) {
+    const lt = s.lastIndexOf("<");
+    if (lt < 0) return null;
+    email = s.slice(lt + 1, -1);
+    let display = s.slice(0, lt).trim();
+    if (display.length >= 2 && display.startsWith('"') && display.endsWith('"')) display = display.slice(1, -1);
+    if (display.includes("<") || display.includes(">")) return null;
+    name = display.replace(/"/g, "").trim() ? headerSafe(display.replace(/"/g, ""), 120) : null;
+  }
+  email = email.trim().toLowerCase();
   if (!isEmailAddress(email)) return null;
-  const name = m?.[1]?.trim() ? headerSafe(m[1].trim(), 120) : null;
   return { name, email };
 }
 
@@ -51,15 +68,15 @@ export function newMessageId(domain = env().EMAIL_DOMAIN): string {
 /** Keep only well-formed message ids from untrusted headers (In-Reply-To / References). */
 export function parseMessageIds(raw: string | null | undefined, max = 20): string[] {
   if (!raw) return [];
-  const ids = raw.match(/<[^<>\s]+>/g) ?? [];
+  const ids = raw.slice(0, 16_384).match(/<[^<>\s]{1,500}>/g) ?? [];
   return ids.filter((id) => MSGID_RE.test(id)).slice(-max);
 }
 
 /** "Re: Fwd: RE: Weekly report" → "weekly report" */
 export function normalizeSubject(subject: string | null | undefined): string {
-  let s = (subject ?? "").trim();
+  let s = (subject ?? "").slice(0, 1000).trim();
   for (;;) {
-    const next = s.replace(/^\s*(re|fw|fwd|aw|sv|antw)\s*(\[\d+\])?\s*:\s*/i, "");
+    const next = s.replace(/^\s*(re|fw|fwd|aw|sv|antw)(?:\s*\[\d{1,6}\])?\s*:\s*/i, "");
     if (next === s) break;
     s = next;
   }
@@ -73,7 +90,8 @@ export function replySubject(subject: string | null | undefined): string {
 }
 
 /** Strip quoted history from a reply so the agent sees only the new text. */
-export function stripQuotedReply(text: string): string {
+export function stripQuotedReply(input: string): string {
+  const text = input.slice(0, MAX_TEXT);
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -90,20 +108,57 @@ export function stripQuotedReply(text: string): string {
   return result || text.trim();
 }
 
-/** Crude but safe HTML → text for inbound mail that has no text part. */
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&")
+/** Inbound bodies are cut to this many characters before any parsing (agents don't need more). */
+export const MAX_TEXT = 100_000;
+const MAX_HTML = 400_000;
+
+const SKIP_CONTENT = ["script", "style", "head", "title", "template", "noscript"];
+const BREAK_TAGS = new Set(["br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote", "section", "article", "ul", "ol"]);
+const ENTITIES: Record<string, string> = { nbsp: " ", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'", amp: "&" };
+
+/**
+ * HTML → text for inbound mail that has no text part. A single linear scan (indexOf only moves forward; an
+ * unclosed tag or skip-block ends the scan), so hostile input can't trigger regex backtracking.
+ */
+export function htmlToText(input: string): string {
+  const html = input.slice(0, MAX_HTML);
+  const lower = html.toLowerCase();
+  const out: string[] = [];
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) {
+      out.push(html.slice(i));
+      break;
+    }
+    if (lt > i) out.push(html.slice(i, lt));
+    const gt = html.indexOf(">", lt + 1);
+    if (gt < 0) break; // unterminated tag: drop the rest
+    // Tag name: letters/digits after "<" or "</", read with a bounded loop.
+    let j = lt + 1;
+    const closing = html[j] === "/";
+    if (closing) j++;
+    let nameEnd = j;
+    while (nameEnd < gt && nameEnd - j < 16 && /[a-z0-9]/i.test(html[nameEnd]!)) nameEnd++;
+    const name = lower.slice(j, nameEnd);
+    if (!closing && SKIP_CONTENT.includes(name)) {
+      const end = lower.indexOf(`</${name}`, gt + 1);
+      if (end < 0) break; // unclosed <script>: nothing after it is text
+      const endGt = html.indexOf(">", end);
+      if (endGt < 0) break;
+      i = endGt + 1;
+      continue;
+    }
+    if (BREAK_TAGS.has(name)) out.push("\n");
+    i = gt + 1;
+    if (out.length > 50_000) break;
+  }
+  return out
+    .join("")
+    .replace(/&(nbsp|lt|gt|quot|#39|apos|amp);/g, (_m, e: string) => ENTITIES[e] ?? "")
+    .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
+    .slice(0, MAX_TEXT)
     .trim();
 }
 
@@ -185,7 +240,17 @@ export async function fetchReceivedEmail(emailId: string): Promise<Record<string
     if (res.status >= 500 || res.status === 429) throw new ProviderError(`resend receiving ${res.status}`, true);
     return null;
   }
-  return (await res.json()) as Record<string, unknown>;
+  // Size-capped read: a huge message must not exhaust memory or feed megabytes into parsing.
+  const raw = await readTextCapped(res, 2_000_000);
+  if (raw === null) {
+    logger.warn({ emailId }, "inbound email too large; using webhook metadata only");
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 /** Display name for outbound mail: "Maya · Brandlord" when the org sets an email sender name. */

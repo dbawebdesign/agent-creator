@@ -424,7 +424,8 @@ export async function messageAgent(input: {
       author: i.actor.type === "user" ? "user" : i.actor.type === "api_key" ? "contact" : "system",
       body: i.text,
       deliveryStatus: "received",
-      meta: { channel: i.channel, ...(i.actor.type === "api_key" ? { apiKeyId: i.actor.keyId } : {}) },
+      // Who sent it: the runtime derives sender trust from this (see agents/trust.ts).
+      meta: { channel: i.channel, ...(i.actor.type === "api_key" ? { apiKeyId: i.actor.keyId } : {}), ...(i.actor.type === "user" ? { userId: i.actor.userId } : {}) },
     })
     .returning({ id: schema.messages.id });
   await database.update(schema.conversations).set({ lastMessageAt: new Date() }).where(eq(schema.conversations.id, conversationId));
