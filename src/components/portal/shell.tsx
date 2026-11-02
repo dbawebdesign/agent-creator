@@ -21,6 +21,11 @@ import {
 } from "@/components/ui/menu";
 import { Avatar } from "@/components/ui/agent-orb";
 import { cn } from "@/lib/utils";
+import {
+  PaletteButton,
+  PortalPalette,
+  type PortalPaletteData,
+} from "./palette";
 
 type NavItem = {
   href: string;
@@ -39,6 +44,8 @@ export type ShellProps = {
   needsYouCount: number;
   user: { name: string | null; email: string };
   viewingAs: { name: string; href: string | null } | null;
+  /** ⌘K contents; omitted = no palette (backward compatible). */
+  palette?: PortalPaletteData;
   children: React.ReactNode;
 };
 
@@ -84,6 +91,7 @@ export function PortalShell({
   needsYouCount,
   user,
   viewingAs,
+  palette,
   children,
 }: ShellProps) {
   const pathname = usePathname() ?? "";
@@ -139,7 +147,7 @@ export function PortalShell({
   const tabs =
     items.length > 5 ? items.filter((i) => i.label !== "Settings") : items;
 
-  return (
+  const body = (
     <>
       {viewingAs ? (
         <div className="border-b border-line bg-surface-2 text-[12.5px] text-ink-3">
@@ -208,7 +216,8 @@ export function PortalShell({
             })}
           </nav>
 
-          <div className="ml-auto flex items-center">
+          <div className="ml-auto flex items-center gap-2">
+            {palette ? <PaletteButton /> : null}
             <Menu>
               <MenuTrigger
                 className="flex items-center gap-2 rounded-full p-0.5 transition-colors hover:bg-surface-2 focus-visible:rounded-full"
@@ -258,7 +267,7 @@ export function PortalShell({
 
       <nav
         aria-label="Portal tabs"
-        className="portal-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-line bg-canvas/95 backdrop-blur-xl backdrop-saturate-150 md:hidden"
+        className="portal-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-line bg-canvas md:hidden"
       >
         <ul className="mx-auto flex max-w-md items-stretch justify-around px-2">
           {tabs.map((it) => {
@@ -295,5 +304,12 @@ export function PortalShell({
         </ul>
       </nav>
     </>
+  );
+  return palette ? (
+    <PortalPalette slug={slug} canResell={canResell} data={palette}>
+      {body}
+    </PortalPalette>
+  ) : (
+    body
   );
 }

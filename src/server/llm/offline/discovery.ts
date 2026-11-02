@@ -207,7 +207,7 @@ const rangeOf = (a: string | undefined, b: string | undefined): number | null =>
 };
 const DOWS = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
 const RE_HOURS_PER = new RegExp(
-  String.raw`\b${RANGE}\s*(?:hours?|hrs?)\b(?:\s+and a half)?(?:,?\s+(?:easy|tops|or so|at least|minimum|probably|maybe|total))?\s+(?:a|per|each|every|on)\s+(week|weekday|day|month|morning|night|evening|afternoon|(?:${DOWS})s?)\b`,
+  String.raw`\b${RANGE}\s*(?:hours?|hrs?)\b(?:\s+and a half)?(?:,?\s+(?:easy|tops|or so|at least|minimum|probably|maybe|total))?,?\s+(?:once\s+)?(?:a|per|each|every|on)\s+(week|weekday|day|month|morning|night|evening|afternoon|(?:${DOWS})s?)\b`,
   "i",
 );
 const RE_HOURS_DAILY = new RegExp(String.raw`\b${RANGE}\s+(and a half\s+)?hours?(\s+and a half)?\b(?!,?\s+(?:a|per|each|every)\s+(?:week|month))[^.]{0,40}?\b(?:every|each) (?:single )?(morning|day|night|evening|afternoon|weekday|${DOWS})`, "i");
@@ -335,7 +335,7 @@ const CONCEPTS: Concept[] = [
     re: /\b(unscheduled|unbooked|unsigned|outstanding|past[- ]due|overdue|unpaid|missing|open)\s+(treatment(?: plans?)?|estimates?|quotes?|proposals?|receipts?|documents?|invoices?|paperwork|balances?|leads?|applications?)\b|\bfollow(?:ing|s)?[- ]?(?:ups?\s+)?(?:up\s+)?(?:on|with)\s+(?:the |our |all |those |these )?()((?!them\b|it\b|that\b)[a-z]+(?: [a-z]+)?)|\bchas(?:e|es|ing)\s+(?:clients|customers|patients|people|homeowners|tenants|owners|members)\s+(?:for|about|on)\s+()([a-z]+(?: (?:and )?(?:missing )?[a-z]+)?)|\b()((?:1099|W-?9|W-?2|COI|lien waiver)s?)\b|\b(?:the |our )?(adjusters?|carriers?|insurance compan(?:y|ies)|vendors?|subs?)\s+(chased|follow[- ]?ups?)\b|\b(?:heard back from|chas(?:e|ing)|follow(?:ing)? up with) (?:the |our )?()(adjusters?|carriers?|insurance compan(?:y|ies))\b|\b()(aging (?:report|list))\b|\b(vaccine|appointment|dental|annual|wellness|service)?\s?(recalls?)\b/i,
   },
   { action: "close", re: /\b(month[- ]end|year[- ]end|quarter[- ]end)\s+(close|closes|closing)\b|\b()(clos(?:e|ing) the books|close package|reconciliations?|reconcil(?:e|ing) (?:the )?(?:bank|accounts|credit cards?))\b/i },
-  { action: "renewal" as Action, re: /\b(lease|policy|contract|membership|subscription|license|warranty|service agreement)\s+(renewals?)\b|\b()(renewal (?:offers?|notices?|letters?))\b/i },
+  { action: "renewal" as Action, re: /\b(lease|policy|contract|membership|subscription|license|warranty|service agreement)\s+(renewals?)\b|\b()(renewal (?:offers?|notices?|letters?))\b|\b(policy|insurance|contract|membership)?\s?(renewals?)\b/i },
   { action: "packet", re: /\b(insurance|warranty|permit)\s+(claims? (?:paperwork|packets?|files?|documentation|submissions?)|claims? and supplements?|paperwork)\b|\b()(supplements?|(?:claim |insurance )?packets?|paperwork|permit applications?|submittals?)\b/i },
   {
     action: "triage",
@@ -411,6 +411,8 @@ const NOT_NP = /\b(?:is|are|was|were|be|been|do|does|did|have|has|had|i|we|you|t
 const NEXT_Q = /what(?:'s| is)? next|what else|anything else|what other|where does (?:your|the) time|eats? the most|start there|walk me through|itch|biggest/i;
 /** "Vaccine recalls." / "Then no-shows." / "Month-end close, no question." → the speaker's name for a job, or null. */
 export function nounPhraseAnswer(text: string): string | null {
+  const intro = /^(?:the|my|our) (?:biggest|main|worst|other|next|first|second|third) (?:drain|pain|problem|time sink|thing|one|headache|issue|time suck)(?: for (?:me|us))? is ([a-z][\w'’ -]{2,40}?)[.!]?$/i.exec(text.trim())?.[1];
+  if (intro) return nounPhraseAnswer(intro);
   const m = /^(?:(?:and|then|also|plus|oh,? and|next|so)\s+)?([A-Za-z][\w'’-]*(?:[ ,]+[\w'’-]+){0,5}?)[.!]?$/i.exec(text.trim());
   if (!m) return null;
   const np = m[1]!.replace(/,.*$/, "").trim();
@@ -432,7 +434,7 @@ const STRONG_START = /^(?:(?:and|also|plus|oh,? and)\s+)?(?:every|each|on) (?:mo
 const SYSTEMS_Q = /\bwhere(?:'s| does| do| is| are)?\b[^?]*\b(?:live|kept|stored)\b|\bwhat (?:systems?|software|tools?|apps?|programs?)\b|\bwhat do you use\b|\bwhere do you keep\b|\bwhat are you using\b/i;
 /** Hard rules: "Never…", "And never…", "Always…", "Don't ever…", "Rule one: never…". */
 export const GUARD_RE =
-  /^(?:(?:and|but|also|oh,? and|plus|so|okay|ok|please|one|two|three|first|second|third|number (?:one|two|three)|rule (?:one|two|number \w+)|the (?:big |main |hard |one )?rule is|hard rule|and (?:also|please))[,:.]?\s+)*(?:never|always|don'?t ever|do not ever|under no circumstances|make sure|no one|nobody (?:but|except)|only (?:ever )?(?:talk|speak|email|text|contact|deal))\b|\b(?:you|the agent|it|we|the assistant) (?:should|must|can) (?:never|not ever)\b|\bnot allowed to\b/i;
+  /^(?:(?:and|but|also|oh,? and|plus|so|okay|ok|please|one|two|three|first|second|third|number (?:one|two|three)|rule (?:one|two|number \w+)|the (?:big |main |hard |one )?rule is|hard rule|and (?:also|please))[,:.]?\s+)*(?:never|always|don'?t ever|do not ever|under no circumstances|make sure|no one|nobody (?:but|except)|only (?:ever )?(?:talk|speak|email|text|contact|deal))\b|\b(?:you|the agent|it|we|the assistant) (?:should|must|can) (?:never|not ever)\b|\bnot allowed to\b|\bonly ever (?:talk|speak|deal|email|text|call|contact|work|go)\b|\bonly (?:talk|speak) (?:to|with)\b|\b(?:always|everything|that account) goes? through (?:me|[A-Z][a-z]+)\b|\bis the only (?:one|person|people)\b/i;
 
 const WANT = /\b(?:[A-Z][a-z]+|[Hh]e|[Ss]he) wants (?:a|an|the|his|her)\b|\bI'?d like (?:a|an|the)\b|\bI'?d love\b|\bwould love\b|\bthat would (?:be huge|change)\b|\bif (?:she|he|we|I) had\b|\bI want\b|\bwe want\b/i;
 
@@ -693,7 +695,7 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     // The speaker naming the next job in a few words ("Vaccine recalls.", "Then no-shows.").
     const prevInTurn = sentences[s.idx - 1]?.turn === s.turn ? sentences[s.idx - 1]!.text : "";
     const np =
-      labelled && !isQuestion && pos <= 1 && canStart && (NEXT_Q.test(s.question ?? "") || /^(?:and|then|also|plus|oh,? and|next)\b/i.test(s.text) || /\b(?:the (?:first|second|third|fourth|next|other|last) (?:one|thing)|another one)\b/i.test(prevInTurn))
+      labelled && !isQuestion && (pos <= 1 || /^(?:the|my|our) (?:biggest|main|worst) /i.test(s.text)) && canStart && (NEXT_Q.test(s.question ?? "") || /^(?:the|my|our) (?:biggest|main|worst|other|next) /i.test(s.text) || /^(?:and|then|also|plus|oh,? and|next)\b/i.test(s.text) || /\b(?:the (?:first|second|third|fourth|next|other|last) (?:one|thing)|another one)\b/i.test(prevInTurn))
         ? nounPhraseAnswer(s.text)
         : null;
     if (np && !hits.length) {
@@ -709,7 +711,16 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     if (/^the (?:first|second|third|fourth|next|other|last) (?:one|thing) is (?:mine|hers|his|ours|this)\b/i.test(s.text)) continue;
     if (hits.length) {
       const existing = hits.map((h) => topics.find((t) => t.action === h.action)).filter((t): t is Topic => !!t);
-      if (current && hits.some((h) => h.action === current!.action)) target = current;
+      // A job the speaker just named in this turn ("Then claims status.") takes the task word that follows,
+      // even when another job already used the same playbook ("COIs" chasing ≠ chasing the adjuster).
+      const fromNp = npTopic && npTopic.action === "manual" && npTopic.first.turn === s.turn && canStart ? npTopic : null;
+      if (fromNp) {
+        fromNp.action = hits[0]!.action;
+        fromNp.phrase = hits[0]!.phrase;
+        fromNp.qualifier = hits[0]!.qualifier;
+        target = fromNp;
+        npTopic = null;
+      } else if (current && hits.some((h) => h.action === current!.action)) target = current;
       else if (existing[0] && (!conceptSeenInTurn || intro || strong)) target = existing[0];
       else if (!conceptSeenInTurn || intro || strong) {
         // New tasks named in this sentence. Unlabelled monologues need real pain in the sentence itself.
@@ -738,6 +749,18 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
       conceptSeenInTurn = true;
     }
     // "The other thing is X." with no known task: start a topic named from the owner's own words.
+    const vo = !hits.length && !isQuestion && labelled && canStart && INTRO.test(s.text) ? /\bI (reconcile|compile|prepare|update|review|file|enter|build|check|process|send out)\s+(?:the |our |all the |every )?([a-z][a-z -]{3,40}?)(?=\s+(?:against|for|to|from|into|with|by|every|each|once)\b|[.,])/i.exec(s.text) : null;
+    if (vo) {
+      const NOUN: Record<string, string> = { reconcile: "reconciliation", compile: "compilation", prepare: "prep", update: "updates", review: "review", file: "filing", enter: "entry", build: "build", check: "checks", process: "processing", "send out": "send-out" };
+      const label = `${vo[2]!.trim().replace(/s$/, "")} ${NOUN[vo[1]!.toLowerCase()] ?? "work"}`;
+      const t = newTopic({ action: "manual", qualifier: "", object: label.toLowerCase(), phrase: label.toLowerCase(), index: 0 }, s);
+      t.label = label;
+      topics.push(t);
+      attach(t, s, pain);
+      current = t;
+      npTopic = t;
+      continue;
+    }
     if (!hits.length && !isQuestion && INTRO.test(s.text) && labelled && canStart) {
       const np = /^(?:and|also|oh,? and|plus|then|the other (?:big )?(?:thing|one)(?: that [a-z ]+)?(?: is)?|another (?:thing|one)(?: is)?|the last thing(?: is)?|lastly|finally)\s*,?\s+(?:it'?s\s+)?(?:the |our |my )?([a-z0-9][a-z0-9' -]{2,40}?)(?=[.,!]|$| is | are | in | every | that )/i.exec(s.text)?.[1];
       if (np && np.split(/\s+/).length <= 4 && !/^(?:it|that|this|them|those|we|i|they|you|no|nothing|everything|anything|yeah|so)\b/i.test(np)) {
@@ -928,7 +951,10 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
             let text = s.text;
             for (let k = 1; k <= 2; k++) {
               const nx = sentences[s.idx + k];
-              if (!nx || nx.turn !== s.turn || GUARD_RE.test(nx.text) || !/^(?:only|their|they|that'?s|because|it'?s|he|she|his|her|everything goes)\b/i.test(nx.text)) break;
+              // The reason said right after, or the next line about the same name ("Castillo Builders" → "Marco Castillo is…").
+              const names = (text.match(/\b[A-Z][a-z]{3,}\b/g) ?? []).filter((w) => !/^(?:Never|Always|Only|And|Also|Don|The)$/.test(w));
+              const sameName = names.some((w) => new RegExp(`\\b${w}\\b`).test(nx?.text ?? ""));
+              if (!nx || nx.turn !== s.turn || (GUARD_RE.test(nx.text) && !sameName) || !(/^(?:only|their|they|that'?s|because|it'?s|he|she|his|her|everything goes)\b/i.test(nx.text) || sameName)) break;
               text = `${text} ${nx.text}`;
             }
             return { ...s, text };
@@ -936,7 +962,10 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
           // "Two. Never send…": drop the count; keep the rule whole.
           .map((s) => s.text.replace(/^(?:(?:one|two|three|first|second|third|number (?:one|two|three)|rule (?:one|two))[,:.]?\s+)/i, "")),
       ),
-    ].slice(0, 8),
+    ]
+      // A line already folded into a longer rule is not a rule of its own.
+      .filter((g, _i, all) => !all.some((o) => o !== g && o.includes(g)))
+      .slice(0, 8),
     channels: { sms, slack, email: true },
     recipient,
     compliance,

@@ -8,7 +8,7 @@ import { AgentOrb } from "@/components/ui/agent-orb";
 import { buttonClass } from "@/components/ui/button";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { ApprovalActions } from "@/components/studio/approval-actions";
-import { hours, money, OUTPUT_LABEL, SectionHeading, Stat } from "@/components/studio/bits";
+import { hours, money, OUTPUT_LABEL, SectionHeading, Stat, previewBeyondTitle } from "@/components/studio/bits";
 
 export const metadata = { title: "Home" };
 
@@ -72,13 +72,38 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
       </header>
 
       <section aria-label="Key numbers" className="mt-8 grid grid-cols-2 gap-y-6 rounded-xl border border-line bg-surface px-5 py-5 shadow-xs sm:grid-cols-4 sm:divide-x sm:divide-line sm:px-0">
+        {/* Lead with the contracted number; whether it's billed yet is the subline (Billing shows the billed-only figure). */}
         <Stat
           className="sm:px-6"
           label="Monthly recurring"
-          value={money(home.numbers.mrrCents)}
-          sub={home.numbers.unbilledCents ? `${money(home.numbers.unbilledCents)} not billed` : `${home.counts.clients} client${home.counts.clients === 1 ? "" : "s"}`}
+          value={
+            <>
+              {money(home.numbers.mrrCents + home.numbers.unbilledCents)}
+              <span className="text-[13px] font-normal tracking-normal text-ink-3"> /mo</span>
+            </>
+          }
+          sub={
+            home.numbers.unbilledCents
+              ? home.numbers.mrrCents
+                ? `${money(home.numbers.unbilledCents)} not billed yet`
+                : "Not billed yet · connect payouts"
+              : `${home.counts.clients} client${home.counts.clients === 1 ? "" : "s"}`
+          }
         />
-        <Stat className="sm:px-6" label="Active agents" value={home.numbers.activeAgents} sub={home.provisioning.length ? `${home.provisioning.length} provisioning` : "on the roster"} />
+        <Stat
+          className="sm:px-6"
+          label="Active agents"
+          value={home.numbers.activeAgents}
+          sub={
+            home.numbers.stalledAgents ? (
+              <span className="text-warn">{home.numbers.stalledAgents} setup stalled</span>
+            ) : home.numbers.provisioningAgents ? (
+              `${home.numbers.provisioningAgents} setting up`
+            ) : (
+              "on the roster"
+            )
+          }
+        />
         <Stat className="sm:px-6" label="Hours saved" value={hours(home.numbers.hoursWeek)} sub="last 7 days" />
         <Stat className="sm:px-6" label="Delivered" value={home.numbers.deliveredWeek} sub="last 7 days" />
       </section>
@@ -97,7 +122,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                         {d.title}
                         {d.needsReview ? <span className="ml-2 inline-block rounded-full bg-warn-soft px-1.5 align-[1px] text-[11px] font-medium text-warn">Needs review</span> : null}
                       </p>
-                      {d.preview ? <p className="mt-0.5 line-clamp-1 text-[13px] text-ink-3">{d.preview}</p> : null}
+                      {previewBeyondTitle(d.title, d.preview) ? <p className="mt-0.5 line-clamp-1 text-[13px] text-ink-3">{previewBeyondTitle(d.title, d.preview)}</p> : null}
                       <p className="mt-1 text-[12px] text-ink-3">
                         {d.agentName} for {d.orgName} · {OUTPUT_LABEL[d.kind] ?? d.kind}
                         <span className="sm:hidden">
@@ -176,7 +201,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                   key={a.id}
                   href={`${base}/agents/${a.id}`}
                   icon={Date.now() - a.createdAt.getTime() > 3 * 60_000 ? <AlertTriangle className="size-4 text-warn" /> : <Hourglass className="size-4 text-accent" />}
-                  title={Date.now() - a.createdAt.getTime() > 3 * 60_000 ? `${a.name}’s setup stalled — retry` : `${a.name} is provisioning`}
+                  title={Date.now() - a.createdAt.getTime() > 3 * 60_000 ? `${a.name}’s setup stalled — retry` : `${a.name} is setting up`}
                   meta={`${a.role} · ${a.orgName}`}
                   date={a.createdAt}
                 />

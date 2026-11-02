@@ -19,10 +19,20 @@ export function hourIn(timezone: string, date = new Date()): number {
 
 export function greeting(timezone: string, date = new Date()): string {
   const h = hourIn(timezone, date);
-  if (h < 5) return "Good evening";
+  // Small hours (midnight to 5 AM in the org's timezone): neither evening nor morning.
+  if (h < 5) return "Hello";
   if (h < 12) return "Good morning";
   if (h < 17) return "Good afternoon";
   return "Good evening";
+}
+
+/** A first name for display: "linda" (from an email) → "Linda"; "dana" → "Dana"; keeps "McKenna", "de Vries". */
+export function displayFirstName(raw: string): string {
+  const name = raw.trim();
+  if (!name) return name;
+  return name === name.toLowerCase()
+    ? name[0]!.toUpperCase() + name.slice(1)
+    : name;
 }
 
 export function longDate(timezone: string, date = new Date()): string {
@@ -38,13 +48,16 @@ export function longDate(timezone: string, date = new Date()): string {
   }
 }
 
+/** "6 AM", "9:08 PM": on-the-hour times drop ":00", matching schedules ("Every Monday at 6 AM"). */
 export function clockTime(date: Date, timezone: string): string {
   try {
     return new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "2-digit",
       timeZone: timezone,
-    }).format(date);
+    })
+      .format(date)
+      .replace(/:00(?=\s?[AP]M)/, "");
   } catch {
     return date.toLocaleTimeString();
   }

@@ -376,7 +376,8 @@ describe("Architect (offline) — product critic r3 H4 and design critic r4 regr
       also: [/estimate/i, /call-out/i, /past-due invoice/i, /complaints/i],
       never: /^(?:Square|Sick calls|Last estimate)|\bdental\b/i,
       weekly: [12, 17],
-      role: /report/i,
+      // Industry + the top pain, not a playbook keyword.
+      role: /^Pest Control Service Summary Coordinator$/,
       extra: (s) => {
         // Every distinct pain is its own workflow; the ask (and what was asked with it) is the first deliverable.
         expect(s.workflows).toHaveLength(5);
@@ -444,6 +445,37 @@ describe("Architect (offline) — product critic r3 H4 and design critic r4 regr
       },
     });
     expect(spec.firstDeliverable.description).toContain("A list of every patient overdue for rabies or DHPP");
+  });
+
+  it("independent insurance agency (Ridgeline): four pains, four workflows, renewals first, positive-exclusive rules whole", () => {
+    const spec = checkRubric({
+      file: "discovery-insurance-ridgeline.md",
+      org: "Ridgeline Insurance Group",
+      industry: "Independent insurance agency",
+      main: /renewal/i,
+      also: [/COI follow-up/, /claim/i, /commission/i],
+      never: /\bCoi\b|Honestly/,
+      // 5 + 5 + 3 + 6 a month (≈1.4) ≈ 14.4 hours a week stated.
+      weekly: [14.4 * 0.75, 14.4 * 1.25],
+      role: /^Insurance .*Renewal.* Coordinator$/,
+      extra: (s) => {
+        expect(s.workflows.length).toBeGreaterThanOrEqual(4);
+        expect(s.workflows[0]!.name).toMatch(/renewal/i);
+        expect(s.firstDeliverable.title).toMatch(/renewal/i);
+        expect(s.firstDeliverable.description).toContain("a list of every policy renewing in the next 30 days");
+        expect(s.role).not.toMatch(/adjuster/i);
+        // Each pain keeps its own words: the COI workflow is not about claims, the claims one not about COIs.
+        const coi = s.workflows.find((w) => /COI/.test(w.name))!;
+        expect(coi.problem).not.toMatch(/claim/i);
+        expect(s.workflows.find((w) => /claim/i.test(w.name))!.problem).not.toMatch(/COI|certificate/i);
+        // Positive-exclusive rules, whole, titles included; a reason line folds into its rule.
+        expect(s.instructions).toContain("“Also, for Dr. Okoro's dental practice, only ever talk to Dr. Okoro himself, never the front desk.”");
+        expect(s.instructions).toContain("“Never contact Castillo Builders about anything. Marco Castillo is in a billing dispute with us and that account goes through me personally.”");
+        expect(s.instructions).toContain("Only a licensed agent, me or Jamal, can do that.");
+        expect(s.openQuestions.join(" ")).not.toMatch(/HIPAA|BAA/);
+      },
+    });
+    expect(spec.vertical).toBe("Independent insurance agency");
   });
 
   it("estate planning law firm (Harbor & Pine): Monday aging, Friday cash summary, reply routing — no answered questions, no markup words", () => {

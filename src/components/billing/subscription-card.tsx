@@ -25,6 +25,7 @@ export async function SubscriptionCard({
   className,
   title = "Plan & billing",
   quiet = false,
+  quietNote,
 }: {
   buyerOrgId: string;
   returnPath: string;
@@ -35,6 +36,8 @@ export async function SubscriptionCard({
    * ("Billing isn't live yet."). Default false keeps the agency view unchanged.
    */
   quiet?: boolean;
+  /** With `quiet`: the one line shown while billing isn't live, e.g. "Northbeam handles your billing…". */
+  quietNote?: string;
 }) {
   const access = await requireOrgById(buyerOrgId, "viewer");
   const status = await getBillingStatus(buyerOrgId);
@@ -75,7 +78,8 @@ export async function SubscriptionCard({
           quiet
             ? status.mode === "live"
               ? undefined
-              : "Billing isn't live yet, so no card is needed and nobody is charged."
+              : (quietNote ??
+                "Billing isn't live yet, so no card is needed and nobody is charged.")
             : status.mode === "disabled"
               ? "Stripe isn't connected yet, so no card is needed and nobody is charged."
               : undefined

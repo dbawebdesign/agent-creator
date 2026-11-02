@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { pickerClients, searchStudio } from "@/server/queries/studio";
+import { paletteAttention, pickerClients, searchStudio } from "@/server/queries/studio";
 import { money } from "@/components/studio/bits";
 import { studio } from "./ctx";
 
@@ -22,4 +22,12 @@ export async function clientPickerSearch(agency: string, q: string) {
   const ctx = await studio(parsed.data.agency, "member");
   const rows = await pickerClients(ctx.agency.id, { q: parsed.data.q, limit: 20 });
   return rows.map((c) => ({ id: c.id, name: c.name, slug: c.slug, price: c.plan ? `${money(c.plan.priceCents)} / mo · ${c.plan.name}` : null }));
+}
+
+/** ⌘K "Needs attention" (loaded when the palette opens): waiting approvals, open change requests, stalled setups. */
+export async function paletteAttentionItems(agency: string) {
+  const parsed = z.string().min(1).max(64).safeParse(agency);
+  if (!parsed.success) return { approvals: [], changes: [], stalled: [] };
+  const ctx = await studio(parsed.data, "viewer");
+  return paletteAttention(ctx.agency.id);
 }

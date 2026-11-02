@@ -27,7 +27,10 @@ export function DeliverableCardView({
   compact?: boolean;
   hideAgent?: boolean;
 }) {
-  const unseen = d.status === "new";
+  // One status per row, and only an exception: approved is the normal end state, so lists show no pill for it.
+  const st = deliverableStatus(d);
+  const pill = st && d.status !== "approved" ? st : null;
+  const unseen = d.status === "new" && !pill;
   return (
     <Link
       href={`/p/${slug}/d/${d.id}`}
@@ -75,7 +78,7 @@ export function DeliverableCardView({
           {kindLabel(d.kind)}
         </span>
         <DeliveredVia via={d.deliveredVia} simulated={testModeChannels()} />
-        <StatusPill status={deliverableStatus(d)} />
+        <StatusPill status={pill} />
         {d.hoursSaved > 0 ? (
           <span className="ml-auto tabular">
             ~{shortHours(d.hoursSaved)} saved

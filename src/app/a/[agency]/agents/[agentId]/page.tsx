@@ -8,7 +8,7 @@ import { HeldDeliverable, releaseLabel } from "@/components/studio/held-delivera
 import { AutoRefresh, BeforeTonight, FirstDeliverableRow, RetrySetupButton } from "@/components/studio/setup-panel";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { DeliverableList } from "@/components/studio/deliverable-list";
-import { CHANNEL_LABEL, hours, microsToDollars, SectionHeading, Stat, TextLink } from "@/components/studio/bits";
+import { CHANNEL_LABEL, hours, isSetupStalled, microsToDollars, SectionHeading, Stat, TextLink } from "@/components/studio/bits";
 import { describeTrigger } from "@/components/studio/cron";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +61,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
   ];
 
   // Setup normally finishes in under a minute; past 3 minutes, say where it stopped and offer a retry.
-  const stalled = provisioning && Date.now() - agent.createdAt.getTime() > SETUP_STALL_MS;
+  const stalled = isSetupStalled(agent.status, agent.createdAt);
   // Memory and knowledge can legitimately be empty; the real setup steps are the inbox, computer and channels.
   const stalledAt = stack.find((l) => !l.ok && (l.label === "Inbox" || l.label === "Computer" || l.label === "Channels"))?.label ?? "Activation";
 
@@ -138,6 +138,10 @@ export default async function AgentOverview({ params, searchParams }: { params: 
         </section>
       ) : null}
 
+      {provisioning ? (
+        // Until setup finishes there is nothing to show below the setup card: no empty panels, no repeated stack.
+        <p className="text-[13px] text-ink-3">Workflows and deliverables appear once {agent.name} is set up.</p>
+      ) : (
       <div className="grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-10">
           <section>
@@ -246,6 +250,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
           </section>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -262,4 +267,3 @@ function landsAt(releaseAt: Date | null, timezone: string) {
   return `${day} at ${time}${tz ? ` ${tz}` : ""}`;
 }
 
-const SETUP_STALL_MS = 3 * 60_000;

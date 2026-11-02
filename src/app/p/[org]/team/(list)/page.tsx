@@ -54,12 +54,7 @@ export default async function TeamPage({
                   className="group flex h-full flex-col rounded-xl border border-line bg-surface p-5 shadow-sm transition-[border-color,box-shadow] duration-200 hover:border-line-strong hover:shadow-md"
                 >
                   <div className="flex items-start gap-3.5">
-                    <AgentOrb
-                      seed={a.seed}
-                      name={a.name}
-                      size={44}
-                      live={a.status === "active"}
-                    />
+                    <AgentOrb seed={a.seed} name={a.name} size={44} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <h2 className="truncate text-[16px] font-semibold tracking-[-0.01em] text-ink">

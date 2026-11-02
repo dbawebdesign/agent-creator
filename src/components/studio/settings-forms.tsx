@@ -17,7 +17,11 @@ const ZONES = ["America/New_York", "America/Chicago", "America/Denver", "America
 
 export function ProfileForm({ agency, initial, canEdit }: { agency: string; initial: Profile; canEdit: boolean }) {
   const [f, setF] = useState(initial);
+  const [saved, setSaved] = useState(initial);
+  const [justSaved, setJustSaved] = useState(false);
   const [pending, start] = useTransition();
+  // Saves only the profile and branding above it; Agent email, Team and API keys save on their own.
+  const dirty = JSON.stringify(f) !== JSON.stringify(saved);
   const accent = /^#[0-9a-fA-F]{6}$/.test(f.accent) ? f.accent : "#4f46e5";
   const shown = f.displayName || f.name;
   return (
@@ -26,8 +30,11 @@ export function ProfileForm({ agency, initial, canEdit }: { agency: string; init
         e.preventDefault();
         start(async () => {
           const r = await updateAgency(agency, f);
-          if (r.ok) toast.success("Settings saved");
-          else toast.error(r.error);
+          if (r.ok) {
+            setSaved(f);
+            setJustSaved(true);
+            toast.success("Profile and branding saved");
+          } else toast.error(r.error);
         });
       }}
       className="space-y-12"
@@ -113,9 +120,11 @@ export function ProfileForm({ agency, initial, canEdit }: { agency: string; init
       </fieldset>
 
       {canEdit ? (
-        <div className="flex justify-end border-t border-line pt-5">
-          <Button type="submit" variant="primary" disabled={pending}>
-            {pending ? "Saving…" : "Save settings"}
+        <div className="-mt-6 flex items-center justify-end gap-3">
+          {!dirty && justSaved ? <span className="text-[12.5px] text-ink-3" role="status">Saved</span> : null}
+          {dirty ? <span className="text-[12.5px] text-ink-3">Unsaved changes</span> : null}
+          <Button type="submit" variant="primary" disabled={pending || !dirty}>
+            {pending ? "Saving…" : "Save profile and branding"}
           </Button>
         </div>
       ) : null}

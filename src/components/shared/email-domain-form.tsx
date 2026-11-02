@@ -11,16 +11,32 @@
 import { useRouter } from "next/navigation";
 import { useId, useState, useTransition } from "react";
 import { toast } from "sonner";
+import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/field";
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { checkEmailDomainAction, removeEmailDomainAction, setEmailDomainAction } from "@/server/channels/actions";
 import type { EmailDomainView } from "@/server/channels/domains";
 
+/**
+ * Whether agent addresses actually work right now, from the channels service (`emailReadinessFrom`):
+ * "receiving", "sending_only" or "not_set_up", with one plain line on what's missing.
+ */
+export type EmailReadinessView = { state: "receiving" | "sending_only" | "not_set_up"; detail: string };
+
+export function ReadinessPill({ r }: { r: EmailReadinessView }) {
+  if (r.state === "receiving") return <Badge tone="good" dot>Receiving</Badge>;
+  if (r.state === "sending_only") return <Badge tone="warn" dot>Sending only</Badge>;
+  return <Badge tone="warn" dot>Not receiving yet</Badge>;
+}
+
 const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
 
-function StatusBadge({ d }: { d: EmailDomainView }) {
-  if (d.status === "verified") return <Badge tone="good" dot>{d.simulated ? "Verified (test mode)" : "Verified"}</Badge>;
+function StatusBadge({ d, readiness }: { d: EmailDomainView; readiness?: EmailReadinessView }) {
+  // Verified DNS isn't the same as working mail: once verified, say whether mail actually flows.
+  if (d.status === "verified") return readiness ? <ReadinessPill r={readiness} /> : <Badge tone={d.simulated ? "warn" : "good"} dot>{d.simulated ? "Test mode" : "Verified"}</Badge>;
   if (d.status === "failed") return <Badge tone="bad" dot>Verification failed</Badge>;
   return <Badge tone="warn" dot>Waiting for DNS</Badge>;
 }
@@ -30,9 +46,12 @@ export function EmailDomainForm({
   current,
   effectiveDomain,
   platformDomain,
+  readiness,
   className,
 }: {
   orgId: string;
+  /** Honest mail status (see EmailReadinessView). Without it the badge only reflects DNS verification. */
+  readiness?: EmailReadinessView;
   current: EmailDomainView | null;
   /** The domain agents use right now (this org's, an inherited one, or the platform's). */
   effectiveDomain: string;
@@ -46,6 +65,7 @@ export function EmailDomainForm({
   const [value, setValue] = useState(current?.domain ?? "");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const inherited = !domain && effectiveDomain !== platformDomain;
 
   const save = () => {
@@ -90,29 +110,57 @@ export function EmailDomainForm({
     <div className={className}>
       {domain && !editing ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-[13.5px] text-ink">@{domain.domain}</span>
-            <StatusBadge d={domain} />
-            <div className="ml-auto flex gap-1.5">
-              {domain.status !== "verified" ? (
-                <Button size="sm" variant="secondary" onClick={check} disabled={pending}>
-                  {pending ? "Checking…" : "Check now"}
-                </Button>
-              ) : null}
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)} disabled={pending}>
-                Change
-              </Button>
-              <Button size="sm" variant="ghost" onClick={remove} disabled={pending}>
-                Remove
-              </Button>
+          <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-xs sm:px-5">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-mono text-[13.5px] text-ink">@{domain.domain}</p>
+              <p className="mt-0.5 text-[12px] text-ink-3">
+                {domain.status === "verified" ? (readiness?.detail ?? `Agents send and receive email as name@${domain.domain}.`) : "Agents keep using @" + effectiveDomain + " until this is verified."}
+              </p>
             </div>
+            <StatusBadge d={domain} readiness={readiness} />
+            {domain.status !== "verified" ? (
+              <Button size="sm" variant="secondary" onClick={check} disabled={pending}>
+                {pending ? "Checking…" : "Check now"}
+              </Button>
+            ) : null}
+            <Menu>
+              <MenuTrigger className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink data-[state=open]:bg-surface-2" aria-label="Domain actions" disabled={pending}>
+                <MoreHorizontal className="size-4" />
+              </MenuTrigger>
+              <MenuContent align="end">
+                <MenuItem onSelect={() => setEditing(true)}>
+                  <Pencil /> Change domain
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem onSelect={() => setConfirmRemove(true)} className="text-bad">
+                  <Trash2 /> Remove…
+                </MenuItem>
+              </MenuContent>
+            </Menu>
           </div>
-          {domain.status === "verified" ? (
-            <p className="text-[12.5px] text-ink-3">Agents send and receive email as name@{domain.domain}.</p>
-          ) : (
+          <Dialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+            <DialogContent title={`Remove @${domain.domain}?`} description={`Agents go back to @${platformDomain}. Anyone emailing the old addresses won't reach them.`}>
+              <div className="mt-5 flex justify-end gap-2">
+                <DialogClose asChild>
+                  <Button variant="ghost">Cancel</Button>
+                </DialogClose>
+                <Button
+                  variant="danger"
+                  disabled={pending}
+                  onClick={() => {
+                    setConfirmRemove(false);
+                    remove();
+                  }}
+                >
+                  Remove domain
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+          {domain.status === "verified" ? null : (
             <>
               <p className="text-[12.5px] text-ink-3">
-                {domain.note ?? "Add these records at your DNS provider, then check again."} Until it's verified, agents keep using @{effectiveDomain}.
+                {domain.note ?? "Add these records at your DNS provider, then check again."}
                 {domain.status === "pending" && domain.expiresAt ? ` This claim lapses ${new Date(domain.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })} if it isn't verified.` : ""}
               </p>
               {domain.records.length > 0 ? (
@@ -144,6 +192,14 @@ export function EmailDomainForm({
           )}
         </div>
       ) : (
+        <>
+        {readiness && !domain ? (
+          <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-3">
+            <span className="font-mono text-[13px] text-ink-2">@{effectiveDomain}</span>
+            <ReadinessPill r={readiness} />
+            <span className="w-full">{readiness.detail}</span>
+          </div>
+        ) : null}
         <form
           className="flex flex-wrap items-start gap-2"
           onSubmit={(e) => {
@@ -185,6 +241,7 @@ export function EmailDomainForm({
                 : `Agents use @${effectiveDomain} until you set a domain you own. A subdomain like agents.yourcompany.com works best.`)}
           </p>
         </form>
+        </>
       )}
     </div>
   );

@@ -1,0 +1,37 @@
+import pg from "pg";
+import { createRequire } from "node:module";
+const { chromium } = createRequire(import.meta.url)("playwright");
+import { createHash, randomBytes } from "node:crypto";
+const base = "http://localhost:3000";
+const out = ".workbench/screens/portal-r6";
+const client = new pg.Client({ connectionString: "postgres://roster:roster@localhost:5432/roster" });
+await client.connect();
+const u = await client.query("select id from users where lower(email)=lower($1)", ["dana@brandlord.co"]);
+const token = randomBytes(32).toString("base64url");
+await client.query("insert into sessions (user_id, token_hash, expires_at) values ($1,$2, now() + interval '1 hour')", [u.rows[0].id, createHash("sha256").update(token).digest("hex")]);
+await client.end();
+const browser = await chromium.launch();
+for (const [theme, vp] of [["light", { width: 1440, height: 900 }], ["dark", { width: 390, height: 844 }]]) {
+  const ctx = await browser.newContext({ viewport: vp, colorScheme: theme, deviceScaleFactor: vp.width < 500 ? 2 : 1 });
+  await ctx.addCookies([{ name: "roster_session", value: token, url: base }]);
+  const page = await ctx.newPage();
+  const errs = [];
+  page.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+  await page.goto(`${base}/p/brandlord`, { waitUntil: "networkidle" });
+  if (vp.width < 500) await page.getByRole("button", { name: "Search" }).click();
+  else await page.keyboard.press("Control+k");
+  await page.waitForSelector("[cmdk-input]");
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${out}/p01-cmdk-empty-${theme}.png` });
+  await page.keyboard.type("social");
+  await page.waitForTimeout(900);
+  const items = await page.$$eval("[cmdk-item]", (els) => els.map((e) => e.textContent));
+  console.log(theme, "social →", items);
+  await page.screenshot({ path: `${out}/p02-cmdk-social-${theme}.png` });
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1500);
+  console.log(theme, "after enter:", page.url());
+  console.log(theme, "errors:", errs);
+  await ctx.close();
+}
+await browser.close();

@@ -50,19 +50,53 @@ export const useCommandPalette = () => useContext(Ctx);
 export function CommandPalette({
   items,
   search: remoteSearch,
+  onOpenLoad,
   placeholder = "Type a command or search…",
+  shortPlaceholder = "Search or jump to…",
   children,
 }: {
   items: PaletteItem[];
   /** Optional server search (debounced, capped by the caller). Results merge into the local items. */
   search?: (q: string) => Promise<PaletteItem[]>;
+  /** Optional items fetched each time the palette opens (e.g. "Needs attention"); listed before `items`. */
+  onOpenLoad?: () => Promise<PaletteItem[]>;
   placeholder?: string;
+  /** Placeholder on touch screens (pointer: coarse), where the long one gets cut off. */
+  shortPlaceholder?: string;
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [remote, setRemote] = useState<PaletteItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pinned, setPinned] = useState<PaletteItem[]>([]);
+  const [selected, setSelected] = useState("");
+  const [coarse, setCoarse] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(pointer: coarse)");
+    const sync = () => setCoarse(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!open || !onOpenLoad) return;
+    let alive = true;
+    onOpenLoad()
+      .then((r) => {
+        if (!alive) return;
+        setPinned(r);
+        // Items that arrive after opening go first, so the highlight follows them to the top.
+        const top = r[0];
+        if (top) setSelected((cur) => (cur && search.trim() ? cur : `${top.label}${SEP}${top.id}`));
+      })
+      .catch(() => alive && setPinned([]));
+    return () => {
+      alive = false;
+    };
+  }, [open, onOpenLoad]);
 
   useEffect(() => {
     const q = search.trim();
@@ -100,7 +134,7 @@ export function CommandPalette({
   const groups = useMemo(() => {
     const map = new Map<string, PaletteItem[]>();
     const seen = new Set<string>();
-    for (const it of [...items, ...remote]) {
+    for (const it of [...pinned, ...items, ...remote]) {
       if (seen.has(it.id)) continue;
       seen.add(it.id);
       const list = map.get(it.group) ?? [];
@@ -114,7 +148,7 @@ export function CommandPalette({
     return entries
       .map(([g, list]) => [g, [...list].sort((a, b) => score(b) - score(a))] as [string, PaletteItem[]])
       .sort((a, b) => Math.max(...b[1].map(score)) - Math.max(...a[1].map(score)));
-  }, [items, remote, search]);
+  }, [pinned, items, remote, search]);
 
   const run = useCallback(
     (it: PaletteItem) => {
@@ -140,14 +174,14 @@ export function CommandPalette({
           >
             <D.Title className="sr-only">Command palette</D.Title>
             <D.Description className="sr-only">Search pages, clients, agents and actions</D.Description>
-            <Command loop className="flex flex-col" label="Command palette" filter={paletteScore} shouldFilter>
+            <Command loop className="flex flex-col" label="Command palette" filter={paletteScore} shouldFilter value={selected} onValueChange={setSelected}>
               <div className="flex items-center gap-2.5 border-b border-line px-4">
                 <Search className="size-4 text-ink-4" aria-hidden />
                 <Command.Input
                   autoFocus
                   value={search}
                   onValueChange={setSearch}
-                  placeholder={placeholder}
+                  placeholder={coarse ? shortPlaceholder : placeholder}
                   className="h-12 w-full bg-transparent text-[14.5px] text-ink placeholder:text-ink-4 focus:outline-none"
                 />
               </div>
@@ -161,20 +195,20 @@ export function CommandPalette({
                         value={`${it.label}${SEP}${it.id}`}
                         keywords={it.keywords}
                         onSelect={() => run(it)}
-                        className="flex h-9 cursor-default select-none items-center gap-2.5 rounded-md px-2.5 text-[13.5px] text-ink-2 data-[selected=true]:bg-surface-2 data-[selected=true]:text-ink [&_svg]:size-4 [&_svg]:text-ink-3"
+                        className="flex h-9 cursor-default select-none items-center gap-2.5 rounded-md px-2.5 text-[13.5px] text-ink-2 data-[selected=true]:bg-surface-2 data-[selected=true]:text-ink [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-ink-3"
                       >
                         {it.icon}
                         <span className="truncate">{it.label}</span>
-                        {it.hint ? <span className="ml-auto truncate pl-3 text-[12px] text-ink-3">{it.hint}</span> : null}
+                        {it.hint ? <span className="ml-auto max-w-[45%] shrink-0 truncate pl-3 text-[12px] text-ink-3 max-sm:hidden">{it.hint}</span> : null}
                         {it.shortcut ? (
-                          <kbd className="ml-auto rounded border border-line bg-surface-2 px-1.5 font-mono text-[11px] text-ink-3">{it.shortcut}</kbd>
+                          <kbd className="ml-auto rounded border [@media(pointer:coarse)]:hidden border-line bg-surface-2 px-1.5 font-mono text-[11px] text-ink-3">{it.shortcut}</kbd>
                         ) : null}
                       </Command.Item>
                     ))}
                   </Command.Group>
                 ))}
               </Command.List>
-              <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11.5px] text-ink-3">
+              <div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11.5px] text-ink-3 [@media(pointer:coarse)]:hidden">
                 <span>↑↓ to move</span>
                 <span>↵ to open</span>
                 <span className="ml-auto">esc to close</span>

@@ -233,7 +233,7 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
   return (
     <article className={cn("rounded-xl border border-line bg-surface shadow-xs transition-opacity", !enabled && !editing && "opacity-60")}>
       {/* Mobile: controls drop to their own row under the title so the name and schedule aren't truncated. */}
-      <div className="flex items-center gap-x-4 gap-y-3 px-4 py-4 max-sm:flex-wrap sm:px-5">
+      <div className="group flex items-center gap-x-4 gap-y-3 px-4 py-4 max-sm:flex-wrap sm:px-5">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-3 max-sm:self-start">
           <Icon className="size-4" aria-hidden />
         </span>
@@ -252,6 +252,13 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
         <div className="flex shrink-0 items-center gap-1.5 max-sm:w-full max-sm:pl-12">
           {canEdit ? (
             <>
+              {/* Desktop: Run now / Edit appear on hover or keyboard focus; the switch always shows. Touch: always shown. */}
+              <span
+                className={cn(
+                  "flex items-center gap-1.5 transition-opacity",
+                  !editing && !running && "sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100",
+                )}
+              >
               <Button
                 size="sm"
                 variant="secondary"
@@ -271,6 +278,7 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
                 Edit
                 <ChevronDown className={cn("!size-3.5 transition-transform", editing && "rotate-180")} />
               </Button>
+              </span>
               <Switch
                 checked={enabled}
                 disabled={pending}

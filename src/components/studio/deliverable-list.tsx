@@ -5,7 +5,7 @@ import { FileText, Mail, MessageSquare, Table2 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Markdown } from "@/components/shared/markdown";
 import { RelativeTime } from "@/components/shared/relative-time";
-import { hours, OUTPUT_LABEL } from "./bits";
+import { hours, OUTPUT_LABEL, previewBeyondTitle } from "./bits";
 
 type D = { id: string; title: string; preview: string | null; body: string; kind: string; status: string; needsReview: boolean; hoursSaved: number; createdAt: Date; deliveredVia: string[] };
 
@@ -28,7 +28,7 @@ export function DeliverableList({ items, empty, initialOpenId }: { items: D[]; e
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13.5px] font-medium text-ink">{d.title}</span>
-                  {d.preview ? <span className="mt-0.5 line-clamp-1 block text-[12.5px] text-ink-3">{d.preview}</span> : null}
+                  {previewBeyondTitle(d.title, d.preview) ? <span className="mt-0.5 line-clamp-1 block text-[12.5px] text-ink-3">{previewBeyondTitle(d.title, d.preview)}</span> : null}
                   <span className="mt-1 block text-[12px] text-ink-3">
                     {OUTPUT_LABEL[d.kind] ?? d.kind} · {d.needsReview && d.status === "new" ? <span className="text-warn">Needs review</span> : STATUS[d.status] ?? d.status}
                   </span>

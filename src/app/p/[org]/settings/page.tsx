@@ -7,6 +7,7 @@ import {
   RevokeInvite,
 } from "@/components/portal/settings-forms";
 import { getPortal, getSettings, readPrefs } from "@/server/queries/portal";
+import { orgChain } from "@/server/auth/access";
 import { Suspense } from "react";
 import { SubscriptionCard } from "@/components/billing/subscription-card";
 import { PortalBillingFlags } from "@/components/portal/billing-flags";
@@ -59,6 +60,14 @@ export default async function SettingsPage({
 }) {
   const { org: slug } = await params;
   const p = await getPortal(slug);
+  // Who bills this org: the reseller brand for a customer, else the agency (by its display name).
+  const agencyOrg = (await orgChain(p.org.id)).find((o) => o.kind === "agency");
+  const billedBy =
+    p.org.kind === "customer"
+      ? p.brand.name
+      : agencyOrg?.branding?.displayName?.trim() ||
+        agencyOrg?.name ||
+        "Your agency";
   const s = await getSettings(p.org.id);
   const prefs = readPrefs(p.org, p.user.id);
   const branding = p.org.branding ?? {};
@@ -161,6 +170,7 @@ export default async function SettingsPage({
             returnPath={`/p/${slug}/settings`}
             title="Your plan"
             quiet
+            quietNote={`${billedBy} handles your billing. Nothing to set up here.`}
           />
         </Section>
       ) : null}

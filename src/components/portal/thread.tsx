@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PortalMarkdown as Markdown } from "./markdown";
 import { AgentOrb, Avatar } from "@/components/ui/agent-orb";
 import { AskComposer } from "./composer";
@@ -40,14 +40,26 @@ export function Thread({
 }) {
   const router = useRouter();
   const last = messages.at(-1);
-  const awaiting = Boolean(
-    last &&
-    last.author !== "agent" &&
-    last.author !== "system" &&
-    Date.now() - new Date(last.at).getTime() < 1000 * 60 * 5,
-  );
+  // "Is a reply on its way?" depends on the clock, so decide it after hydration: server and first client
+  // render agree (false), then the effect flips it, which avoids a hydration mismatch near the 5-minute edge.
+  const [awaiting, setAwaiting] = useState(false);
+  const lastAt = last?.at;
+  const lastAuthor = last?.author;
   const endRef = useRef<HTMLDivElement>(null);
   const count = messages.length;
+  // Only follow new messages as they arrive — never jump on first paint (including the first awaiting check).
+  const seen = useRef({ count, awaiting, settled: false });
+  useEffect(() => {
+    const v = Boolean(
+      lastAt &&
+      lastAuthor !== "agent" &&
+      lastAuthor !== "system" &&
+      Date.now() - new Date(lastAt).getTime() < 1000 * 60 * 5,
+    );
+    if (!seen.current.settled) seen.current = { count, awaiting: v, settled: true };
+    setAwaiting(v);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- count is read only to seed the first check
+  }, [lastAt, lastAuthor]);
 
   useEffect(() => {
     if (!awaiting) return;
@@ -55,11 +67,15 @@ export function Thread({
     return () => clearInterval(t);
   }, [awaiting, router]);
 
-  // Only follow new messages as they arrive — never jump on first paint.
-  const seen = useRef({ count, awaiting });
+  const mounted = useRef(false);
   useEffect(() => {
+    // First paint never scrolls; `seen` was seeded by the awaiting check above.
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
     const prev = seen.current;
-    seen.current = { count, awaiting };
+    seen.current = { count, awaiting, settled: true };
     if (count > prev.count || (awaiting && !prev.awaiting))
       endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [count, awaiting]);

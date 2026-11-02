@@ -13,6 +13,7 @@ import { emailInvite } from "@/server/auth/invite-email";
 import { audit } from "@/server/security/audit";
 import { randomToken, sha256 } from "@/server/security/crypto";
 import * as engine from "@/server/services/engine";
+import { searchDeliverables } from "@/server/queries/portal";
 import { slugify } from "@/lib/utils";
 
 export type ActionResult<T = object> =
@@ -672,4 +673,22 @@ export async function setWorkflowEnabledAction(
   });
   refresh(parsed.data.slug);
   return { ok: true };
+}
+
+/* ----------------------------------------------------------------- ⌘K search */
+
+const paletteSearchInput = z.object({
+  slug: z.string().min(1).max(100),
+  q: z.string().max(100),
+});
+
+/** Deliverable titles for the portal's ⌘K. Any member of the portal (viewers too) may search their own org. */
+export async function searchDeliverablesAction(input: {
+  slug: string;
+  q: string;
+}): Promise<{ id: string; title: string; agentName: string }[]> {
+  const parsed = paletteSearchInput.safeParse(input);
+  if (!parsed.success) return [];
+  const access = await requireOrg(parsed.data.slug, "viewer");
+  return searchDeliverables(access.org.id, parsed.data.q);
 }

@@ -6,7 +6,7 @@
  */
 import { cell, normalizeWhitespace, tokenize, truncate } from "../text";
 import { mentions, namedInTask } from "./quotes";
-import { answerFromRows, asksForRows, collectTables, columnsOf as tableColumns, describePlan, exclusionsFrom, namesIn, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
+import { answerFromRows, asksForRows, closedRow, collectTables, columnsOf as tableColumns, describePlan, exclusionsFrom, namesIn, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
 
 export type Snip = { title: string; text: string; kind?: string };
 export type ComposeInput = {
@@ -21,7 +21,7 @@ export type ComposeInput = {
 };
 /** `trace` is the agency-facing "how I put this together" table: recorded in run_steps, never in the client's body. */
 /** `data.substantive` is false when the body is a placeholder (format only, asks for data): no hours are credited for it. */
-export type Composed = { title: string; kind: string; body: string; preview: string; trace?: string; data?: { substantive: boolean; basis?: string; rows?: number } };
+export type Composed = { title: string; kind: string; body: string; preview: string; trace?: string; data?: { substantive: boolean; basis?: string; rows?: number; sorted?: boolean; excluded?: number } };
 
 // ───────────────────────────────────────────── context ─────────────────────────────────────────────
 
@@ -329,8 +329,8 @@ function revise(input: ComposeInput, pool: Sent[]): Composed {
       const m = before ? before.rows.length : 0;
       const changed = [
         before ? (n !== m ? `${m} → ${n} rows` : `same ${n} rows`) : `turned it into the list from ${redo.data?.basis ?? "your file"} (${n} rows)`,
-        /\bleave|left out|skip|remove|drop|exclude\b/i.test(fb) ? `left out what you named` : null,
-        /\bfirst\b|\bsort|\border\b/i.test(fb) ? "re-sorted as asked" : null,
+        /\bleave|left out|skip|remove|drop|exclude\b/i.test(fb) && (redo.data?.excluded ?? 0) > 0 ? `left out what you named` : null,
+        /\bfirst\b|\bsort|\border\b/i.test(fb) ? (redo.data?.sorted ? "re-sorted as asked" : n > 1 ? "couldn't tell how to sort it, so it keeps the file's order" : null) : null,
         /\b(?:text|message|email|reminder)s?\b/i.test(fb) && /## (?:Reminder texts|Emails)/.test(redo.body) ? "one draft per row" : null,
       ].filter(Boolean);
       return { ...redo, title: input.title, body: `## What changed\n\n${cap(changed.join("; "))}.\n\n${redo.body}`, preview: truncate(`Revised “${title}”: ${changed.join("; ")}.`, 200) };
@@ -486,7 +486,7 @@ function tableFor(text: string, tables: FileTable[], rules: string[], now: Date)
 }
 
 const wantsRowDrafts = (text: string) =>
-  /\b(?:draft|write|prepare|compose)\b[^.]*\b(?:texts?|sms|emails?|reminders?|messages?|notes?)\b|\b(?:reminder|follow-up) (?:texts?|emails?|messages?)\b/i.test(text) && /\b(?:each|every|per|all|one for|for the|owners?|clients?|customers?|contacts?)\b/i.test(text);
+  /\b(?:draft|write|prepare|compose)\b[^.]*\b(?:texts?|sms|emails?|reminders?|messages?|notes?)\b|\b(?:reminder|follow-up|renewal) (?:texts?|emails?|messages?)\b|\b(?:texts?|emails?|messages?|reminders?) drafted\b/i.test(text) && /\b(?:each|every|per|all|one for|for the|owners?|clients?|customers?|contacts?)\b/i.test(text);
 
 /** A table / list task over an uploaded file, done on the rows. Null when no uploaded table fits the task. */
 function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, now: Date, prefersText: boolean): Composed | null {
@@ -507,7 +507,7 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
   const odOf = (r: string[]) => (p.cols.overdue >= 0 ? Number(r[p.cols.overdue]) : p.derived?.values.get(r));
 
   const drafts = wantsRowDrafts(text)
-    ? p.rows.filter((r) => !p.noContact.some((x) => x.row === r)).slice(0, 25).map((r) =>
+    ? p.rows.filter((r) => !p.noContact.some((x) => x.row === r) && !closedRow(p, r, text)).slice(0, 25).map((r) =>
         rowDraft(p, r, {
           org: who.org,
           agent: who.agent,
@@ -523,17 +523,20 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
   const top = p.rows[0];
   const topOd = top ? odOf(top) : undefined;
   const summary = [describePlan(p, noun)];
-  if (top && p.sortedBy && topOd != null && Number.isFinite(topOd)) summary.push(`${subj(top)} is the most overdue at ${topOd} days.`);
+  if (top && p.sortedBy === "most overdue first" && topOd != null && Number.isFinite(topOd) && topOd > 0) summary.push(`${subj(top)} is the most overdue at ${topOd} days.`);
+  else if (top && p.sortedBy && /soonest first/.test(p.sortedBy) && p.cols.due >= 0) summary.push(`Soonest: ${subj(top)} on ${top[p.cols.due]}.`);
   if (drafts.length) {
     const heldN = drafts.filter((d) => d.held).length;
     summary.push(`${drafts.length} ${drafts[0]!.channel === "text" ? (drafts.length === 1 ? "reminder text" : "reminder texts") : drafts.length === 1 ? "email" : "emails"} drafted below, one per ${p.cols.person >= 0 ? norm1(p.table.headers[p.cols.person]!) : noun}${heldN ? `; ${heldN} ${heldN === 1 ? "waits" : "wait"} for sign-off` : ""}. Nothing is sent until you approve.`);
   }
+  const closed = p.rows.filter((r) => closedRow(p, r, text));
+  if (closed.length && wantsRowDrafts(text)) summary.push(`No draft for ${closed.map(nameOf).join(", ")}: the status says the policy or account is closed.`);
   if (p.noContact.length) summary.push(`No draft for ${p.noContact.map((x) => nameOf(x.row)).join(", ")} — ${[...new Set(p.noContact.map((x) => x.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
   if (p.excluded.length) summary.push(`Left out: ${p.excluded.map((e) => nameOf(e.row)).join(", ")} — ${[...new Set(p.excluded.map((e) => e.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
   lines.push("## Summary", "", summary.join(" "));
-  if (p.unmapped.length) lines.push("", `**Couldn't apply:** ${p.unmapped.join("; ")}. ${p.applied.length ? "The rest is applied." : "Showing every row instead."}`);
+  if (p.unmapped.length) lines.push("", `_Note: ${cap(p.unmapped[0]!)}${p.applied.length ? "" : "; showing every row"}._`);
   lines.push("", `## ${p.rows.length ? cap(plural(noun)) : "Result"}`, "");
-  if (p.rows.length) lines.push(...planTable(p));
+  if (p.rows.length) lines.push(...planTable(p, text));
   else lines.push(`No ${plural(noun)} in ${p.table.title} match${p.applied.length ? ` ${p.applied.join(", ")}` : ""}.`);
   if (drafts.length) {
     lines.push("", `## ${drafts[0]!.channel === "text" ? "Reminder texts" : "Emails"}`, "");
@@ -557,7 +560,7 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
     `| 2 | Filter and sort | ${cell(p.applied.join(", ") || "none")}${p.sortedBy ? `; ${cell(p.sortedBy)}` : ""} | The instructions |`,
     `| 3 | Drafts | ${drafts.length} | ${cell(p.cols.person >= 0 ? p.table.headers[p.cols.person]! : "—")} column |`,
   ].join("\n");
-  return { title: input.title, kind: input.output === "email_draft" ? "document" : input.output, body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), preview, trace, data: { substantive: true, basis: p.table.title, rows: p.rows.length } };
+  return { title: input.title, kind: input.output === "email_draft" ? "document" : input.output, body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), preview, trace, data: { substantive: true, basis: p.table.title, rows: p.rows.length, sorted: !!p.sortedBy && p.rows.length > 1, excluded: p.excluded.length + p.noContact.length } };
 }
 
 const norm1 = (h: string) => h.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+name$/, "").trim();
@@ -589,7 +592,11 @@ export function compose(input: ComposeInput): Composed {
   const wantsSummary = /\bsummari[sz]e|\bsummary of\b|\brecap\b/i.test(req);
   // Work over an uploaded table (filter, sort, one draft per row) is done on the rows themselves.
   const prefersText = input.memories.some((m) => m.kind === "preference" && /\btexts?\b|\balways text\b/i.test(m.text));
-  if (!wantsProposal && !(wantsEmail && (namedIn(req, who).length || /#?\b[A-Z]{2,}-?\d{3,}\b/.test(req) || (input.kind !== "message" && input.output === "email_draft")))) {
+  const procedurePlans = input.kind !== "message" && input.kind !== "task" && collectTables(input.knowledge).some((t) => {
+    const pl = planRows(t, taskTextOf(input, own), rules, now);
+    return pl.applied.length > 0 || !!pl.sortedBy;
+  });
+  if (!wantsProposal && !(wantsEmail && (namedIn(req, who).length || /#?\b[A-Z]{2,}-?\d{3,}\b/.test(req) || (input.kind !== "message" && input.output === "email_draft" && !procedurePlans)))) {
     const tw = tableWork(input, own, rules, who, now, prefersText);
     if (tw) return tw;
   }
@@ -975,7 +982,7 @@ function rowReminder(t: Analysis, r: string[], req: string, who: Who, knowledge:
   const ft: FileTable = { title: t.table.title, headers: t.table.headers, rows: t.table.rows, total: null };
   const plan = planRows(ft, "", rules, now);
   if (plan.cols.due < 0 && plan.cols.overdue < 0) return null;
-  if (!/\b(?:remind|reminder|overdue|due|booster|renew|book|follow up|follow-up)\b/i.test(req)) return null;
+  if (!/\b(?:remind|reminder|overdue|due|booster|renew\w*|book|follow up|follow-up)\b/i.test(req)) return null;
   const channel = /\btexts?\b|\bsms\b/i.test(req) ? "text" : "email";
   return rowDraft({ ...plan, rows: [r] }, r, { org: who.org, agent: who.agent, channel, link: linkFrom(knowledge), topic: null, forbidden: forbiddenTopics(rules), now });
 }
@@ -1024,7 +1031,7 @@ function findRecipient(named: string[], explicit: string | null, tables: Analysi
   const factsOf = (t: Analysis, r: string[], label: string | null, person: string | null) =>
     t.headers
       .map((h, i) => ({ h, v: r[i] ?? "" }))
-      .filter(({ h, v }) => v && v !== "—" && !/email|phone/i.test(h) && v !== label && v !== person)
+      .filter(({ h, v }) => v && v !== "—" && !/email|phone/i.test(h) && !/premium|price|amount|cost|fee|rate|balance/i.test(h) && v !== label && v !== person)
       .slice(0, 5)
       .map(({ h, v }) => `${h}: ${v}`);
   if (explicit) {

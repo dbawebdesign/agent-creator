@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Toaster } from "@/components/shared/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PortalShell } from "@/components/portal/shell";
-import { getPortal } from "@/server/queries/portal";
+import { getPaletteData, getPortal } from "@/server/queries/portal";
 import "@/components/portal/portal.css";
 import { brandVars } from "@/components/portal/brand-color";
 
@@ -27,6 +27,7 @@ export default async function PortalLayout({
 }) {
   const { org: slug } = await params;
   const p = await getPortal(slug);
+  const palette = await getPaletteData(p.org.id);
   // accent is validated as #rrggbb in resolveBrand, so this CSS can't carry anything else.
   const brandCss = p.brand.accent ? brandVars(p.brand.accent) : null;
   return (
@@ -46,6 +47,18 @@ export default async function PortalLayout({
           needsYouCount={p.needsYouCount}
           user={{ name: p.user.name, email: p.user.email }}
           viewingAs={p.viewingAs}
+          palette={{
+            agents: palette.agents
+              .filter((a) => a.status !== "archived")
+              .map((a) => ({
+                id: a.id,
+                name: a.name,
+                role: a.role,
+                seed: a.seed,
+              })),
+            needs: palette.needs,
+            recent: palette.recent,
+          }}
         >
           {children}
         </PortalShell>

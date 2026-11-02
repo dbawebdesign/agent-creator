@@ -73,9 +73,11 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
                       <div className="min-w-0 flex-1">
                         <p className="text-[14px] font-medium text-ink">{a.name}</p>
                         <p className="truncate text-[12.5px] text-ink-3">{a.role}</p>
-                        <div className="mt-2">
-                          <AgentStatus status={a.status} />
-                        </div>
+                        {a.status !== "active" ? (
+                          <div className="mt-2">
+                            <AgentStatus status={a.status} createdAt={a.createdAt} />
+                          </div>
+                        ) : null}
                       </div>
                     </Link>
                   </li>

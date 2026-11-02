@@ -474,7 +474,7 @@ export function NewPlanDialog({
     >
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="secondary" size="sm">
+          <Button variant="ghost" size="sm" className="text-ink-2">
             <Plus aria-hidden /> New plan
           </Button>
         )}

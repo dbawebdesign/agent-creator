@@ -11,6 +11,8 @@ import {
   ChevronsUpDown,
   CreditCard,
   FileText,
+  MessageSquareWarning,
+  RotateCcw,
   House,
   LayoutTemplate,
   LogOut,
@@ -25,7 +27,7 @@ import { AgentOrb, Avatar } from "@/components/ui/agent-orb";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { CommandPalette, useCommandPalette, type PaletteItem } from "@/components/shared/command-palette";
 import { LogoMark } from "@/components/shared/logo";
-import { paletteSearch } from "@/app/a/_actions/search";
+import { paletteAttentionItems, paletteSearch } from "@/app/a/_actions/search";
 import { cn } from "@/lib/utils";
 
 export type ShellProps = {
@@ -33,7 +35,7 @@ export type ShellProps = {
   agencies: { name: string; slug: string }[];
   user: { name: string | null; email: string };
   clients: { id: string; name: string; slug: string }[];
-  agents: { id: string; name: string; role: string; seed: string; orgName: string; status: string }[];
+  agents: { id: string; name: string; role: string; seed: string; orgName: string; status: string; stalled?: boolean }[];
   /** Totals: the shell only carries a few recent items. */
   counts: { agents: number; clients: number };
   signOut: () => Promise<void>;
@@ -102,8 +104,43 @@ export function StudioShell(props: ShellProps) {
     [slug, base],
   );
 
+  // Leads an empty ⌘K with the same work Home leads with; approvals are indexed by their text.
+  const attention = useCallback(async (): Promise<PaletteItem[]> => {
+    const r = await paletteAttentionItems(slug);
+    const group = "Needs attention";
+    return [
+      ...r.approvals.map((a) => ({
+        id: `approval-${a.id}`,
+        group,
+        label: `Review: ${a.description}`,
+        hint: `${a.agentName} · ${a.orgName}`,
+        href: `${base}/agents/${a.agentId}`,
+        icon: <CheckCheck />,
+        keywords: ["approve", "approval", "decline", "pending", a.agentName, a.orgName],
+      })),
+      ...r.changes.map((d) => ({
+        id: `changes-${d.id}`,
+        group,
+        label: `Changes requested: ${d.title}`,
+        hint: `${d.agentName} · ${d.orgName}`,
+        href: `${base}/agents/${d.agentId}?d=${d.id}`,
+        icon: <MessageSquareWarning />,
+        keywords: ["changes", "revise", "feedback", d.agentName, d.orgName],
+      })),
+      ...r.stalled.map((a) => ({
+        id: `stalled-${a.id}`,
+        group,
+        label: `Retry ${a.name}’s setup`,
+        hint: `Setup stalled · ${a.orgName}`,
+        href: `${base}/agents/${a.id}`,
+        icon: <RotateCcw />,
+        keywords: ["stalled", "retry", "setup", a.orgName],
+      })),
+    ];
+  }, [slug, base]);
+
   return (
-    <CommandPalette items={items} search={search} placeholder="Search agents, clients, deliverables, or type a command…">
+    <CommandPalette items={items} search={search} onOpenLoad={attention} placeholder="Search agents, clients, deliverables, or type a command…">
       <ShellFrame {...props} base={base} />
     </CommandPalette>
   );
@@ -226,28 +263,39 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
         {props.agents.length ? (
           <div className="mt-6 min-h-0 flex-1 overflow-y-auto px-3">
             <div className="px-2.5 pb-1.5 text-[11.5px] font-medium text-ink-3">Your roster</div>
-            <ul className="space-y-px">
-              {props.agents.slice(0, 8).map((a) => {
-                const href = `${base}/agents/${a.id}`;
-                const active = pathname.startsWith(href);
-                return (
-                  <li key={a.id}>
-                    <Link
-                      href={href}
-                      title={`${a.name} · ${a.role} · ${a.orgName}`}
-                      className={cn(
-                        "flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors",
-                        active ? "bg-surface-2 text-ink" : "text-ink-2 hover:bg-surface-2/70 hover:text-ink",
-                      )}
-                    >
-                      <AgentOrb seed={a.seed} name={a.name} size={16} />
-                      <span className="max-w-[60%] shrink-0 truncate">{a.name}</span>
-                      <span className="ml-auto min-w-0 truncate pl-2 text-right text-[11.5px] text-ink-3">{a.orgName}</span>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+            {/* Grouped by client (alphabetical), so same-named agents never need a truncated suffix to tell apart. */}
+            {rosterGroups(props.agents.slice(0, 8)).map(([org, list]) => (
+              <div key={org} className="mb-1">
+                <div className="truncate px-2.5 pt-1.5 pb-0.5 text-[11px] text-ink-4" title={org}>
+                  {org}
+                </div>
+                <ul className="space-y-px">
+                  {list.map((a) => {
+                    const href = `${base}/agents/${a.id}`;
+                    const active = pathname.startsWith(href);
+                    const flag = a.stalled ? "Setup stalled" : a.status === "paused" ? "Paused" : null;
+                    return (
+                      <li key={a.id}>
+                        <Link
+                          href={href}
+                          title={`${a.name} · ${a.role} · ${org}${flag ? ` · ${flag}` : ""}`}
+                          className={cn(
+                            "flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors",
+                            active ? "bg-surface-2 text-ink" : "text-ink-2 hover:bg-surface-2/70 hover:text-ink",
+                          )}
+                        >
+                          <AgentOrb seed={a.seed} name={a.name} size={16} />
+                          <span className="min-w-0 truncate">{a.name}</span>
+                          {flag ? (
+                            <span className="ml-auto size-1.5 shrink-0 rounded-full bg-warn" role="img" aria-label={flag} />
+                          ) : null}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
             {props.counts.agents > props.agents.length ? (
               <Link href={`${base}/agents`} className="mt-1 flex h-8 items-center rounded-md px-2.5 text-[12.5px] font-medium text-ink-3 hover:bg-surface-2/70 hover:text-ink">
                 View all {props.counts.agents.toLocaleString()}
@@ -341,4 +389,13 @@ function UserMenu({ user, signOut }: { user: ShellProps["user"]; signOut: () => 
       </MenuContent>
     </Menu>
   );
+}
+
+/** Sidebar roster: agents grouped under their client, clients A→Z, agents A→Z within each. */
+function rosterGroups(agents: ShellProps["agents"]): [string, ShellProps["agents"]][] {
+  const map = new Map<string, ShellProps["agents"]>();
+  for (const a of agents) map.set(a.orgName, [...(map.get(a.orgName) ?? []), a]);
+  return [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([org, list]) => [org, [...list].sort((x, y) => x.name.localeCompare(y.name))]);
 }

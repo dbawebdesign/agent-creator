@@ -1,5 +1,5 @@
 import { hasRole, requireOrg } from "@/server/auth/access";
-import { getTeam } from "@/server/queries/studio";
+import { agentEmailReadiness, getTeam } from "@/server/queries/studio";
 import { Avatar } from "@/components/ui/agent-orb";
 import { Badge } from "@/components/ui/badge";
 import { RelativeTime } from "@/components/shared/relative-time";
@@ -25,10 +25,11 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
   const access = await requireOrg(slug, "viewer");
   const org = access.org;
   const admin = hasRole(access, "admin");
-  const [{ members, invites }, keys, emailDomain] = await Promise.all([
+  const [{ members, invites }, keys, emailDomain, readiness] = await Promise.all([
     getTeam(org.id),
     admin ? loadKeys(org.id) : Promise.resolve(null),
     admin ? getEmailDomainSettings(org.id) : Promise.resolve(null),
+    admin ? agentEmailReadiness(org.id) : Promise.resolve(null),
   ]);
   const b = org.branding;
 
@@ -58,7 +59,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
         <section id="email" className="mt-16 scroll-mt-8">
           <SectionHeading title="Agent email" className="[&_h2]:text-[14px]" />
           <p className="-mt-1 mb-4 text-[13px] text-ink-3">Every agent gets its own inbox on this domain, for you and for the clients you serve.</p>
-          <EmailDomainForm orgId={org.id} {...emailDomain} />
+          <EmailDomainForm orgId={org.id} {...emailDomain} readiness={readiness ? { state: readiness.state, detail: readiness.detail } : undefined} />
         </section>
       ) : null}
 

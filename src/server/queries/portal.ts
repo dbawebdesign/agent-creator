@@ -29,6 +29,8 @@ import type { ChannelKind, WorkflowTrigger } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { agentEmail as apiAgentEmail } from "@/server/api/v1";
 import { emailDomainFor } from "@/server/channels/domains";
+import { displayFirstName } from "@/components/portal/lib";
+import { providerStatus } from "@/server/channels/service";
 
 export type PortalBrand = {
   /** Name shown in the header: the provider brand (client branding for customers). */
@@ -139,7 +141,11 @@ export const getPortal = cache(async (slug: string): Promise<PortalContext> => {
       id: user.id,
       name,
       email: user.email,
-      firstName: name?.split(/\s+/)[0] ?? user.email.split("@")[0]!,
+      // Without a name, the email's local part ("linda.m") becomes "Linda"; a lowercase name is capitalized.
+      firstName: displayFirstName(
+        name?.split(/\s+/)[0] ??
+          user.email.split("@")[0]!.split(/[._+-]/)[0]!,
+      ),
     },
     needsYouCount,
   };
@@ -294,14 +300,31 @@ export async function getToday(orgId: string) {
       .limit(5),
   ]);
   const pendingRuns = new Set(approvals.map((a) => a.runId).filter(Boolean));
+  // One card per piece of work: an older item awaiting review with the same teammate and title (a re-run or a
+  // revision) is superseded by the newest one, so it isn't shown twice. `recent` is newest first.
+  const seenTitles = new Set<string>();
+  const superseded = new Set<string>();
+  for (const d of recent) {
+    if (!(d.needsReview && (d.status === "new" || d.status === "seen"))) continue;
+    const key = `${d.agent.name}|${reviewTitleKey(d.title)}`;
+    if (seenTitles.has(key)) superseded.add(d.id);
+    else seenTitles.add(key);
+  }
   const needsReview = recent
-    .filter((d) => d.needsReview && (d.status === "new" || d.status === "seen"))
+    .filter(
+      (d) =>
+        d.needsReview &&
+        (d.status === "new" || d.status === "seen") &&
+        !superseded.has(d.id),
+    )
     .map((d) => ({
       ...d,
       sendsOnApprove: Boolean(d.runId && pendingRuns.has(d.runId)),
     }));
   const reviewRuns = new Set(needsReview.map((d) => d.runId).filter(Boolean));
-  const feed = recent.filter((d) => !needsReview.some((n) => n.id === d.id));
+  const feed = recent.filter(
+    (d) => !superseded.has(d.id) && !needsReview.some((n) => n.id === d.id),
+  );
   return {
     needsReview: needsReview as (DeliverableCard & {
       sendsOnApprove: boolean;
@@ -329,6 +352,15 @@ export async function listAgentsLite(orgId: string): Promise<AgentLite[]> {
       ),
     )
     .orderBy(asc(schema.agents.createdAt));
+}
+
+/** "Renewals due in 30 days (revised)" and "renewals due in 30 days" are the same piece of work. */
+export function reviewTitleKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/\s*\((?:revised|revision|v\d+|updated)\)\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /* ------------------------------------------------------------ Deliverable */
@@ -552,6 +584,31 @@ export function agentEmail(
     : null;
 }
 
+/**
+ * Can people email the team? One status, from the channels service (provider keys) and the org's effective
+ * domain (domains.ts), in the same three states the Studio shows:
+ * - "receiving": outbound + inbound are on and the domain is routable, so addresses work both ways.
+ * - "sending_only": the team can send, but mail to their addresses won't arrive yet.
+ * - "not_set_up": nothing goes out or comes in.
+ * Clients see addresses (and copy buttons) only while "receiving".
+ */
+export type EmailReadiness = "receiving" | "sending_only" | "not_set_up";
+export const EMAIL_READINESS_LABEL: Record<EmailReadiness, string> = {
+  receiving: "Receiving",
+  sending_only: "Sending only",
+  not_set_up: "Not set up",
+};
+export function emailReadinessFrom(
+  p: { email: boolean; emailInbound: boolean },
+  domain: string,
+): EmailReadiness {
+  if (!p.email || !deliverableDomain(domain)) return "not_set_up";
+  return p.emailInbound ? "receiving" : "sending_only";
+}
+export async function emailReadiness(orgId: string): Promise<EmailReadiness> {
+  return emailReadinessFrom(providerStatus(), await emailDomainFor(orgId));
+}
+
 /** False for reserved, non-routable TLDs (RFC 2606/6761 and friends) a client could never email. */
 export function deliverableDomain(domain: string): boolean {
   return (
@@ -619,6 +676,9 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
       .groupBy(schema.deliverables.agentId),
   ]);
   const domain = await emailDomainFor(orgId);
+  // An address nobody can write to is worse than none: only hand it out while email is receiving.
+  const receiving =
+    emailReadinessFrom(providerStatus(), domain) === "receiving";
   return agents.map((a) => {
     const s = stats.find((x) => x.agentId === a.id);
     return {
@@ -628,7 +688,7 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
       seed: a.seed,
       status: a.status,
       summary: clientSafeText(a.summary),
-      email: agentEmail(a.emailHandle, domain),
+      email: receiving ? agentEmail(a.emailHandle, domain) : null,
       phone: a.phone,
       workflows: wfs.filter((w) => w.agentId === a.id),
       delivered30d: s?.n ?? 0,
@@ -831,7 +891,7 @@ async function getRequestUncached(orgId: string, id: string) {
 /* ---------------------------------------------------------------- Connect */
 
 export async function getConnect(orgId: string) {
-  const [team, slack, sms] = await Promise.all([
+  const [team, slack, sms, emailStatus] = await Promise.all([
     getTeam(orgId),
     db()
       .select({
@@ -858,6 +918,7 @@ export async function getConnect(orgId: string) {
           eq(schema.channelConnections.kind, "sms"),
         ),
       ),
+    emailReadiness(orgId),
   ]);
   const smsByAgent = new Map(
     sms.filter((c) => c.agentId).map((c) => [c.agentId!, c.id]),
@@ -876,6 +937,7 @@ export async function getConnect(orgId: string) {
       status: a.status,
       smsConnectionId: smsByAgent.get(a.id) ?? null,
     })),
+    emailStatus,
     slack: s ? { status: s.status, teamName } : null,
     appUrl: env().APP_URL,
   };
@@ -1070,3 +1132,86 @@ export type { Role };
 export const getDeliverable = cache(getDeliverableUncached);
 export const getRequest = cache(getRequestUncached);
 export const getAgentPage = cache(getAgentPageUncached);
+
+/* ----------------------------------------------------------------- ⌘K */
+
+export type PaletteDeliverable = {
+  id: string;
+  title: string;
+  agentName: string;
+};
+
+/** What the portal's ⌘K offers before you type: teammates, what's waiting on you, and recent work. Org-scoped. */
+export async function getPaletteData(orgId: string): Promise<{
+  agents: AgentLite[];
+  needs: PaletteDeliverable[];
+  recent: PaletteDeliverable[];
+}> {
+  const pick = {
+    id: schema.deliverables.id,
+    title: schema.deliverables.title,
+    agentName: schema.agents.name,
+  };
+  const [agents, needs, recent] = await Promise.all([
+    listAgentsLite(orgId),
+    db()
+      .select(pick)
+      .from(schema.deliverables)
+      .innerJoin(
+        schema.agents,
+        eq(schema.agents.id, schema.deliverables.agentId),
+      )
+      .where(
+        and(
+          eq(schema.deliverables.orgId, orgId),
+          eq(schema.deliverables.needsReview, true),
+          inArray(schema.deliverables.status, ["new", "seen"]),
+        ),
+      )
+      .orderBy(desc(schema.deliverables.createdAt))
+      .limit(5),
+    db()
+      .select(pick)
+      .from(schema.deliverables)
+      .innerJoin(
+        schema.agents,
+        eq(schema.agents.id, schema.deliverables.agentId),
+      )
+      .where(
+        and(
+          eq(schema.deliverables.orgId, orgId),
+          ne(schema.deliverables.status, "archived"),
+        ),
+      )
+      .orderBy(desc(schema.deliverables.createdAt))
+      .limit(6),
+  ]);
+  return { agents, needs, recent };
+}
+
+/** Title search over this org's deliverables for ⌘K. Capped at 8; LIKE wildcards in the query are literal. */
+export async function searchDeliverables(
+  orgId: string,
+  q: string,
+): Promise<PaletteDeliverable[]> {
+  const term = q.trim().slice(0, 100);
+  if (!term) return [];
+  const escaped = term.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return db()
+    .select({
+      id: schema.deliverables.id,
+      title: schema.deliverables.title,
+      agentName: schema.agents.name,
+    })
+    .from(schema.deliverables)
+    .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
+    .where(
+      and(
+        eq(schema.deliverables.orgId, orgId),
+        ne(schema.deliverables.status, "archived"),
+        sql`${schema.deliverables.title} ilike ${`%${escaped}%`}`,
+      ),
+    )
+    .orderBy(desc(schema.deliverables.createdAt))
+    .limit(8);
+}

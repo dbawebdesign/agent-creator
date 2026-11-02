@@ -425,10 +425,21 @@ const jobName = (t: Topic): string => {
   return cap(base);
 };
 /** Role from the client's Industry and the top pain ("Veterinary" + "vaccine recalls" → "Veterinary Vaccine Recall Coordinator"). */
-const industryRole = (t: Topic, ctx: Ctx): string => {
-  const ind = (ctx.industry ?? ctx.vertical?.label ?? "").split(/[\s/&,]+/)[0] ?? "";
-  const pain = jobName(t).split(/\s+/).map((w) => cap(singular(w.toLowerCase()))).join(" ");
-  const head = ind && !/^(?:commercial|small|local|the|a)$/i.test(ind) && !pain.toLowerCase().startsWith(ind.toLowerCase()) ? `${cap(ind.toLowerCase())} ` : "";
+const industryRole = (t: Topic, ctx: Ctx, job?: string): string => {
+  // "Independent insurance agency" → "Insurance"; "Veterinary clinic" → "Veterinary"; "Commercial pest control" → "Pest Control".
+  const ind = (ctx.industry ?? ctx.vertical?.label ?? "")
+    .toLowerCase()
+    .split(/[/&,(]/)[0]!
+    .replace(/\b(?:independent|small|local|boutique|full[- ]service|family[- ]owned|commercial|residential|the|a|an)\b/g, " ")
+    .replace(/\b(?:clinic|practice|firm|agency|company|business|hospital|shop|group|services?|contractor|studio|office|provider)s?\b/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(cap)
+    .join(" ");
+  const pain = acronyms((job ?? jobName(t)).replace(/\b(?:monday|tuesday|wednesday|thursday|friday|weekly|daily|monthly|nightly|morning)\b/gi, " ").replace(/&.*$/, "").trim().split(/\s+/).filter(Boolean).map((w) => (/^[A-Z0-9-]{2,}s?$/.test(w) ? w : cap(singular(w.toLowerCase())))).join(" "));
+  const head = ind && !pain.toLowerCase().startsWith(ind.toLowerCase()) ? `${ind} ` : "";
   return truncate(`${head}${pain} Coordinator`, 80);
 };
 /** Chasing unpaid invoices from an aging report (30/60/90 days). */
@@ -764,7 +775,7 @@ const PLAYS: Record<Action, Play> = {
     verb: () => "catches after-hours emergencies",
   },
   deadline: {
-    role: (t) => `${cap(t.qualifier || "Renewals")} Coordinator`,
+    role: (t, ctx) => (t.qualifier && t.qualifier !== "policy" ? `${cap(t.qualifier)} Renewals Coordinator` : industryRole(t, ctx, "renewal")),
     name: (t) => `${cap(t.qualifier ? `${t.qualifier} renewal` : "Renewal")} offers`,
     cadence: { kind: "weekly", dow: 1 },
     outputKind: () => "email_draft",
@@ -1284,7 +1295,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   const seen = new Set<string>();
   const ordered = [...d.askTopics.slice(0, 1), ...d.topics.filter((t) => t !== d.askTopics[0])];
   // One workflow per job: the speaker's own named jobs are distinct even when no playbook covers them.
-  const jobKey = (t: Topic) => (t.action === "manual" ? `manual:${(t.label ?? t.phrase).toLowerCase()}` : t.action);
+  const jobKey = (t: Topic) => (t.action === "manual" || t.label ? `${t.action}:${(t.label ?? t.phrase).toLowerCase()}` : t.action);
   const topics = ordered.filter((t) => (seen.has(jobKey(t)) ? false : (seen.add(jobKey(t)), true))).slice(0, 5);
   const fallbackTopic: Topic | null = topics.length
     ? null
@@ -1355,7 +1366,12 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   const weeklyHoursSaved = Math.round(workflows.reduce((n, w) => n + w.hoursSavedPerRun * runsPerWeek(w.trigger), 0) * 10) / 10;
   // Never a name another agent in the agency already has, nor the name of someone at the business or on the call.
   const name = pickAgentName(`${orgName}:${primary.action}`, [...(input.avoidNames ?? []), ...d.people.map((p) => p.name), ...(d.owner ? [d.owner] : [])]);
-  const role = truncate(PLAYS[primary.action].role(primary, ctx), 80);
+  const playRole = PLAYS[primary.action].role(primary, ctx);
+  const primaryText = topicText(primary).toLowerCase();
+  const roleWords = playRole.toLowerCase().replace(/\b(?:coordinator|specialist|analyst|manager|assistant|executive|operations|follow-up|client|customer)\b/g, " ").match(/[a-z]{4,}/g) ?? [];
+  // A playbook role ("Adjuster Follow-up Coordinator") only when its words are in what the owner said about this job.
+  const supported = !roleWords.length || roleWords.some((w) => primaryText.includes(w.slice(0, 4)));
+  const role = truncate(ctx.industry && !supported ? industryRole(primary, ctx, workflows[0]!.name) : playRole, 80);
   // The agency's own Industry wording, when given; otherwise the matched business type.
   const verticalLabel = input.industry?.trim() ? truncate(normalizeWhitespace(input.industry), 80) : (vertical?.label ?? "");
 
@@ -1363,7 +1379,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   if (d.channels.slack) channels.push("slack");
   if (d.channels.sms) channels.push("sms");
 
-  const verbs = topics.map((t) => PLAYS[t.action].verb(t, ctx));
+  const verbs = topics.map((t) => acronyms(normalizeWhitespace(PLAYS[t.action].verb(t, ctx))));
   const verbList = verbs.length > 1 ? `${verbs.slice(0, -1).join(", ")} and ${verbs[verbs.length - 1]}` : (verbs[0] ?? "handles recurring work");
   const described = Math.round(d.statedHours);
   const hoursLine = `about ${Math.round(weeklyHoursSaved)}${described > Math.round(weeklyHoursSaved) ? ` of the ~${described}` : ""} hours a week ${described > Math.round(weeklyHoursSaved) ? "described on the call" : "back"}`;
@@ -1511,7 +1527,12 @@ function tidySpec(spec: AgentSpec): AgentSpec {
 
 /** A workflow name is a complete noun phrase: never ends on "and", "of", "the"… ("Last proposal and" → "Last proposal"). */
 function workflowName(s: string): string {
-  return truncate(titleOf(trimPhrase(titleOf(s))), 80);
+  return truncate(acronyms(titleOf(trimPhrase(titleOf(s)))), 80);
+}
+
+/** "Coi follow-up" → "COI follow-up", "Hoa dues" → "HOA dues". */
+function acronyms(s: string): string {
+  return s.replace(/\b(coi|po|rfp|rfq|hoa|hvac|cpa|sow|nda|kpi|crm|sms|pdf|csv|gl|dhpp|fvrcp|w-?9|w-?2|pto|ar|ap)(s?)\b/gi, (_m, a: string, pl: string) => `${a.toUpperCase()}${pl.toLowerCase()}`);
 }
 
 /** "the weekly operations summary" → "Weekly operations summary". */

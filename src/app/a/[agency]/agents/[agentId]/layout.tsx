@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronRight, Mail } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
-import { getAgent } from "@/server/queries/studio";
+import { agentEmailReadiness, getAgent } from "@/server/queries/studio";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { AgentStatus } from "@/components/studio/bits";
 import { AgentMenu, AgentTabs, CopyInline } from "@/components/studio/agent-header";
@@ -20,6 +20,7 @@ export default async function AgentLayout({ children, params }: { children: Reac
   const found = await getAgent(agency.id, agentId);
   if (!found) notFound();
   const { agent, org, inbox } = found;
+  const mail = inbox ? await agentEmailReadiness(agent.orgId, found.inboxDomain) : null;
   const base = `/a/${slug}/agents/${agent.id}`;
   return (
     <div className="mx-auto w-full max-w-[1080px] px-4 pt-6 sm:px-6 md:px-10 md:pt-9">
@@ -33,7 +34,8 @@ export default async function AgentLayout({ children, params }: { children: Reac
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">{agent.name}</h1>
-            <AgentStatus status={agent.status} />
+            {/* The avatar's live dot already says "active": the label only calls out exceptions. */}
+            <AgentStatus status={agent.status} createdAt={agent.createdAt} onlyExceptions />
           </div>
           <p className="mt-0.5 text-[14px] text-ink-3">
             {agent.role} for {org.name}
@@ -43,6 +45,11 @@ export default async function AgentLayout({ children, params }: { children: Reac
               <Mail className="size-3.5 shrink-0" aria-hidden />
               <CopyInline value={inbox} label="inbox address" />
             </div>
+          ) : null}
+          {mail && mail.state !== "receiving" ? (
+            <p className="mt-0.5 line-clamp-2 text-[12px] text-ink-4">
+              <span className="font-medium text-warn">{mail.state === "sending_only" ? "Sending only" : "Not receiving yet"}</span> · {mail.detail}
+            </p>
           ) : null}
         </div>
         <AgentMenu agency={slug} agentId={agent.id} status={agent.status} name={agent.name} portalHref={`/p/${org.slug}`} />

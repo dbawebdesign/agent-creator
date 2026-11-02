@@ -100,9 +100,7 @@ export default async function ConnectPage({
         agencyOrg?.name ||
         "your agency";
   const slackReady = slackConfigured();
-  const providers = providerStatus();
-  const smsLive = providers.sms;
-  const emailLive = providers.email && providers.emailInbound;
+  const smsLive = providerStatus().sms;
   const provider = p.org.kind === "customer" ? p.brand.name : "your provider";
   const first = c.agents[0]?.name ?? "your team";
 
@@ -124,12 +122,12 @@ export default async function ConnectPage({
           icon={<Mail />}
           title="Email"
           body={
-            c.agents.some((a) => a.email)
+            c.emailStatus === "receiving"
               ? "Every teammate has their own inbox. Forward a request, CC them on a thread, or just write — they reply in the same thread."
-              : "Forward a request, CC a teammate on a thread, or just write — they reply in the same thread."
+              : "Each teammate gets their own inbox: forward a request, CC them on a thread, or just write."
           }
         >
-          {c.agents.filter((a) => a.email).length ? (
+          {c.emailStatus === "receiving" && c.agents.some((a) => a.email) ? (
             <ul className="space-y-2.5">
               {c.agents
                 .filter((a) => a.email)
@@ -153,23 +151,18 @@ export default async function ConnectPage({
                 ))}
             </ul>
           ) : c.agents.length ? (
+            // One status from the channels service: no address or copy button until mail can actually arrive.
             <p className="text-[13px] text-ink-3 text-pretty">
-              Email isn’t switched on yet. Each teammate gets their own address
-              once {numbersFrom} turns it on — until then, write to them here in
-              the portal.
+              Email addresses coming soon: {numbersFrom} is finishing setup.
+              {c.emailStatus === "sending_only"
+                ? " Your team can already send email for you."
+                : " Until then, write to your team here in the portal."}
             </p>
           ) : (
             <p className="text-[13px] text-ink-3">
               Inboxes appear here as soon as your teammates are set up.
             </p>
           )}
-          {!emailLive && c.agents.some((a) => a.email) ? (
-            <p className="mt-3 text-[12.5px] text-ink-3 text-pretty">
-              Email isn’t switched on yet, so messages to these addresses won’t
-              arrive. Ask {numbersFrom} to turn it on — until then, write to
-              your team here in the portal.
-            </p>
-          ) : null}
         </Section>
 
         <Section

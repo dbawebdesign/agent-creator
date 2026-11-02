@@ -20,15 +20,29 @@ export const CHANNEL_LABEL: Record<string, string> = {
   mcp: "MCP",
 };
 
-export function AgentStatus({ status }: { status: string }) {
+/** Setup normally takes under a minute; past this, a provisioning agent is "Setup stalled". */
+export const SETUP_STALL_MS = 3 * 60_000;
+
+export function isSetupStalled(status: string, createdAt: Date | string | null | undefined) {
+  return status === "provisioning" && !!createdAt && Date.now() - new Date(createdAt).getTime() > SETUP_STALL_MS;
+}
+
+/**
+ * Agent status. Pass `createdAt` so a provisioning agent past the threshold reads "Setup stalled" (amber) everywhere.
+ * `onlyExceptions` hides the normal state (Active) so lists only call out what needs a look.
+ */
+export function AgentStatus({ status, createdAt, onlyExceptions = false }: { status: string; createdAt?: Date | string | null; onlyExceptions?: boolean }) {
   const map: Record<string, { tone: "good" | "warn" | "neutral" | "accent" | "bad"; label: string; pulse?: boolean }> = {
     active: { tone: "good", label: "Active" },
-    provisioning: { tone: "accent", label: "Provisioning", pulse: true },
+    provisioning: { tone: "accent", label: "Setting up", pulse: true },
+    stalled: { tone: "warn", label: "Setup stalled" },
     paused: { tone: "warn", label: "Paused" },
     draft: { tone: "neutral", label: "Draft" },
     archived: { tone: "neutral", label: "Archived" },
   };
-  const m = map[status] ?? { tone: "neutral" as const, label: status };
+  const key = isSetupStalled(status, createdAt) ? "stalled" : status;
+  if (onlyExceptions && key === "active") return null;
+  const m = map[key] ?? { tone: "neutral" as const, label: status };
   return (
     <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-3">
       <StatusDot tone={m.tone} pulse={m.pulse} />
@@ -111,4 +125,22 @@ export function microsToDollars(micros: number) {
   const d = micros / 1_000_000;
   if (d > 0 && d < 0.01) return "<$0.01";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "usd", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(d);
+}
+
+/**
+ * A deliverable's summary line, minus any echo of its title: "Overnight migration is ready." under
+ * "Overnight migration" says nothing, so it's dropped; "X is ready — 1 item needs your decision." keeps only the news.
+ */
+export function previewBeyondTitle(title: string, preview: string | null | undefined): string | null {
+  if (!preview) return null;
+  const p = preview.trim();
+  const ttl = title.trim();
+  if (!p || p.toLowerCase() === ttl.toLowerCase()) return null;
+  if (!p.toLowerCase().startsWith(ttl.toLowerCase())) return p;
+  const rest = p
+    .slice(ttl.length)
+    .replace(/^[\s:,.\u2013\u2014-]+/, "")
+    .replace(/^(is|are)\s+(ready|done|finished|delivered)(\s+for\s+(you|review))?(\s+in\s+the\s+portal)?[\s.!:,\u2013\u2014-]*/i, "");
+  if (!rest.replace(/[\s.!]/g, "")) return null;
+  return rest[0]!.toUpperCase() + rest.slice(1);
 }

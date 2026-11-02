@@ -8,6 +8,8 @@ import { cache } from "react";
 import { db, schema } from "@/server/db/client";
 import { env } from "@/server/env";
 import { emailDomainFor } from "@/server/channels/domains";
+import { providerStatus } from "@/server/channels/service";
+import { deliverableDomain, emailReadinessFrom, type EmailReadiness } from "@/server/queries/portal";
 
 const s = schema;
 const DAY = 86_400_000;
@@ -77,7 +79,7 @@ const SHELL_RECENT = 8;
 export async function getShellData(agencyId: string) {
   const [recent, counts, clients] = await Promise.all([
     db()
-      .select({ id: s.agents.id, name: s.agents.name, role: s.agents.role, seed: s.agents.avatarSeed, status: s.agents.status, orgName: s.organizations.name })
+      .select({ id: s.agents.id, name: s.agents.name, role: s.agents.role, seed: s.agents.avatarSeed, status: s.agents.status, createdAt: s.agents.createdAt, orgName: s.organizations.name })
       .from(s.agents)
       .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
       .where(and(inAgency(s.agents.orgId, agencyId), ne(s.agents.status, "archived")))
@@ -98,7 +100,15 @@ export async function getShellData(agencyId: string) {
       .limit(6),
   ]);
   return {
-    agents: recent.map((a) => ({ id: a.id, name: a.name, role: a.role, seed: a.seed ?? a.id, orgName: a.orgName, status: a.status })),
+    agents: recent.map((a) => ({
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      seed: a.seed ?? a.id,
+      orgName: a.orgName,
+      status: a.status,
+      stalled: a.status === "provisioning" && Date.now() - a.createdAt.getTime() > 3 * 60_000,
+    })),
     clients,
     counts: { agents: counts[0]?.agents ?? 0, clients: counts[0]?.clients ?? 0 },
   };
@@ -152,6 +162,68 @@ export const PAGE_SIZE = 50;
 
 /** Mirrors the engine's notification href for a change request (engine.ts changesHref). */
 const changesHrefSql = sql`'/agents/' || ${s.deliverables.agentId}::text || '/activity?deliverable=' || ${s.deliverables.id}::text`;
+
+/** Change requests a client made that are still open (alert unread, no revision delivered since). Home and ⌘K. */
+export async function openChangeRequests(agencyId: string) {
+  const rows = await db()
+      .select({
+        id: s.deliverables.id,
+        title: s.deliverables.title,
+        feedback: s.deliverables.feedback,
+        createdAt: s.deliverables.createdAt,
+        seenAt: s.deliverables.seenAt,
+        // When the client actually asked: the engine's agency notification for this deliverable.
+        requestedAt: sql<Date | null>`(select max(n.created_at) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql})`.mapWith(
+          (v) => (v ? new Date(v) : null),
+        ),
+        // Still open: the alert hasn't been closed (all copies read) …
+        open: sql<boolean>`coalesce((select bool_or(n.read_at is null) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql}), true)`,
+        // … and no revision has been delivered since (walks this agent's later deliverables via (agent_id, created_at)).
+        revised: sql<boolean>`exists (select 1 from deliverables r join runs ru on ru.id = r.run_id where r.agent_id = ${s.deliverables.agentId} and r.created_at > ${s.deliverables.createdAt} and ru.input->>'kind' = 'revision' and ru.input->>'deliverableId' = ${s.deliverables.id}::text)`,
+        agentId: s.agents.id,
+        agentName: s.agents.name,
+        agentSeed: s.agents.avatarSeed,
+        orgName: s.organizations.name,
+      })
+      .from(s.deliverables)
+      .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
+      .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
+      // Select-list subqueries run only for these few rows (LIMIT first); open/revised are filtered below.
+      .where(and(agencyDeliverables(agencyId), eq(s.deliverables.status, "changes_requested")))
+      .orderBy(desc(s.deliverables.createdAt))
+      .limit(20);
+  return rows.filter((c) => c.open && !c.revised);
+}
+
+/**
+ * ⌘K "Needs attention", loaded when the palette opens: the same items Home leads with: waiting approvals (by their
+ * text), open change requests and stalled setups. Bounded; tenant-scoped through inAgency/agencyDeliverables.
+ */
+export async function paletteAttention(agencyId: string) {
+  const [approvals, changes, stalled] = await Promise.all([
+    db()
+      .select({ id: s.approvals.id, description: s.approvals.description, agentId: s.agents.id, agentName: s.agents.name, orgName: s.organizations.name })
+      .from(s.approvals)
+      .innerJoin(s.agents, eq(s.agents.id, s.approvals.agentId))
+      .innerJoin(s.organizations, eq(s.organizations.id, s.approvals.orgId))
+      .where(and(inAgency(s.approvals.orgId, agencyId), eq(s.approvals.status, "pending")))
+      .orderBy(desc(s.approvals.createdAt))
+      .limit(8),
+    openChangeRequests(agencyId),
+    db()
+      .select({ id: s.agents.id, name: s.agents.name, orgName: s.organizations.name })
+      .from(s.agents)
+      .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
+      .where(and(inAgency(s.agents.orgId, agencyId), eq(s.agents.status, "provisioning"), sql`${s.agents.createdAt} < now() - interval '3 minutes'`))
+      .orderBy(desc(s.agents.createdAt))
+      .limit(4),
+  ]);
+  return {
+    approvals,
+    changes: changes.slice(0, 4).map((c) => ({ id: c.id, title: c.title, agentId: c.agentId, agentName: c.agentName, orgName: c.orgName })),
+    stalled,
+  };
+}
 
 export async function getHome(agencyId: string, opts: { live?: boolean } = {}) {
   const empty = {
@@ -249,6 +321,7 @@ export async function getHome(agencyId: string, opts: { live?: boolean } = {}) {
         active: sql<number>`count(*) filter (where ${s.agents.status} = 'active')`.mapWith(Number),
         live: sql<number>`count(*) filter (where ${s.agents.status} <> 'archived')`.mapWith(Number),
         provisioning: sql<number>`count(*) filter (where ${s.agents.status} = 'provisioning')`.mapWith(Number),
+        stalled: sql<number>`count(*) filter (where ${s.agents.status} = 'provisioning' and ${s.agents.createdAt} < now() - interval '3 minutes')`.mapWith(Number),
         clients: sql<number>`(select count(*) from organizations o where (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and o.kind = 'client' and o.deleted_at is null)`.mapWith(Number),
       })
       .from(s.agents)
@@ -261,40 +334,14 @@ export async function getHome(agencyId: string, opts: { live?: boolean } = {}) {
       .from(s.deliverables)
       .where(and(agencyDeliverables(agencyId), gte(s.deliverables.createdAt, week))),
     clientTotals(agencyId, opts),
-    db()
-      .select({
-        id: s.deliverables.id,
-        title: s.deliverables.title,
-        feedback: s.deliverables.feedback,
-        createdAt: s.deliverables.createdAt,
-        seenAt: s.deliverables.seenAt,
-        // When the client actually asked: the engine's agency notification for this deliverable.
-        requestedAt: sql<Date | null>`(select max(n.created_at) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql})`.mapWith(
-          (v) => (v ? new Date(v) : null),
-        ),
-        // Still open: the alert hasn't been closed (all copies read) …
-        open: sql<boolean>`coalesce((select bool_or(n.read_at is null) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql}), true)`,
-        // … and no revision has been delivered since (walks this agent's later deliverables via (agent_id, created_at)).
-        revised: sql<boolean>`exists (select 1 from deliverables r join runs ru on ru.id = r.run_id where r.agent_id = ${s.deliverables.agentId} and r.created_at > ${s.deliverables.createdAt} and ru.input->>'kind' = 'revision' and ru.input->>'deliverableId' = ${s.deliverables.id}::text)`,
-        agentId: s.agents.id,
-        agentName: s.agents.name,
-        agentSeed: s.agents.avatarSeed,
-        orgName: s.organizations.name,
-      })
-      .from(s.deliverables)
-      .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
-      .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
-      // Select-list subqueries run only for these few rows (LIMIT first); open/revised are filtered below.
-      .where(and(agencyDeliverables(agencyId), eq(s.deliverables.status, "changes_requested")))
-      .orderBy(desc(s.deliverables.createdAt))
-      .limit(20),
+    openChangeRequests(agencyId),
   ]);
 
   const counts = agentCounts[0];
   return {
     delivered,
     approvals,
-    changes: changes.filter((c) => c.open && !c.revised).slice(0, 6),
+    changes: changes.slice(0, 6),
     failed,
     provisioning: attentionAgents.filter((a) => a.status === "provisioning").slice(0, 6),
     waiting: attentionAgents.filter((a) => a.status === "active").slice(0, 6),
@@ -302,7 +349,8 @@ export async function getHome(agencyId: string, opts: { live?: boolean } = {}) {
       mrrCents: mrr.mrrCents,
       unbilledCents: mrr.unbilledCents,
       activeAgents: counts?.active ?? 0,
-      provisioningAgents: counts?.provisioning ?? 0,
+      provisioningAgents: (counts?.provisioning ?? 0) - (counts?.stalled ?? 0),
+      stalledAgents: counts?.stalled ?? 0,
       hoursWeek: week7[0]?.hours ?? 0,
       deliveredWeek: week7[0]?.n ?? 0,
     },
@@ -483,6 +531,7 @@ export async function listAgents(agencyId: string, opts: { page?: number; q?: st
       orgSlug: s.organizations.slug,
       orgKind: s.organizations.kind,
       lastDeliveryAt: s.agents.lastDeliveredAt,
+      createdAt: s.agents.createdAt,
     })
     .from(s.agents)
     .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
@@ -534,7 +583,8 @@ export async function getAgent(agencyId: string, agentId: string) {
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  return { ...row, inbox: inboxAddress(row.agent.emailHandle, await emailDomainFor(row.agent.orgId)) };
+  const domain = await emailDomainFor(row.agent.orgId);
+  return { ...row, inbox: inboxAddress(row.agent.emailHandle, domain), inboxDomain: domain };
 }
 
 export async function agentWorkflows(orgId: string, agentId: string) {
@@ -898,4 +948,26 @@ export async function agentTotals(agencyId: string) {
     })
     .from(sql`(select 1) as one`);
   return { count: row?.count ?? 0, hoursWeek: row?.hours ?? 0 };
+}
+
+
+/**
+ * Do agent addresses work right now? Same source as the Portal (`emailReadinessFrom`), plus one plain line on
+ * what's missing, for Studio settings and the agent header.
+ */
+export async function agentEmailReadiness(orgId: string, domain?: string): Promise<{ state: EmailReadiness; detail: string; domain: string }> {
+  const d = domain ?? (await emailDomainFor(orgId));
+  const p = providerStatus();
+  const state = emailReadinessFrom(p, d);
+  const detail =
+    state === "receiving"
+      ? `Agents send and receive email as name@${d}.`
+      : state === "sending_only"
+        ? "Agents can send, but mail to their addresses won't arrive until inbound email (the Resend webhook) is connected."
+        : !p.email
+          ? "Email is in test mode: nothing is sent or received until email sending (Resend) is connected."
+          : !deliverableDomain(d)
+            ? `@${d} isn't a real mail domain. Set a domain you own.`
+            : "Agents can't send or receive email yet.";
+  return { state, detail, domain: d };
 }

@@ -62,7 +62,7 @@ export default async function AgentsPage({ params, searchParams }: { params: Pro
                     {a.orgKind === "customer" ? <span className="ml-1.5 text-[11.5px] text-ink-3">resale</span> : null}
                   </span>
                   <span className="justify-self-end md:justify-self-start">
-                    <AgentStatus status={a.status} />
+                    <AgentStatus status={a.status} createdAt={a.createdAt} onlyExceptions />
                   </span>
                   <span className="hidden text-[12.5px] text-ink-3 md:block">{a.nextRunAt ? <RelativeTime date={a.nextRunAt} /> : <span className="text-ink-3">—</span>}</span>
                   <span className="tabular hidden text-right text-[13px] text-ink-2 md:block">{a.hoursWeek ? hours(a.hoursWeek) : <span className="text-ink-3">—</span>}</span>
