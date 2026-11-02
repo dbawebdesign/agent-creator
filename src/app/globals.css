@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+/*
+ * Roster design tokens.
+ * One neutral scale, one accent (overridable per tenant via --accent), hairline borders,
+ * soft depth. Everything in the UI should come from these tokens.
+ */
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --shadow-xs: 0 1px 0 0 rgb(0 0 0 / 0.03);
+  --shadow-sm: 0 1px 2px 0 rgb(16 16 20 / 0.04), 0 0 0 1px rgb(16 16 20 / 0.02);
+  --shadow-md: 0 4px 16px -4px rgb(16 16 20 / 0.08), 0 1px 3px 0 rgb(16 16 20 / 0.04);
+  --shadow-lg: 0 24px 48px -12px rgb(16 16 20 / 0.18), 0 2px 6px 0 rgb(16 16 20 / 0.05);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-fade-in: fade-in 240ms var(--ease-out) both;
+  --animate-rise: rise 320ms var(--ease-out) both;
+  --animate-pulse-soft: pulse-soft 2s ease-in-out infinite;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+}
+
+:root {
+  color-scheme: light;
+  --canvas: #f7f7f5;
+  --surface: #ffffff;
+  --surface-2: #f2f2ef;
+  --raised: #ffffff;
+  --line: #e8e8e4;
+  --line-strong: #d9d9d4;
+  --ink: #18181b;
+  --ink-2: #3f3f46;
+  --ink-3: #71717a;
+  --ink-4: #a1a1aa;
+  --accent: #4f46e5;
+  --accent-ink: #ffffff;
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  --good: #15803d;
+  --good-soft: #f0fdf4;
+  --warn: #b45309;
+  --warn-soft: #fffbeb;
+  --bad: #b91c1c;
+  --bad-soft: #fef2f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --canvas: #0c0c0e;
+    --surface: #141417;
+    --surface-2: #1b1b1f;
+    --raised: #1e1e22;
+    --line: #26262b;
+    --line-strong: #34343a;
+    --ink: #f4f4f5;
+    --ink-2: #d4d4d8;
+    --ink-3: #a1a1aa;
+    --ink-4: #6b6b73;
+    --accent: #818cf8;
+    --accent-ink: #0c0c0e;
+    --good: #4ade80;
+    --good-soft: rgb(74 222 128 / 0.1);
+    --warn: #fbbf24;
+    --warn-soft: rgb(251 191 36 / 0.1);
+    --bad: #f87171;
+    --bad-soft: rgb(248 113 113 / 0.1);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0c0c0e;
+  --surface: #141417;
+  --surface-2: #1b1b1f;
+  --raised: #1e1e22;
+  --line: #26262b;
+  --line-strong: #34343a;
+  --ink: #f4f4f5;
+  --ink-2: #d4d4d8;
+  --ink-3: #a1a1aa;
+  --ink-4: #6b6b73;
+  --accent: #818cf8;
+  --accent-ink: #0c0c0e;
+  --good: #4ade80;
+  --good-soft: rgb(74 222 128 / 0.1);
+  --warn: #fbbf24;
+  --warn-soft: rgb(251 191 36 / 0.1);
+  --bad: #f87171;
+  --bad-soft: rgb(248 113 113 / 0.1);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    font-feature-settings: "cv11", "ss01";
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 22%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Long-form deliverable content (markdown rendered to HTML). */
+.prose-roster {
+  color: var(--ink-2);
+  font-size: 14.5px;
+  line-height: 1.7;
+}
+.prose-roster h1, .prose-roster h2, .prose-roster h3 {
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 1.6em 0 0.5em;
+  line-height: 1.3;
+}
+.prose-roster h1 { font-size: 1.35em; }
+.prose-roster h2 { font-size: 1.15em; }
+.prose-roster h3 { font-size: 1em; }
+.prose-roster > :first-child { margin-top: 0; }
+.prose-roster p, .prose-roster ul, .prose-roster ol { margin: 0.75em 0; }
+.prose-roster ul { list-style: disc; padding-left: 1.25em; }
+.prose-roster ol { list-style: decimal; padding-left: 1.25em; }
+.prose-roster li { margin: 0.25em 0; }
+.prose-roster strong { color: var(--ink); font-weight: 600; }
+.prose-roster a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose-roster code { font-family: var(--font-mono); font-size: 0.88em; background: var(--surface-2); padding: 0.1em 0.35em; border-radius: 4px; }
+.prose-roster blockquote { border-left: 2px solid var(--line-strong); padding-left: 1em; color: var(--ink-3); }
+.prose-roster table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 1em 0; font-variant-numeric: tabular-nums; }
+.prose-roster th { text-align: left; font-weight: 500; color: var(--ink-3); border-bottom: 1px solid var(--line); padding: 8px 10px; }
+.prose-roster td { border-bottom: 1px solid var(--line); padding: 8px 10px; color: var(--ink-2); }
+.prose-roster hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
