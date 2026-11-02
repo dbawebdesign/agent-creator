@@ -525,3 +525,43 @@ export async function agentApprovals(orgId: string, agentId: string) {
     .orderBy(desc(s.approvals.createdAt))
     .limit(5);
 }
+
+/** What the hire promised: the discovery's proposal, the queued first deliverable, and the client's timezone. */
+export async function agentSetup(orgId: string, agentId: string) {
+  const [disc, first, org] = await Promise.all([
+    db()
+      .select({ id: s.discoveries.id, proposal: s.discoveries.proposal })
+      .from(s.discoveries)
+      .where(and(eq(s.discoveries.orgId, orgId), eq(s.discoveries.agentId, agentId)))
+      .orderBy(desc(s.discoveries.createdAt))
+      .limit(1),
+    db()
+      .select({ id: s.runs.id, status: s.runs.status, input: s.runs.input, createdAt: s.runs.createdAt, startedAt: s.runs.startedAt, error: s.runs.error })
+      .from(s.runs)
+      .where(and(eq(s.runs.orgId, orgId), eq(s.runs.agentId, agentId), eq(s.runs.trigger, "setup")))
+      .orderBy(desc(s.runs.createdAt))
+      .limit(1),
+    db().select({ timezone: s.organizations.timezone }).from(s.organizations).where(eq(s.organizations.id, orgId)).limit(1),
+  ]);
+  const p = (disc[0]?.proposal ?? null) as null | {
+    knowledgeNeeds?: { title: string; why: string }[];
+    openQuestions?: string[];
+    firstDeliverable?: { title: string; description: string };
+  };
+  const run = first[0] ?? null;
+  const input = (run?.input ?? {}) as { title?: string; description?: string; releaseAt?: string };
+  return {
+    knowledgeNeeds: p?.knowledgeNeeds ?? [],
+    openQuestions: p?.openQuestions ?? [],
+    firstRun: run
+      ? {
+          status: run.status,
+          title: input.title ?? p?.firstDeliverable?.title ?? "First deliverable",
+          description: input.description ?? p?.firstDeliverable?.description ?? "",
+          releaseAt: input.releaseAt ? new Date(input.releaseAt) : null,
+          failed: run.status === "failed" || run.status === "canceled",
+        }
+      : null,
+    timezone: org[0]?.timezone ?? "UTC",
+  };
+}

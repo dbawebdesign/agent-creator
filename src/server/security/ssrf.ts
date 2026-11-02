@@ -125,18 +125,23 @@ export type SafeFetchOptions = {
   timeoutMs?: number;
   maxRedirects?: number;
   headers?: Record<string, string>;
+  /** Caller cancellation (e.g. the run's own deadline); combined with timeoutMs. */
+  signal?: AbortSignal;
 };
 
 export type SafeFetchResult = { status: number; url: string; contentType: string; body: string; truncated: boolean };
 
 /** GET a public https URL with SSRF protections and limits. */
 export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promise<SafeFetchResult> {
-  const maxBytes = opts.maxBytes ?? 1_000_000;
-  const deadline = Date.now() + (opts.timeoutMs ?? 10_000);
+  const maxBytes = Math.min(opts.maxBytes ?? 1_000_000, 5_000_000);
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const deadline = Date.now() + timeoutMs;
+  // One overall deadline for DNS + every redirect hop + the whole body (not just socket idle time).
+  const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   let current = raw;
   for (let hop = 0; hop <= (opts.maxRedirects ?? 3); hop++) {
-    const target = await validateUrl(current, opts.lookup);
-    const res = await requestPinned(target, { maxBytes, deadline, headers: opts.headers ?? {} });
+    const target = await withSignal(validateUrl(current, opts.lookup), signal);
+    const res = await requestPinned(target, { maxBytes, deadline, headers: opts.headers ?? {}, signal });
     if (res.status >= 300 && res.status < 400 && res.location) {
       current = new URL(res.location, target.url).toString();
       continue;
@@ -146,13 +151,46 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
   throw new SsrfError("Too many redirects");
 }
 
-function requestPinned(
-  target: ValidatedTarget,
-  o: { maxBytes: number; deadline: number; headers: Record<string, string> },
-): Promise<{ status: number; location?: string; contentType: string; body: string; truncated: boolean }> {
-  return new Promise((resolve, reject) => {
+function withSignal<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new SsrfError("Request timed out"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new SsrfError("Request timed out"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => (signal.removeEventListener("abort", onAbort), resolve(v)),
+      (e: unknown) => (signal.removeEventListener("abort", onAbort), reject(e)),
+    );
+  });
+}
+
+type PinnedResult = { status: number; location?: string; contentType: string; body: string; truncated: boolean };
+
+function requestPinned(target: ValidatedTarget, o: { maxBytes: number; deadline: number; headers: Record<string, string>; signal: AbortSignal }): Promise<PinnedResult> {
+  return new Promise((rawResolve, rawReject) => {
     const remaining = o.deadline - Date.now();
-    if (remaining <= 0) return reject(new SsrfError("Request timed out"));
+    if (remaining <= 0 || o.signal.aborted) return rawReject(new SsrfError("Request timed out"));
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+      o.signal.removeEventListener("abort", onAbort);
+    };
+    const resolve = (v: PinnedResult) => {
+      if (settled) return;
+      cleanup();
+      rawResolve(v);
+    };
+    const reject = (e: unknown) => {
+      if (settled) return;
+      cleanup();
+      rawReject(e);
+    };
+    // Overall deadline: a slow-drip server cannot hold the request open past it.
+    const onAbort = () => {
+      const err = new SsrfError("Request timed out");
+      reject(err);
+      req.destroy(err);
+    };
+    o.signal.addEventListener("abort", onAbort, { once: true });
     const req = https.request(
       {
         protocol: "https:",
@@ -191,6 +229,7 @@ function requestPinned(
         });
         res.on("end", () => resolve({ status, contentType, body: Buffer.concat(chunks).toString("utf8"), truncated }));
         res.on("error", (e) => (truncated ? undefined : reject(e)));
+        res.on("close", () => (truncated ? undefined : reject(new SsrfError("Connection closed before the response finished"))));
       },
     );
     req.on("timeout", () => req.destroy(new SsrfError("Request timed out")));
@@ -199,21 +238,62 @@ function requestPinned(
   });
 }
 
-/** Reduce HTML to readable text (scripts/styles removed, tags stripped, entities decoded). */
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<(?:br|\/p|\/div|\/li|\/h\d|\/tr)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n+/g, "\n\n")
-    .trim();
+const HTML_MAX_CHARS = 1_000_000;
+const SKIP_TAGS = new Set(["script", "style", "noscript", "template", "svg"]);
+const BREAK_TAGS = new Set(["br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "section", "article", "header", "footer", "blockquote", "pre", "hr"]);
+const ENTITIES: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'", apos: "'" };
+
+/**
+ * Reduce HTML to readable text (scripts/styles removed, tags stripped, entities decoded).
+ * Single forward scan with indexOf (linear time, no backtracking regexes), input capped at 1M chars.
+ */
+export function htmlToText(input: string): string {
+  const html = input.length > HTML_MAX_CHARS ? input.slice(0, HTML_MAX_CHARS) : input;
+  const lower = html.toLowerCase();
+  const out: string[] = [];
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out.push(html.slice(i));
+      break;
+    }
+    out.push(html.slice(i, lt));
+    if (lower.startsWith("<!--", lt)) {
+      const endComment = html.indexOf("-->", lt + 4);
+      i = endComment === -1 ? html.length : endComment + 3;
+      continue;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) break; // unterminated tag: drop the rest
+    let j = lt + 1;
+    if (html[j] === "/") j++;
+    let k = j;
+    while (k < gt && k - j < 32 && /[a-z0-9-]/i.test(html[k]!)) k++;
+    const name = lower.slice(j, k);
+    const closing = html[lt + 1] === "/";
+    if (!closing && SKIP_TAGS.has(name) && html[gt - 1] !== "/") {
+      const close = lower.indexOf(`</${name}`, gt + 1);
+      const closeEnd = close === -1 ? -1 : html.indexOf(">", close);
+      out.push(" ");
+      i = closeEnd === -1 ? html.length : closeEnd + 1;
+      continue;
+    }
+    out.push(BREAK_TAGS.has(name) ? "\n" : " ");
+    i = gt + 1;
+  }
+  const text = out.join("").replace(/&(nbsp|amp|lt|gt|quot|#39|#x27|apos);/g, (_m, e: string) => ENTITIES[e] ?? " ");
+  const lines: string[] = [];
+  let blank = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/[ \t\r\f\v]+/g, " ").trim();
+    if (!line) {
+      blank = lines.length > 0;
+      continue;
+    }
+    if (blank) lines.push("");
+    blank = false;
+    lines.push(line);
+  }
+  return lines.join("\n");
 }

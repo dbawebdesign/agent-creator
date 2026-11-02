@@ -21,7 +21,14 @@ export const knowledgeSearch = defineTool({
     "Search this business's knowledge base (discovery call transcript, documents, catalogs, SOPs, URLs) and return the most relevant passages. Use it before writing anything factual.",
   schema: z.object({ query: z.string().min(2).max(500), limit: z.number().int().min(1).max(10).optional() }),
   async run(input, ctx) {
-    const hits = await searchKnowledge(ctx.db, { orgId: ctx.run.orgId, agentId: ctx.agent.id, query: input.query, limit: input.limit ?? 5 });
+    const hits = await searchKnowledge(ctx.db, {
+      orgId: ctx.run.orgId,
+      agentId: ctx.agent.id,
+      query: input.query,
+      limit: input.limit ?? 5,
+      // The discovery call is internal: never surface it in work done for an unverified sender.
+      excludeKinds: ctx.trust.trusted ? [] : ["transcript"],
+    });
     return ok({ results: hits.map((h) => ({ title: h.title, content: truncate(h.content, 1500), score: Number(h.score.toFixed(4)) })) });
   },
 });
@@ -80,7 +87,8 @@ export const createDeliverable = defineTool({
   }),
   async run(input, ctx) {
     const { db, run, agent } = ctx;
-    // Idempotent per run+title so a retried run never double-delivers.
+    // Idempotent per run+title so a retried run never double-delivers (the id is derived from both).
+    const id = deliverableIdFor(run.id, input.title);
     const dupe = await db
       .select({ id: schema.deliverables.id })
       .from(schema.deliverables)
@@ -92,55 +100,94 @@ export const createDeliverable = defineTool({
     }
     const kind = input.kind ?? (ctx.workflow?.outputKind && (DELIVERABLE_KINDS as readonly string[]).includes(ctx.workflow.outputKind) ? (ctx.workflow.outputKind as (typeof DELIVERABLE_KINDS)[number]) : "report");
     const hoursSaved = ctx.state.deliverableIds.length === 0 ? (ctx.workflow?.hoursSavedPerRun ?? Number(run.input?.hoursSaved ?? 0) ?? 0) : 0;
-    const preview = input.preview ?? truncate(input.body.replace(/[#*_`|>-]/g, " ").replace(/\s+/g, " ").trim(), 200);
-    const [row] = await db
-      .insert(schema.deliverables)
-      .values({
-        orgId: run.orgId,
-        agentId: agent.id,
-        runId: run.id,
-        workflowId: run.workflowId,
-        title: input.title,
-        kind,
-        preview,
-        body: input.body,
-        data: input.data ?? null,
-        // Work requested by an unverified sender is never presented as the agent's own finished output.
-        needsReview: kind === "email_draft" || run.trigger === "setup" || !ctx.trust.trusted,
-        deliveredVia: ["portal"],
-        hoursSaved: Number.isFinite(hoursSaved) ? hoursSaved : 0,
-      })
-      .returning({ id: schema.deliverables.id });
-    if (!row) return toolError("Could not save the deliverable");
-    ctx.state.deliverableIds.push(row.id);
+    const draft: DeliverableDraft = {
+      id,
+      title: input.title,
+      kind,
+      preview: input.preview ?? truncate(input.body.replace(/[#*_`|>-]/g, " ").replace(/\s+/g, " ").trim(), 200),
+      body: input.body,
+      data: input.data ?? null,
+      // Work requested by an unverified sender is never presented as the agent's own finished output.
+      needsReview: kind === "email_draft" || run.trigger === "setup" || !ctx.trust.trusted,
+      hoursSaved: Number.isFinite(hoursSaved) ? hoursSaved : 0,
+    };
 
-    await db.insert(schema.notifications).values({
-      orgId: run.orgId,
-      kind: "deliverable.created",
-      title: `${agent.name} delivered “${truncate(input.title, 80)}”`,
-      body: preview,
-      href: `/deliverables/${row.id}`,
-    });
-
-    const channels = (ctx.workflow?.deliverTo ?? agent.config.defaultDelivery ?? ["portal"]).filter((c) => c === "email" || c === "sms" || c === "slack");
-    for (const channel of channels) {
-      await enqueue(
-        db,
-        "channel.deliver",
-        {
-          orgId: run.orgId,
-          agentId: agent.id,
-          channel,
-          deliverableId: row.id,
-          subject: input.title,
-          text: `${preview}\n\nOpen it in your portal.`,
-        },
-        { orgId: run.orgId, idempotencyKey: `deliver:${row.id}:${channel}` },
-      );
+    // Finished early (the first overnight deliverable): hand it over at the release time, not at 1 AM.
+    const releaseAt = typeof run.input?.releaseAt === "string" ? new Date(run.input.releaseAt) : null;
+    if (releaseAt && releaseAt.getTime() > Date.now()) {
+      await enqueue(db, "deliverable.release", { orgId: run.orgId, runId: run.id, deliverable: draft }, { orgId: run.orgId, runAt: releaseAt, idempotencyKey: `release:${id}` });
+      if (!ctx.state.deliverableIds.includes(id)) ctx.state.deliverableIds.push(id);
+      return ok({ delivered: false, scheduled: true, deliverableId: id, releaseAt: releaseAt.toISOString(), note: "Saved; it will be handed to the client at the release time." });
     }
-    return ok({ delivered: true, deliverableId: row.id, channels: ["portal", ...channels] });
+    const out = await publishDeliverable(db, { run, agent, workflow: ctx.workflow }, draft);
+    if (!ctx.state.deliverableIds.includes(out.id)) ctx.state.deliverableIds.push(out.id);
+    return ok({ delivered: true, deliverableId: out.id, channels: ["portal", ...out.channels] });
   },
 });
+
+export type DeliverableDraft = {
+  id: string;
+  title: string;
+  kind: string;
+  preview: string;
+  body: string;
+  data: Record<string, unknown> | null;
+  needsReview: boolean;
+  hoursSaved: number;
+};
+
+/** Deterministic deliverable id per (run, title): retries and staged releases converge on one row. */
+export function deliverableIdFor(runId: string, title: string): string {
+  const h = sha256(`deliverable|${runId}|${title}`);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h.slice(16, 17), 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/** Insert the deliverable (idempotent by id), notify the client, and send it out on the delivery channels. */
+export async function publishDeliverable(
+  db: ToolContext["db"],
+  c: { run: ToolContext["run"]; agent: ToolContext["agent"]; workflow: ToolContext["workflow"] },
+  d: DeliverableDraft,
+): Promise<{ id: string; channels: string[]; duplicate: boolean }> {
+  const { run, agent } = c;
+  const inserted = await db
+    .insert(schema.deliverables)
+    .values({
+      id: d.id,
+      orgId: run.orgId,
+      agentId: agent.id,
+      runId: run.id,
+      workflowId: run.workflowId,
+      title: d.title,
+      kind: d.kind,
+      preview: d.preview,
+      body: d.body,
+      data: d.data,
+      needsReview: d.needsReview,
+      deliveredVia: ["portal"],
+      hoursSaved: d.hoursSaved,
+    })
+    .onConflictDoNothing({ target: schema.deliverables.id })
+    .returning({ id: schema.deliverables.id });
+  const channels = (c.workflow?.deliverTo ?? agent.config.defaultDelivery ?? ["portal"]).filter((ch) => ch === "email" || ch === "sms" || ch === "slack");
+  if (!inserted[0]) return { id: d.id, channels, duplicate: true };
+
+  await db.insert(schema.notifications).values({
+    orgId: run.orgId,
+    kind: "deliverable.created",
+    title: `${agent.name} delivered “${truncate(d.title, 80)}”`,
+    body: d.preview,
+    href: `/deliverables/${d.id}`,
+  });
+  for (const channel of channels) {
+    await enqueue(
+      db,
+      "channel.deliver",
+      { orgId: run.orgId, agentId: agent.id, channel, deliverableId: d.id, subject: d.title, text: `${d.preview}\n\nOpen it in your portal.` },
+      { orgId: run.orgId, idempotencyKey: `deliver:${d.id}:${channel}` },
+    );
+  }
+  return { id: d.id, channels, duplicate: false };
+}
 
 /** Does this send go back to the conversation's participant (same thread, or their own address/number/channel)? */
 function isConversationTarget(input: { channel: string; to?: string }, p: Participant): boolean {
@@ -238,6 +285,7 @@ export const sendMessage = defineTool({
           conversationId,
           ...(input.to ? { to: input.to } : {}),
           ...(input.subject ? { subject: input.subject } : {}),
+          ...(ctx.approvalId ? { approvalId: ctx.approvalId } : {}),
           text: input.text,
         },
         { orgId: run.orgId, idempotencyKey: `msg:${msg!.id}` },
@@ -279,6 +327,12 @@ export const scheduleFollowup = defineTool({
     const when = input.at ? new Date(input.at) : new Date(Date.now() + (input.inHours ?? 24) * 3600_000);
     const max = Date.now() + 30 * 24 * 3600_000;
     if (!(when.getTime() > Date.now()) || when.getTime() > max) return toolError("Follow-up time must be in the next 30 days");
+    // Idempotent per tool call (a resumed run must not schedule the same follow-up twice).
+    const prior = (
+      await ctx.db.execute(sql`
+        select id, input->>'at' as at from runs where org_id = ${ctx.run.orgId} and input->>'parentRunId' = ${ctx.run.id} and input->>'parentToolUseId' = ${ctx.toolUseId} limit 1`)
+    ).rows[0] as { id: string; at: string | null } | undefined;
+    if (prior) return ok({ scheduled: true, runId: prior.id, at: prior.at ?? when.toISOString(), duplicate: true });
     const runId = randomUUID();
     await ctx.db.transaction(async (tx) => {
       await tx.insert(schema.runs).values({
@@ -289,9 +343,9 @@ export const scheduleFollowup = defineTool({
         conversationId: ctx.run.conversationId,
         trigger: "schedule",
         status: "queued",
-        input: { kind: "followup", task: input.task, parentRunId: ctx.run.id },
+        input: { kind: "followup", task: input.task, parentRunId: ctx.run.id, parentToolUseId: ctx.toolUseId, at: when.toISOString() },
       });
-      await enqueue(tx, "agent.run", { orgId: ctx.run.orgId, runId }, { orgId: ctx.run.orgId, runAt: when, idempotencyKey: `run:${runId}` });
+      await enqueue(tx, "agent.run", { orgId: ctx.run.orgId, runId }, { orgId: ctx.run.orgId, runAt: when, idempotencyKey: `followup:${ctx.run.id}:${ctx.toolUseId}` });
     });
     ctx.state.followups++;
     return ok({ scheduled: true, runId, at: when.toISOString() });

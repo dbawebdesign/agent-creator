@@ -16,7 +16,8 @@ export type JobType =
   | "discovery.analyze" // Architect: transcript → agent proposal
   | "knowledge.index" // chunk + index a knowledge source
   | "channel.deliver" // send a deliverable/message out through a channel
-  | "inbound.process"; // process an inbound email/SMS/Slack event
+  | "inbound.process" // process an inbound email/SMS/Slack event
+  | "deliverable.release"; // hand over a deliverable finished early (first overnight deliverable: work ~1 AM, release 6 AM)
 
 export type EnqueueOptions = {
   runAt?: Date;

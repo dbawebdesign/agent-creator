@@ -29,7 +29,7 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
   const agentsLite = r.agents.map((a) => ({ id: a.id, name: a.name, role: a.role }));
 
   return (
-    <div className="mx-auto w-full max-w-[960px] px-4 pt-8 md:px-6 md:pt-14">
+    <div className="mx-auto w-full max-w-[1040px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="mb-8 flex flex-col gap-5 animate-rise md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">Resell your team</h1>
@@ -45,7 +45,7 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
           <p className="text-[13px] font-medium text-ink-3">Monthly revenue from your customers</p>
           <p className="mt-1 text-[40px] leading-none font-semibold tracking-[-0.03em] text-ink tabular md:text-[48px]">
             {formatMoney(r.monthlyCents)}
-            <span className="ml-1 text-[18px] font-medium tracking-normal text-ink-4">/mo</span>
+            <span className="ml-1 text-[18px] font-medium tracking-normal text-ink-3">/mo</span>
           </p>
           <p className="mt-3 text-[13.5px] text-ink-3">
             {r.monthlyCents > 0
@@ -55,11 +55,11 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
         </div>
         <dl className="grid grid-cols-2 gap-6 border-t border-line pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
           <div>
-            <dt className="text-[12px] text-ink-4">Paying customers</dt>
+            <dt className="text-[12px] text-ink-3">Paying customers</dt>
             <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">{paying}</dd>
           </div>
           <div>
-            <dt className="text-[12px] text-ink-4">Teammates resold</dt>
+            <dt className="text-[12px] text-ink-3">Teammates resold</dt>
             <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">{r.customers.reduce((n, c) => n + c.agents.length, 0)}</dd>
           </div>
         </dl>
@@ -87,7 +87,7 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
       <section aria-labelledby="customers" className="mt-10">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 id="customers" className="text-[13px] font-semibold text-ink">
-            Your customers <span className="ml-1 font-normal text-ink-4 tabular">{r.customers.length}</span>
+            Your customers <span className="ml-1 font-normal text-ink-3 tabular">{r.customers.length}</span>
           </h2>
           {canManage && r.customers.length && r.agents.length ? (
             <OfferAgentDialog
@@ -120,7 +120,7 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
                         </span>
                       ))
                     ) : (
-                      <span className="text-ink-4">No teammates yet</span>
+                      <span className="text-ink-3">No teammates yet</span>
                     )}
                   </div>
                 </div>
@@ -129,10 +129,10 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
                     {c.monthlyCents > 0 ? (
                       <>
                         {formatMoney(c.monthlyCents)}
-                        <span className="text-[12px] font-normal text-ink-4">/mo</span>
+                        <span className="text-[12px] font-normal text-ink-3">/mo</span>
                       </>
                     ) : (
-                      <span className="text-[13px] font-normal text-ink-4">Trial</span>
+                      <span className="text-[13px] font-normal text-ink-3">Trial</span>
                     )}
                   </p>
                   {canManage && !c.agents.length && r.agents.length ? (
@@ -190,7 +190,7 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
                   <p className="truncate text-[14px] font-medium text-ink">{plan.name}</p>
                   <p className="shrink-0 text-[14px] font-semibold text-ink tabular">
                     {formatMoney(plan.priceCents)}
-                    <span className="text-[12px] font-normal text-ink-4">/mo</span>
+                    <span className="text-[12px] font-normal text-ink-3">/mo</span>
                   </p>
                 </div>
                 {plan.description ? <p className="mt-1 line-clamp-2 text-[13px] text-ink-3">{plan.description}</p> : null}

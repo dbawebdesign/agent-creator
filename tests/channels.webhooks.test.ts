@@ -17,6 +17,7 @@ vi.hoisted(() => {
 
 import { db, schema } from "@/server/db/client";
 import { inboundProcess } from "@/server/channels/jobs";
+import { emailSenderAuth, INBOUND_LIMITS, isAutomatedEmail } from "@/server/channels/inbound";
 import { handleResendWebhook, handleSlackWebhook, handleTwilioWebhook } from "@/server/channels/webhook-routes";
 import { signSlack, signSvix, twilioSignature, verifySvix } from "@/server/channels/verify";
 import { POST as resendRoute } from "@/app/api/webhooks/resend/route";
@@ -222,6 +223,7 @@ describe("Resend (Svix) webhook", () => {
       externalId: `email:${ev.data.email_id}`,
       meta: {},
       triggerAgent: true,
+      senderAuth: "none",
     });
     expect(await agentRunJobs(org.id)).toHaveLength(0);
     await inboundProcess({ provider: "resend", webhookEventId: row!.id }, { db: db(), jobId: "retry" });
@@ -246,6 +248,58 @@ describe("Resend (Svix) webhook", () => {
     await handleResendWebhook(resendRequest(receivedEvent(`${agent.emailHandle}@evil.example`)));
     await processAllInbound();
     expect(await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id))).toHaveLength(2);
+    expect(await agentRunJobs(org.id)).toHaveLength(0);
+  });
+});
+
+describe("inbound trust signals and volume caps", () => {
+  it("derives senderAuth from Authentication-Results (DMARC first, aligned SPF/DKIM, missing = none)", () => {
+    const from = "dana@brandlord.co";
+    expect(emailSenderAuth(null, from)).toBe("none");
+    expect(emailSenderAuth("mx.resend.com; dmarc=pass header.from=brandlord.co", from)).toBe("pass");
+    expect(emailSenderAuth("mx.resend.com; spf=pass smtp.mailfrom=brandlord.co; dmarc=fail", from)).toBe("fail");
+    expect(emailSenderAuth("mx.resend.com; dkim=pass header.d=mail.brandlord.co", from)).toBe("pass");
+    expect(emailSenderAuth("mx.resend.com; dkim=pass header.d=evil.example; spf=pass smtp.mailfrom=bounce@evil.example", from)).toBe("none");
+    expect(emailSenderAuth("mx.resend.com; spf=softfail smtp.mailfrom=brandlord.co; dkim=none", from)).toBe("fail");
+    expect(emailSenderAuth("mx.resend.com; spf=neutral", from)).toBe("none");
+    process.env.EMAIL_AUTHSERV_ID = "mx.resend.com";
+    expect(emailSenderAuth("attacker.example; dmarc=pass", from)).toBe("none");
+    expect(emailSenderAuth("mx.resend.com; dmarc=pass", from)).toBe("pass");
+    delete process.env.EMAIL_AUTHSERV_ID;
+  });
+
+  it("recognizes automated mail (lists, bounces, auto-replies)", () => {
+    expect(isAutomatedEmail({}, "dana@brandlord.co", null)).toBe(false);
+    expect(isAutomatedEmail({ "Auto-Submitted": "no" }, "dana@brandlord.co", null)).toBe(false);
+    expect(isAutomatedEmail({ "Auto-Submitted": "auto-replied" }, "dana@brandlord.co", null)).toBe(true);
+    expect(isAutomatedEmail({ "List-Unsubscribe": "<mailto:x@y.z>" }, "news@shop.example", null)).toBe(true);
+    expect(isAutomatedEmail([{ name: "Return-Path", value: "<>" }], "dana@brandlord.co", null)).toBe(true);
+    expect(isAutomatedEmail({ "X-Autoreply": "yes" }, "dana@brandlord.co", null)).toBe(true);
+    expect(isAutomatedEmail({}, "MAILER-DAEMON@mx.example".toLowerCase(), null)).toBe(true);
+    expect(isAutomatedEmail({}, "no-reply@shop.example", null)).toBe(true);
+    expect(isAutomatedEmail({}, "dana@brandlord.co", "multipart/report; report-type=delivery-status")).toBe(true);
+  });
+
+  it("stores but does not wake the agent past the per-sender and per-agent caps", async () => {
+    const org = await makeOrg();
+    const agent = await makeAgent(org.id);
+    const to = `${agent.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`;
+    const [contact] = await db().insert(schema.contacts).values({ orgId: org.id, email: "dana@brandlord.co" }).returning();
+    await db().execute(sql`insert into rate_limits (key, count, reset_at) values (${`inbound:sender:${agent.id}:${contact!.id}`}, ${INBOUND_LIMITS.perSenderPerHour}, now() + interval '1 hour')
+      on conflict (key) do update set count = excluded.count, reset_at = excluded.reset_at`);
+    await handleResendWebhook(resendRequest(receivedEvent(to)));
+    await processAllInbound();
+    let msgs = await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id));
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.meta).toMatchObject({ throttled: "sender", senderAuth: "none" });
+    expect(await agentRunJobs(org.id)).toHaveLength(0);
+
+    await db().execute(sql`insert into rate_limits (key, count, reset_at) values (${`inbound:agent:${agent.id}`}, ${INBOUND_LIMITS.perAgentPerHour}, now() + interval '1 hour')
+      on conflict (key) do update set count = excluded.count, reset_at = excluded.reset_at`);
+    await handleResendWebhook(resendRequest(receivedEvent(to, { from: "Someone <someone@else.example>" })));
+    await processAllInbound();
+    msgs = await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id));
+    expect(msgs.find((m) => m.meta.from === "someone@else.example")!.meta).toMatchObject({ throttled: "agent" });
     expect(await agentRunJobs(org.id)).toHaveLength(0);
   });
 });
@@ -294,6 +348,7 @@ describe("Twilio webhook", () => {
     expect(runs[0]).toMatchObject({ agentId: agent.id, input: { messageId: msgs[0]!.id } });
     const [conv] = await db().select().from(schema.conversations).where(eq(schema.conversations.orgId, org.id));
     expect(conv).toMatchObject({ channel: "sms", externalThreadId: "+14155550111" });
+    expect(msgs[0]!.meta).toMatchObject({ senderAuth: "pass" });
   });
 
   it("rejects missing, forged, wrong-token and wrong-URL signatures", async () => {

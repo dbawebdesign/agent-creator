@@ -8,13 +8,14 @@ import { resolveBrand } from "@/server/queries/portal";
 import { sha256 } from "@/server/security/crypto";
 import { InviteForm } from "./form";
 import "@/components/portal/portal.css";
+import { brandVars } from "@/components/portal/brand-color";
 
 export const metadata = { title: "You’re invited", robots: { index: false } };
 
 function Shell({ accent, children }: { accent: string | null; children: React.ReactNode }) {
   return (
     <div className="portal-root flex min-h-dvh items-start justify-center px-4 pt-[12vh] pb-16" data-brand={accent ? "" : undefined}>
-      {accent ? <style>{`:root{--brand:${accent};--brand-ink:#ffffff}`}</style> : null}
+      {accent ? <style>{brandVars(accent)}</style> : null}
       <div className="w-full max-w-[400px] animate-rise">{children}</div>
     </div>
   );
@@ -41,7 +42,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         <div className="rounded-2xl border border-line bg-surface p-7 text-center shadow-sm">
           <p className="text-[16px] font-semibold text-ink">{row?.inv.acceptedAt ? "This invite was already used" : "This invite has expired"}</p>
           <p className="mt-1.5 text-[13.5px] text-ink-3">Ask whoever invited you to send a fresh link{row?.inv.acceptedAt ? ", or sign in if it was you." : "."}</p>
-          <Link href="/login" className="mt-6 inline-block text-[13.5px] font-medium text-accent hover:underline">
+          <Link href="/login" className="mt-6 inline-block text-[13.5px] font-medium text-accent-text hover:underline">
             Sign in
           </Link>
         </div>
@@ -89,7 +90,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
           )}
         </div>
       </div>
-      {!brand.whiteLabel ? <p className="mt-8 text-center text-[12px] text-ink-4">Powered by Roster</p> : null}
+      {!brand.whiteLabel ? <p className="mt-8 text-center text-[12px] text-ink-3">Powered by Roster</p> : null}
     </Shell>
   );
 }

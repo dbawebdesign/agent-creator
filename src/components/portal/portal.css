@@ -10,6 +10,8 @@
   --accent: var(--brand);
   --accent-ink: var(--brand-ink);
   --accent-soft: color-mix(in oklab, var(--brand) 9%, transparent);
+  /* Accent-coloured text uses a shade computed for >=4.5:1 (brand-color.ts), never the raw brand. */
+  --accent-text: var(--brand-text, color-mix(in oklab, var(--brand) 70%, black));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,12 +19,14 @@
     --accent: color-mix(in oklab, var(--brand) 72%, white);
     --accent-ink: #0c0c0e;
     --accent-soft: color-mix(in oklab, var(--brand) 20%, transparent);
+    --accent-text: var(--brand-text-dark, color-mix(in oklab, var(--brand) 60%, white));
   }
 }
 :root[data-theme="dark"]:has(.portal-root[data-brand]) {
   --accent: color-mix(in oklab, var(--brand) 72%, white);
   --accent-ink: #0c0c0e;
   --accent-soft: color-mix(in oklab, var(--brand) 20%, transparent);
+  --accent-text: var(--brand-text-dark, color-mix(in oklab, var(--brand) 60%, white));
 }
 
 .portal-root {
@@ -69,3 +73,19 @@
 .portal-bubble.prose-roster p, .portal-bubble.prose-roster ul, .portal-bubble.prose-roster ol { margin: 0.45em 0; }
 .portal-bubble.prose-roster > :first-child { margin-top: 0; }
 .portal-bubble.prose-roster > :last-child { margin-bottom: 0; }
+
+/* Links in agent work read as links, in the readable accent shade. */
+.portal-root .prose-roster a { color: var(--accent-text); }
+
+/* Reading view: a document that opens with a heading starts flush with the card. */
+.portal-reading.prose-roster > :first-child { margin-top: 0; }
+/* Short cells (dates, counts, channels) stay on one line; the last column takes the prose. */
+.portal-reading.prose-roster td:not(:last-child) { white-space: nowrap; }
+/* Wide tables scroll sideways; a soft right-edge fade says there's more. */
+@media (max-width: 640px) {
+  .portal-reading.prose-roster .overflow-x-auto {
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    padding-right: 20px;
+  }
+}

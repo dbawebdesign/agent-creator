@@ -88,7 +88,7 @@ describe("startConversationRun", () => {
     expect(b.runId).toBe(a.runId);
     const runs = await db().select().from(schema.runs).where(eq(schema.runs.conversationId, conv!.id));
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.status).toBe("succeeded");
+    expect(runs[0]!.status).toBe("waiting_approval"); // unverified sender: reply held for approval (engine.trust.test.ts)
   });
 });
 

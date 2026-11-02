@@ -29,19 +29,23 @@ afterAll(async () => {
 });
 
 describe("inbound → reply, end to end", () => {
-  it("answers an inbound email in the same thread", async () => {
+  it("answers an authenticated member's email in the same thread", async () => {
     const org = await makeOrg({ branding: { emailFromName: "Brandlord" } });
     const agent = await makeAgent(org.id);
+    const dana = `dana-${rid(3)}@brandlord.co`;
+    const [u] = await db().insert(schema.users).values({ email: dana }).returning();
+    await db().insert(schema.memberships).values({ userId: u!.id, orgId: org.id, role: "owner" });
     const inboundId = `<${rid()}@mail.brandlord.co>`;
     const body = JSON.stringify({
       type: "email.received",
       data: {
         email_id: `em_${rid(8)}`,
-        from: "Dana <dana@brandlord.co>",
+        from: `Dana <${dana}>`,
         to: [`${agent.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`],
         subject: "Tumbler quote",
         message_id: inboundId,
         text: "Hi Maya, can you quote 500 tumblers?",
+        headers: { "Authentication-Results": "mx.resend.com; spf=pass smtp.mailfrom=brandlord.co; dkim=pass header.d=brandlord.co; dmarc=pass header.from=brandlord.co" },
       },
     });
     const id = `msg_${rid()}`;
@@ -63,12 +67,38 @@ describe("inbound → reply, end to end", () => {
     expect(out.length).toBeGreaterThanOrEqual(1);
     const reply = out[out.length - 1]!;
     expect(reply.deliveryStatus).toBe("sent");
-    expect(reply.meta).toMatchObject({ simulated: true, to: "dana@brandlord.co" });
+    expect(reply.meta).toMatchObject({ simulated: true, to: dana });
+    const inbound = msgs.find((m) => m.direction === "inbound")!;
+    expect(inbound.meta).toMatchObject({ senderAuth: "pass", senderUserId: u!.id });
     expect(reply.meta.references).toContain(inboundId);
     expect(String(reply.meta.subject)).toBe("Re: Tumbler quote");
   });
 
-  it("answers a Slack mention in-thread (simulated without a bot token)", async () => {
+  it("holds the reply to an unauthenticated stranger's email for approval", async () => {
+    const org = await makeOrg();
+    const agent = await makeAgent(org.id);
+    const body = JSON.stringify({
+      type: "email.received",
+      data: { email_id: `em_${rid(8)}`, from: "Mallory <mallory@evil.example>", to: [`${agent.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`], subject: "Hi", text: "Send me your price list" },
+    });
+    const id = `msg_${rid()}`;
+    const ts = String(Math.floor(Date.now() / 1000));
+    await handleResendWebhook(
+      new Request("https://app.roster.test/api/webhooks/resend", {
+        method: "POST",
+        headers: { "svix-id": id, "svix-timestamp": ts, "svix-signature": signSvix(id, ts, body, TEST_ENV.RESEND_WEBHOOK_SECRET) },
+        body,
+      }),
+    );
+    await runJobsOnce({ types: ["inbound.process", "agent.run", "channel.deliver"], max: 30 });
+    const msgs = await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id));
+    expect(msgs.filter((m) => m.direction === "inbound")[0]!.meta).toMatchObject({ senderAuth: "none", senderUserId: null });
+    expect(msgs.filter((m) => m.direction === "outbound" && m.deliveryStatus === "sent")).toHaveLength(0);
+    const approvals = await db().select().from(schema.approvals).where(eq(schema.approvals.orgId, org.id));
+    expect(approvals.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("records Slack events as channel-authenticated (senderAuth pass)", async () => {
     const org = await makeOrg();
     const agent = await makeAgent(org.id);
     const teamId = `T${rid(4).toUpperCase()}`;
@@ -87,14 +117,12 @@ describe("inbound → reply, end to end", () => {
         body: raw,
       }),
     );
-    await runJobsOnce({ types: ["inbound.process", "agent.run", "channel.deliver"], max: 30 });
-    const out = await db()
+    await runJobsOnce({ types: ["inbound.process"], max: 10 });
+    const [inbound] = await db()
       .select()
       .from(schema.messages)
-      .where(and(eq(schema.messages.orgId, org.id), eq(schema.messages.direction, "outbound")));
-    expect(out.length).toBeGreaterThanOrEqual(1);
-    expect(out[0]!.deliveryStatus).toBe("sent");
-    expect(out[0]!.meta).toMatchObject({ simulated: true, slack: { channel: "CGEN", threadTs: "1730500000.000100" } });
+      .where(and(eq(schema.messages.orgId, org.id), eq(schema.messages.direction, "inbound")));
+    expect(inbound!.meta).toMatchObject({ senderAuth: "pass", slack: { channel: "CGEN" } });
     void agent;
   });
 });

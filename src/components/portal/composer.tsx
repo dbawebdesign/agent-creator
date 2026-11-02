@@ -86,7 +86,7 @@ export function AskComposer({
         }}
         className={cn(
           "flex items-end gap-1.5 rounded-xl border border-line bg-surface p-1.5 shadow-sm transition-[border-color,box-shadow] duration-150",
-          "focus-within:border-line-strong focus-within:shadow-md",
+          "focus-within:border-accent focus-within:shadow-md focus-within:ring-3 focus-within:ring-[var(--accent-soft)]",
         )}
       >
         {lockAgent || agents.length < 2 ? (
@@ -101,7 +101,7 @@ export function AskComposer({
             >
               <AgentOrb seed={agent.seed} size={22} />
               <span className="hidden sm:inline">{agent.name}</span>
-              <ChevronDown className="size-3.5 text-ink-4" aria-hidden />
+              <ChevronDown className="size-3.5 text-ink-3" aria-hidden />
             </MenuTrigger>
             <MenuContent align="start" className="w-64">
               <MenuLabel>Ask</MenuLabel>
@@ -112,7 +112,7 @@ export function AskComposer({
                     <span className="block truncate font-medium text-ink">{a.name}</span>
                     <span className="block truncate text-[12px] text-ink-3">{a.role}</span>
                   </span>
-                  {a.id === agent.id ? <Check className="!text-accent" aria-hidden /> : null}
+                  {a.id === agent.id ? <Check className="!text-accent-text" aria-hidden /> : null}
                 </MenuItem>
               ))}
             </MenuContent>
@@ -138,7 +138,7 @@ export function AskComposer({
             }
           }}
           placeholder={placeholder ?? `Ask ${agent.name} for anything…`}
-          className="min-h-9 flex-1 resize-none bg-transparent px-1.5 py-2 text-[14.5px] leading-5 text-ink placeholder:text-ink-4 focus:outline-none"
+          className="min-h-9 flex-1 resize-none bg-transparent px-1.5 py-2 text-[14.5px] leading-5 text-ink placeholder:text-ink-3 focus:outline-none"
           disabled={pending}
         />
         <button
@@ -147,7 +147,7 @@ export function AskComposer({
           aria-label={`Send message to ${agent.name}`}
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-lg transition-[background,color,opacity] duration-150",
-            text.trim() ? "bg-accent text-accent-ink hover:brightness-110" : "bg-surface-2 text-ink-4",
+            text.trim() ? "bg-accent text-accent-ink hover:brightness-110" : "bg-surface-2 text-ink-3",
             "disabled:cursor-not-allowed",
           )}
         >

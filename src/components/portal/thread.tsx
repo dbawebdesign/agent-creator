@@ -70,7 +70,7 @@ export function Thread({
               <li key={m.id} className={cn("flex gap-3", mine && "flex-row-reverse")}>
                 {isAgent ? <AgentOrb seed={agent.seed} size={28} className="mt-0.5" /> : <Avatar name={name} size={28} className="mt-0.5" />}
                 <div className={cn("min-w-0 max-w-[85%]", mine && "flex flex-col items-end")}>
-                  <p className={cn("mb-1 text-[12px] text-ink-4", mine && "text-right")}>
+                  <p className={cn("mb-1 text-[12px] text-ink-3", mine && "text-right")}>
                     <span className="font-medium text-ink-3">{mine ? "You" : name}</span> · <time dateTime={m.at}>{m.when}</time>
                   </p>
                   <div

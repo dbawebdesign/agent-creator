@@ -30,7 +30,10 @@ export type LlmStopReason = "end_turn" | "tool_use" | "max_tokens" | "refusal" |
 
 export type LlmRequest = {
   tier: ModelTier;
+  /** Stable system prompt: cached with the tool definitions (Anthropic prompt caching). */
   system: string;
+  /** Per-run system context after the cache breakpoint (memories, current time). */
+  systemVolatile?: string;
   messages: LlmMessage[];
   tools: LlmToolDef[];
   maxTokens: number;

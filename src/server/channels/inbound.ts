@@ -434,7 +434,7 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const messageIdHeader = parseMessageIds(str(full.message_id) ?? header(headers, "message-id"))[0] ?? null;
   const inReplyTo = parseMessageIds(header(headers, "in-reply-to") ?? str(full.in_reply_to));
   const references = parseMessageIds(header(headers, "references") ?? str(full.references));
-  const isAuto = isAutomatedEmail(headers, from.email, full.headers === undefined ? null : str(full.content_type) ?? header(headers, "content-type"));
+  const isAuto = isAutomatedEmail(headers, from.email, header(headers, "content-type"));
   const senderAuth = emailSenderAuth(header(headers, "authentication-results"), from.email);
 
   const subject = str(full.subject)?.slice(0, 300) ?? null;

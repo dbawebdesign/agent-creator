@@ -1,0 +1,576 @@
+/**
+ * Offline discovery-call reader: transcript → structured facts the Architect designs from.
+ *
+ * Deterministic, no model. It segments the call into speaker turns and sentences, scores each client sentence for
+ * "pain" (stated time costs, money at stake, manual/chasing language), and groups pain sentences into distinct
+ * topics — one per task the owner described — by following the conversation: a topic starts where the owner
+ * introduces a task ("The other thing is unscheduled treatment."), and the sentences after it (hours, dollars,
+ * systems, rules) attach to that topic until the next one starts. A word that only appears in passing ("my front
+ * desk lead, Rosa", "we have a report in Dentrix") never starts a topic.
+ */
+import { normalizeWhitespace, splitSentences, truncate } from "../text";
+
+// ───────────────────────────────────────────── shapes ─────────────────────────────────────────────
+
+export type Action =
+  | "verify"
+  | "chase"
+  | "report"
+  | "triage"
+  | "urgent"
+  | "deadline"
+  | "packet"
+  | "close"
+  | "quote"
+  | "entry"
+  | "schedule"
+  | "reviews"
+  | "sync"
+  | "invoice"
+  | "inbox"
+  | "manual";
+
+export type Sentence = { text: string; turn: number; idx: number; speaker: string | null; afterItch: boolean };
+
+export type Cadence =
+  | { kind: "daily"; days: "1-5" | "1-6" | "*" }
+  | { kind: "weekly"; dow: number }
+  | { kind: "monthly"; day: number; deadlineDay: number | null }
+  | { kind: "event"; channel: "email" | "sms" };
+
+export type Topic = {
+  action: Action;
+  /** The task object as the owner said it ("insurance verifications", "owner reports"). */
+  phrase: string;
+  /** Qualifier captured with the object ("insurance", "owner", "lease"). */
+  qualifier: string;
+  sentences: Sentence[];
+  first: Sentence;
+  hoursPerWeek: number | null;
+  money: number | null;
+  moneyText: string | null;
+  score: number;
+  cadence: Cadence | null;
+  items: string[];
+  systems: string[];
+  people: string[];
+  rules: string[];
+  leadDays: number | null;
+};
+
+export type Person = { name: string; role: string | null };
+
+export type Discovery = {
+  owner: string | null;
+  turns: number;
+  sentences: Sentence[];
+  topics: Topic[];
+  people: Person[];
+  systems: string[];
+  rules: string[];
+  channels: { sms: boolean; slack: boolean; email: boolean };
+  /** Who wants the morning output, how, and by when. */
+  recipient: { name: string | null; channel: "email" | "sms" | null; by: { h: number; m: number } | null };
+  compliance: string[];
+  facts: string[];
+  preferences: string[];
+  resale: string | null;
+  vertical: string | null;
+};
+
+// ───────────────────────────────────────────── segmentation ─────────────────────────────────────────────
+
+const AGENCY_SPEAKERS = /^(?:agency|host|interviewer|consultant|operator|me|q|us|rep|sales|advisor|aj)$/i;
+const NOT_A_SPEAKER = /^(?:note|notes|update|example|subject|re|ps|transcript|summary|agenda|action items?)$/i;
+
+type Turn = { speaker: string | null; text: string; agency: boolean };
+
+function cleanLine(s: string): string {
+  return s
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\\\[[^\]]*\\\]/g, " ")
+    .replace(/\[(?:music|laughter|applause|crosstalk|inaudible)\]/gi, " ")
+    .replace(/\*\*/g, "")
+    .replace(/\b(?:uh|um|you know),?\s+/gi, "")
+    .replace(/\b(\w+) \1\b/gi, "$1");
+}
+
+export function parseTurns(raw: string): Turn[] {
+  let t = raw.replace(/^---[\s\S]*?\n---\n/, "");
+  const marker = t.search(/^##\s+Transcript\s*$/im);
+  if (marker >= 0) t = t.slice(marker);
+  t = t.replace(/^#+\s.*$/gm, "");
+  // A new turn starts at a timestamp, a "Name:" label at line start, or a blank line.
+  const blocks = t
+    .replace(/\r/g, "")
+    .split(/\n\s*\n|\n(?=\s*(?:\*\*)?\[?\d{1,2}:\d{2}(?::\d{2})?\]?(?:\*\*)?)|\n(?=[A-Z][A-Za-z.'-]{1,20}(?: [A-Z][A-Za-z.'-]{1,20})?:\s)/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  const turns: Turn[] = [];
+  for (const b0 of blocks) {
+    const b = b0.replace(/^(?:\*\*)?\[?\d{1,2}:\d{2}(?::\d{2})?\]?(?:\*\*)?\s*·?\s*/, "");
+    const m = /^([A-Z][A-Za-z.'-]{1,20}(?: [A-Z][A-Za-z.'-]{1,20})?):\s+([\s\S]*)$/.exec(b);
+    const speaker = m && !NOT_A_SPEAKER.test(m[1]!) ? m[1]! : null;
+    const text = normalizeWhitespace(cleanLine(speaker ? m![2]! : b));
+    if (text.length < 2) continue;
+    turns.push({ speaker, text, agency: speaker ? AGENCY_SPEAKERS.test(speaker) : false });
+  }
+  // Named interviewer ("AJ:", "Sarah:"): the labelled speaker who mostly asks questions.
+  const speakers = [...new Set(turns.map((x) => x.speaker).filter((s): s is string => !!s))];
+  if (speakers.length >= 2 && !turns.some((x) => x.agency)) {
+    const qRatio = (s: string) => {
+      const mine = turns.filter((x) => x.speaker === s);
+      return mine.filter((x) => /\?\s*$/.test(x.text)).length / Math.max(1, mine.length);
+    };
+    const asker = [...speakers].sort((a, b) => qRatio(b) - qRatio(a))[0]!;
+    if (qRatio(asker) >= 0.5) for (const x of turns) if (x.speaker === asker) x.agency = true;
+  }
+  return turns;
+}
+
+// ───────────────────────────────────────────── numbers ─────────────────────────────────────────────
+
+const WORD_NUM: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12,
+  fifteen: 15, twenty: 20, thirty: 30, forty: 40, "a couple": 2, "a couple of": 2, "a few": 3, several: 4, half: 0.5,
+};
+const NUM = String.raw`(\d+(?:\.\d+)?|a couple(?: of)?|a few|several|an?|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|forty|half an?)`;
+const toNum = (s: string): number | null => {
+  const k = s.toLowerCase().replace(/^half an?$/, "half");
+  if (Number.isFinite(Number(k))) return Number(k);
+  return WORD_NUM[k] ?? null;
+};
+
+const RE_HOURS_PER = new RegExp(String.raw`\b${NUM}\s*(?:(?:-|to)\s*\d+\s*)?(?:hours?|hrs?)\b(?:\s+and a half)?\s+(?:a|per|each|every)\s+(week|day|month)`, "i");
+const RE_HOURS_DAILY = new RegExp(String.raw`\b${NUM}\s+(and a half\s+)?hours?(\s+and a half)?\b[^.]{0,40}?\b(?:every|each) (?:single )?(?:morning|day|night|evening|afternoon|weekday)`, "i");
+const RE_DAILY_HOURS_REV = new RegExp(String.raw`\b(?:every|each) (?:single )?(?:morning|day|night|evening|afternoon)\b[^.]{0,40}?\b${NUM}\s+(and a half\s+)?hours?(\s+and a half)?`, "i");
+const RE_DAYS_PER = new RegExp(String.raw`\b${NUM}\s+(?:full\s+|whole\s+)?(?:work\s*)?days?\b[^.]{0,30}?\b(?:a|per|each|every)\s+(week|month|quarter)`, "i");
+
+/** Hours per week of human time stated in a sentence, or null. */
+export function hoursPerWeekIn(s: string): number | null {
+  const d = RE_HOURS_DAILY.exec(s) ?? RE_DAILY_HOURS_REV.exec(s);
+  if (d) {
+    const n = toNum(d[1] ?? "") ?? 1;
+    return (n + (d[2] || d[3] ? 0.5 : 0)) * 5;
+  }
+  const h = RE_HOURS_PER.exec(s);
+  if (h?.[1] && h[2]) {
+    const n = toNum(h[1]);
+    if (n == null) return null;
+    const half = /and a half/i.test(h[0]) ? 0.5 : 0;
+    const unit = h[2].toLowerCase();
+    return round1((n + half) * (unit === "day" ? 5 : unit === "month" ? 1 / 4.33 : 1));
+  }
+  const dd = RE_DAYS_PER.exec(s);
+  if (dd?.[1] && dd[2]) {
+    const n = toNum(dd[1]);
+    if (n == null) return null;
+    const unit = dd[2].toLowerCase();
+    return round1(n * 8 * (unit === "week" ? 1 : unit === "month" ? 1 / 4.33 : 1 / 13));
+  }
+  return null;
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Largest dollar amount in a sentence ("$180,000", "$6K", "180 grand"). */
+export function moneyIn(s: string): { value: number; text: string } | null {
+  let best: { value: number; text: string } | null = null;
+  const re = /\$\s?(\d[\d,]*(?:\.\d+)?)\s?(k|K|m|M|million|thousand)?\b|\b(\d+(?:\.\d+)?)\s?(grand|thousand dollars|k dollars)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    const n = Number((m[1] ?? m[3] ?? "0").replace(/,/g, ""));
+    const unit = (m[2] ?? m[4] ?? "").toLowerCase();
+    const v = n * (unit === "k" || unit === "thousand" || unit === "grand" || unit === "thousand dollars" || unit === "k dollars" ? 1000 : unit === "m" || unit === "million" ? 1_000_000 : 1);
+    if (!best || v > best.value) best = { value: v, text: m[0].trim() };
+  }
+  return best;
+}
+
+// ───────────────────────────────────────────── task objects ─────────────────────────────────────────────
+
+type Concept = {
+  action: Action;
+  /** Matches the task object. Group 1 (optional) = qualifier, group 2 (optional) = object. */
+  re: RegExp;
+  /** A match that names no object ("chase them") continues the current topic instead of starting one. */
+  needsObject?: boolean;
+};
+
+/**
+ * Generic business tasks (not industries). Order matters: earlier concepts win when one phrase matches several
+ * ("follow up on estimates" is chasing, not quoting).
+ */
+const CONCEPTS: Concept[] = [
+  { action: "urgent", re: /\b(after[- ]hours|overnight|middle of the night|weekend|late[- ]night)\s+(emergenc(?:y|ies)|calls?|texts?|requests?)\b|\b(emergenc(?:y|ies))\s+(?:after hours|at night|overnight|on (?:the )?weekends?)/i },
+  { action: "verify", re: /\b(insurance|eligibility|benefits?|coverage|credit|background|license|income|employment)\s+(verifications?|checks?)\b|\b()(verif(?:y|ying|ications?))\b|\b()(eligibility and benefits)\b/i },
+  {
+    action: "chase",
+    re: /\b(unscheduled|unbooked|unsigned|outstanding|past[- ]due|overdue|missing|open)\s+(treatment(?: plans?)?|estimates?|quotes?|proposals?|receipts?|documents?|invoices?|paperwork|balances?|leads?|applications?)\b|\bfollow(?:ing|s)?[- ]?(?:ups?\s+)?(?:up\s+)?(?:on|with)\s+(?:the |our |all |those |these )?()((?!them\b|it\b|that\b)[a-z]+(?: [a-z]+)?)|\bchas(?:e|es|ing)\s+(?:clients|customers|patients|people|homeowners|tenants|owners|members)\s+(?:for|about|on)\s+()([a-z]+(?: (?:and )?(?:missing )?[a-z]+)?)/i,
+  },
+  { action: "close", re: /\b(month[- ]end|year[- ]end|quarter[- ]end)\s+(close|closes|closing)\b|\b()(clos(?:e|ing) the books|reconciliations?|reconcil(?:e|ing) (?:the )?(?:bank|accounts|credit cards?))\b/i },
+  { action: "renewal" as Action, re: /\b(lease|policy|contract|membership|subscription|license|warranty|service agreement)\s+(renewals?)\b|\b()(renewal (?:offers?|notices?|letters?))\b/i },
+  { action: "packet", re: /\b(insurance|warranty|permit)\s+(claims? (?:paperwork|packets?|files?|documentation|submissions?)|claims? and supplements?|paperwork)\b|\b()(supplements?|claim packets?|permit applications?|submittals?)\b/i },
+  {
+    action: "triage",
+    re: /\b(maintenance|service|repair|support|warranty|work)\s+(requests?|tickets?|orders?)\b|\b()(dispatch(?:es|ing|ed)? (?:a |the )?vendors?|vendors? (?:gets? )?dispatched)\b/i,
+  },
+  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))/i },
+  { action: "quote", re: /\b(?:put(?:ting)? together|build(?:ing)?|writ(?:e|ing)|creat(?:e|ing)|do(?:ing)?)\s+()(quotes?|proposals?|bids?|estimates?)\b|\b(quote|proposal|bid)\s+(requests?|building|prep)\b/i },
+  {
+    action: "entry",
+    re: /\b()(data entry|re-?typ(?:e|ing)|re-?key(?:ing)?|re-?enter(?:ing)?|copy(?:ing)? and past(?:e|ing)|migrat(?:e|ing|ion)|switch(?:ing)? over from|bring (?:all )?(?:of )?(?:this|the|their) data|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields)\b/i,
+  },
+  { action: "schedule", re: /\b()((?:build(?:ing)?|mak(?:e|ing)|do(?:ing)?|reshuffl\w*) (?:the |our |a )?(?:technician |crew |tech |staff |driver |install )?schedules?|dispatch board|dispatch(?:ing)?(?! (?:a |the )?vendors?)(?=[\s.,]))/i },
+  { action: "reviews", re: /\b(google|online|yelp|five[- ]star|5[- ]star|our|more|new|bad)\s+(reviews)\b|\b()(ask(?:ing)? (?:for|people for) (?:a )?reviews?|reputation)\b/i },
+  { action: "sync", re: /\b()(scrap(?:e|es|ing)(?! agent)\b|catalogs?|price lists?|product (?:data|feeds?))\b/i },
+  { action: "invoice", re: /\b()(invoic(?:e|es|ing)|billing|accounts receivable|past[- ]due (?:accounts|invoices))\b/i },
+  { action: "inbox", re: /\b(?:the |my |our )?()(inbox|emails? (?:all day|pile up))\b/i },
+];
+// "renewal" is folded into the deadline action.
+for (const c of CONCEPTS) if ((c.action as string) === "renewal") c.action = "deadline";
+
+type Hit = { action: Action; qualifier: string; object: string; phrase: string; index: number };
+
+function conceptHits(s: string): Hit[] {
+  const hits: Hit[] = [];
+  for (const c of CONCEPTS) {
+    const m = c.re.exec(s);
+    if (!m) continue;
+    // Pairs of (qualifier, object) groups: take the first pair that matched.
+    let qualifier = "";
+    let object = "";
+    for (let g = 1; g < m.length; g += 2) {
+      if (m[g] !== undefined || m[g + 1] !== undefined) {
+        qualifier = (m[g] ?? "").trim();
+        object = (m[g + 1] ?? "").trim();
+        break;
+      }
+    }
+    const phrase = normalizeWhitespace(`${qualifier} ${object}`).toLowerCase() || m[0].toLowerCase();
+    if (hits.some((h) => h.action === c.action)) continue;
+    hits.push({ action: c.action, qualifier: qualifier.toLowerCase(), object: object.toLowerCase(), phrase, index: m.index });
+  }
+  // A follow-up of quotes/estimates is chasing; drop the quoting hit then.
+  if (hits.some((h) => h.action === "chase")) return hits.filter((h) => h.action !== "quote" || !/follow|chas/i.test(s));
+  return hits.sort((a, b) => a.index - b.index);
+}
+
+// ───────────────────────────────────────────── pain ─────────────────────────────────────────────
+
+const PAIN_WORDS =
+  /\bby hand\b|\bmanually\b|\bchas(?:e|es|ing)\b|\bcopy(?:ing)? and paste\b|\bre-?typ\w*|\bre-?key\w*|\bbehind\b|\bdrowning\b|\bworst\b|\bkills? us\b|\beats?\b|\bfalls? apart\b|\bnobody\b|\bwe miss\b|\bmiss(?:es|ed)? (?:some|it|them|one)\b|\bforget\b|\bdon'?t have the (?:hands|time|people|bandwidth)\b|\btedious\b|\bboring\b|\brepetitive\b|\bhate\b|\btakes? forever\b|\bsurprise bill\b|\bwr(?:ite|ote) off\b|\bdenied\b|\bgo(?:es)? cold\b|\bmonth to month\b|\bspends?\b|\bspending\b|\bhad to\b|\bhas to\b|\bhave to\b|\bwritten by hand\b|\bsitting (?:in|there)\b|\bslips?\b|\bfalls? through\b|\bpain\b|\bheadache\b|\bnightmare\b|\bhands down\b|\bwaiting on\b|\bwait,\b/gi;
+
+const ITCH_Q = /\bitch\b|pain points?|eats? (?:up )?hours|spend(?:ing)? hours|repetitive|headache|biggest (?:problem|time)|walk me through your week|what(?:'s| is) (?:the|your) (?:biggest|main)/i;
+const INTRO = /^(?:and|also|oh,? and|plus|then|the other|another|the worst|the biggest|the big one|honestly|on top of that|the main|our biggest|my biggest|the last|last thing|lastly|finally|one more)\b/i;
+
+function painScore(s: string): number {
+  const hours = hoursPerWeekIn(s);
+  const money = moneyIn(s);
+  const words = (s.match(PAIN_WORDS) ?? []).length;
+  return (hours ? 3 + Math.min(hours, 20) / 2 : 0) + (money ? 2 + Math.log10(Math.max(10, money.value)) / 2 : 0) + words * 1.5;
+}
+
+// ───────────────────────────────────────────── entities ─────────────────────────────────────────────
+
+const KNOWN_SYSTEMS = [
+  "Salesforce", "HubSpot", "QuickBooks Online", "QuickBooks", "Xero", "NetSuite", "Sage Intacct", "FreshBooks", "Bill.com", "Gusto", "ADP", "Expensify",
+  "Hubdoc", "Dext", "Karbon", "TaxDome", "Canopy", "Excel", "Google Sheets", "Google Drive", "Dropbox", "Gmail", "Outlook", "Shopify", "Canva",
+  "Zapier", "ServiceTitan", "Housecall Pro", "Jobber", "Applied Epic", "EZLynx", "HawkSoft", "Dentrix", "Eaglesoft", "Open Dental", "Weave",
+  "Clio", "Asana", "Trello", "Notion", "Airtable", "Stripe", "Square", "SAGE", "ESP", "commonsku", "DocuSign", "Calendly", "AppFolio", "Buildium",
+  "Yardi", "Rent Manager", "Xactimate", "AccuLynx", "JobNimbus", "CompanyCam", "EagleView", "Procore", "Buildertrend", "CoConstruct", "Podium",
+  "Mailchimp", "Klaviyo", "Toast", "Slack", "Teams", "Zoom",
+];
+/** Chat/meeting apps are channels, not systems the agent works in. */
+const NOT_WORK_SYSTEMS = new Set(["Slack", "Teams", "Zoom", "Gmail", "Outlook"]);
+const CAP_STOP = new Set(
+  "I We She He They It The A An And Or But So Then Also Every Each Our My Their His Her This That These Those If When What Who How Why Anything Nothing Tenants Owners Patients Clients Customers Email Text Texts Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March April May June July August September October November December Honestly Maybe Yeah Okay Oh Last Dr Mr Mrs Ms Hi Hey HVAC PM AM".split(" "),
+);
+
+function systemsIn(s: string): string[] {
+  const out: string[] = [];
+  for (const t of KNOWN_SYSTEMS) {
+    const re = new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, t === "ESP" || t === "SAGE" ? "" : "i");
+    if (re.test(s) && !out.some((o) => o.toLowerCase().startsWith(t.toLowerCase()))) out.push(t);
+  }
+  // "the Delta Dental portal, MetLife, Cigna, Guardian" — portals/sites the owner logs into.
+  if (/\b(?:log(?:s|ging)? in(?:to)?|portals?|websites?|carrier sites?)\b/i.test(s)) {
+    const re = /(?:^|[\s,(])((?:[A-Z][a-zA-Z]+|[A-Z]{2,})(?: (?:[A-Z][a-zA-Z]+|[A-Z]{2,}))?)(?= portal|,| and|\)|\.| sometimes| when)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s))) {
+      const name = m[1]!;
+      const first = name.split(" ")[0]!;
+      if (CAP_STOP.has(first) || m.index === 0) continue;
+      if (!out.some((o) => o.toLowerCase() === name.toLowerCase())) out.push(/portal/i.test(s.slice(m.index, m.index + name.length + 9)) ? `${name} portal` : name);
+    }
+  }
+  return out;
+}
+
+const ROLE_WORDS =
+  "office manager|front desk lead|front desk|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|ops manager|controller|accountant|coordinator|project manager|production manager|estimator|admin|administrator|senior accountant|staff accountant|associate|paralegal|manager|lead|supervisor|foreman|office admin|claims coordinator|leasing agent|property manager";
+
+function peopleIn(sentences: string[]): Person[] {
+  const out: Person[] = [];
+  const add = (name: string, role: string | null) => {
+    if (!name || CAP_STOP.has(name) || /^(?:Hey|Okay|Yeah|Just|So|Well|Like)$/.test(name)) return;
+    const prev = out.find((p) => p.name === name);
+    if (prev) {
+      if (!prev.role && role) prev.role = role;
+      return;
+    }
+    out.push({ name, role });
+  };
+  const roleFirst = new RegExp(`\\b(?:[Mm]y|[Oo]ur) (${ROLE_WORDS}),? ([A-Z][a-z]+)\\b`, "g");
+  const nameFirst = new RegExp(`\\b([A-Z][a-z]+),? (?:my|our) (${ROLE_WORDS})\\b`, "g");
+  for (const s of sentences) {
+    for (const [re, roleIdx, nameIdx] of [[roleFirst, 1, 2], [nameFirst, 2, 1]] as const) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(s))) add(m[nameIdx]!, m[roleIdx]!);
+    }
+    for (const m of s.matchAll(/\bDr\.? ([A-Z][a-z]+)/g)) add(`Dr. ${m[1]}`, "doctor");
+    for (const m of s.matchAll(/\b(?:his|her|my) name is ([A-Z][a-z]+)/g)) add(m[1]!, null);
+  }
+  return out;
+}
+
+/** "A, B, C and D" lists inside a clause: the things a report covers or a check captures. */
+function listItems(s: string): string[] {
+  const clauses = s.split(/\s+[—–-]\s+|:\s+|,\s+(?:and\s+|then\s+)?(?:sometimes\s+|also\s+)?(?=(?:writes|calls|checks|records|enters|puts|types|copies|updates|sends|gets|logs|emails|texts|reads|figures|dispatches|marks|adds|pulls|uploads|builds)\b)/);
+  let best: string[] = [];
+  for (const c of clauses) {
+    const parts = c.split(/,\s*(?:and\s+|or\s+)?|\s+and\s+(?=whether|if\b)/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 3) continue;
+    const cleaned = parts
+      .map((p, i) => {
+        let x = p.replace(/[.;]+$/, "");
+        if (i === 0) x = x.replace(/^.*?\b(?:writes|captures|records|checks|includes|covers|gets|like|such as|is|are|the)\s+(?=\S)/i, "");
+        if (i === parts.length - 1) x = x.replace(/\s+(?:into|in|to|for the|before|so)\s+.*$/i, "");
+        return x.replace(/^(?:and|or|the|a|an)\s+/i, "").replace(/^whether it'?s\s+/i, "").trim();
+      })
+      .filter((x) => x.length >= 3 && x.split(/\s+/).length <= 7);
+    if (cleaned.length > best.length) best = cleaned;
+  }
+  return best.length >= 3 ? best.slice(0, 8) : [];
+}
+
+const TIME_RE = /\b(?:at|by|before|around|gets? in at|in the truck by|starts? at|huddle is at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/gi;
+
+function earliestMorningTime(s: string): { h: number; m: number } | null {
+  let best: { h: number; m: number } | null = null;
+  for (const m of s.matchAll(TIME_RE)) {
+    let h = Number(m[1]);
+    const min = Number(m[2] ?? 0);
+    const ap = (m[3] ?? "").toLowerCase();
+    if (ap.startsWith("p") && h < 12) h += 12;
+    if (h < 5 || h > 11) continue;
+    if (!best || h * 60 + min < best.h * 60 + best.m) best = { h, m: min };
+  }
+  return best;
+}
+
+function cadenceIn(text: string): Cadence | null {
+  const t = text.toLowerCase();
+  const by = /\bby the (\d{1,2})(?:st|nd|rd|th)\b/.exec(t);
+  if (/\bevery month\b|\bmonthly\b|\beach month\b|\bmonth[- ]end\b|\bby the \d{1,2}(?:st|nd|rd|th)\b|\bfirst (?:week|few days) of (?:the|every) month\b/.test(t)) {
+    const deadline = by ? Number(by[1]) : null;
+    return { kind: "monthly", day: deadline ? Math.max(1, deadline - 4) : /month[- ]end/.test(t) ? 1 : 1, deadlineDay: deadline };
+  }
+  const dows = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const d = /\bevery (sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b|\bon (mondays|tuesdays|wednesdays|thursdays|fridays)\b/.exec(t);
+  if (d) return { kind: "weekly", dow: dows.indexOf((d[1] ?? d[2]!.replace(/s$/, ""))) };
+  if (/\bevery week\b|\bweekly\b|\beach week\b|\bonce a week\b/.test(t)) return { kind: "weekly", dow: 1 };
+  if (/\bevery (?:morning|afternoon|day|evening|night|weekday)\b|\beach (?:morning|day)\b|\bdaily\b|\btomorrow'?s\b|\ba day\b/.test(t)) return { kind: "daily", days: /saturday|six days/.test(t) ? "1-6" : "1-5" };
+  if (/\b(?:comes? in|come in|arrive|submit|texts? (?:us|our|at)|emails? us|when (?:a|an|the) [a-z]+ (?:calls|emails|texts|submits))\b/.test(t)) return { kind: "event", channel: /\btext/.test(t) ? "sms" : "email" };
+  return null;
+}
+
+const APPROVAL_RULE =
+  /\bwithout (?:me|us|[A-Z][a-z]+(?: or (?:me|[A-Z][a-z]+))?) (?:seeing|reading|reviewing|approving|signing off|looking at|checking)|\bnothing (?:goes|gets sent|leaves)\b|\b(?:reviews?|approves?|signs? off on) (?:anything|everything|every)\b|\bsign[- ]off\b|\bneeds? (?:\w+ )?approval\b|\bwant(?:s)? approval\b|\bdon'?t want (?:the agent|anything|it|you)\b|\bbefore (?:it'?s|it is|anything is) sent\b/i;
+
+// ───────────────────────────────────────────── main ─────────────────────────────────────────────
+
+export function readDiscovery(raw: string): Discovery {
+  const turns = parseTurns(raw);
+  const labelled = turns.some((t) => t.speaker);
+  const sentences: Sentence[] = [];
+  let lastAgencyItch = false;
+  let idx = 0;
+  turns.forEach((t, ti) => {
+    if (t.agency) {
+      lastAgencyItch = ITCH_Q.test(t.text);
+      return;
+    }
+    for (const s of splitSentences(t.text)) {
+      if (s.length < 3) continue;
+      sentences.push({ text: s, turn: ti, idx: idx++, speaker: t.speaker, afterItch: lastAgencyItch });
+    }
+    lastAgencyItch = false;
+  });
+  const speakerCounts = new Map<string, number>();
+  for (const t of turns) if (t.speaker && !t.agency) speakerCounts.set(t.speaker, (speakerCounts.get(t.speaker) ?? 0) + 1);
+  const owner = [...speakerCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+  // Walk the call; start topics where the owner introduces a task, attach what follows to the current topic.
+  const topics: Topic[] = [];
+  let current: Topic | null = null;
+  let lastTurn = -1;
+  let conceptSeenInTurn = false;
+  const newTopic = (h: Hit, s: Sentence): Topic => ({
+    action: h.action,
+    phrase: h.phrase,
+    qualifier: h.qualifier,
+    sentences: [],
+    first: s,
+    hoursPerWeek: null,
+    money: null,
+    moneyText: null,
+    score: 0,
+    cadence: null,
+    items: [],
+    systems: [],
+    people: [],
+    rules: [],
+    leadDays: null,
+  });
+  for (const s of sentences) {
+    if (s.turn !== lastTurn) {
+      lastTurn = s.turn;
+      conceptSeenInTurn = false;
+    }
+    const isQuestion = /\?\s*$/.test(s.text);
+    const hits = isQuestion ? [] : conceptHits(s.text);
+    const pain = painScore(s.text);
+    const intro = INTRO.test(s.text) || /,\s*hands down\b/i.test(s.text) || s.text.split(/\s+/).length <= 5;
+    let target: Topic | null = null;
+    if (hits.length) {
+      const existing = hits.map((h) => topics.find((t) => t.action === h.action)).filter((t): t is Topic => !!t);
+      if (current && hits.some((h) => h.action === current!.action)) target = current;
+      else if (existing[0] && (!conceptSeenInTurn || intro)) target = existing[0];
+      else if (!conceptSeenInTurn || intro) {
+        // New tasks named in this sentence. Unlabelled monologues need real pain in the sentence itself.
+        const fresh = hits.filter((h) => !topics.some((t) => t.action === h.action));
+        if (fresh.length && (labelled ? pain > 0 || s.afterItch || intro || !conceptSeenInTurn : pain >= 1.5)) {
+          for (const h of fresh) topics.push(newTopic(h, s));
+          target = topics.find((t) => t.action === fresh[0]!.action) ?? null;
+          // Several tasks in one breath ("scrape catalogs and create invoices"): each gets this sentence.
+          for (const h of fresh.slice(1)) attach(topics.find((t) => t.action === h.action)!, s, pain);
+        } else if (existing[0]) target = existing[0];
+      }
+      conceptSeenInTurn = true;
+    }
+    if (!target && current && current.first.turn <= s.turn && s.turn - lastTopicTurn(current) <= (labelled ? 4 : 1)) target = current;
+    if (target) {
+      attach(target, s, pain);
+      current = target;
+    }
+  }
+
+  // Fallback for tasks no concept covers: a pain sentence with an explicit time cost and a verb-object phrase.
+  for (const s of sentences) {
+    const h = hoursPerWeekIn(s.text);
+    if (!h || h < 2 || topics.some((t) => t.sentences.includes(s))) continue;
+    const m = /\b(?:spend(?:s|ing)?|takes?|lose|losing)\b.*?\b(?:on|doing)\s+((?:the\s+)?[a-z][a-z' -]{3,40}?)(?=[,.]| every| each| a week| per| for| because|$)|\b(?:chasing|building|writing|typing|copying|entering|checking|calling|sending|updating|filling out|putting together|pulling|preparing|scheduling|booking|ordering|processing|sorting)\s+([a-z][a-z' -]{3,40}?)(?=[,.]| every| each| a week| per| for| because| into| from|$)/i.exec(s.text);
+    const phrase = normalizeWhitespace((m?.[1] ?? m?.[2] ?? "").replace(/^the\s+/i, ""));
+    if (!phrase || /^(?:it|that|this|them|those|hours?)$/i.test(phrase)) continue;
+    const t = newTopic({ action: "manual", qualifier: "", object: phrase, phrase: phrase.toLowerCase(), index: 0 }, s);
+    attach(t, s, painScore(s.text));
+    topics.push(t);
+  }
+
+  function lastTopicTurn(t: Topic) {
+    return t.sentences[t.sentences.length - 1]?.turn ?? t.first.turn;
+  }
+  function attach(t: Topic, s: Sentence, pain: number) {
+    if (t.sentences.includes(s)) return;
+    t.sentences.push(s);
+    t.score += pain + (s.afterItch ? 4 : 0);
+    const h = hoursPerWeekIn(s.text);
+    if (h && (t.hoursPerWeek == null || h > t.hoursPerWeek)) t.hoursPerWeek = h;
+    const mo = moneyIn(s.text);
+    if (mo && !APPROVAL_RULE.test(s.text) && !/\bover \$|\babove \$/i.test(s.text) && (t.money == null || mo.value > t.money)) {
+      t.money = mo.value;
+      t.moneyText = s.text;
+    }
+    for (const sys of systemsIn(s.text)) if (!t.systems.includes(sys)) t.systems.push(sys);
+    if (!t.items.length) t.items = listItems(s.text);
+    if (APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d/i.test(s.text)) t.rules.push(s.text);
+    const lead = /\b(\d+) days (?:out|before|ahead|in advance|prior|early)\b/i.exec(s.text);
+    if (lead) t.leadDays = Number(lead[1]);
+  }
+
+  for (const t of topics) {
+    const ctx = t.sentences.map((s) => s.text).join(" ");
+    t.cadence = cadenceIn(ctx.replace(RE_HOURS_PER, " ").replace(RE_HOURS_DAILY, " ").replace(RE_DAYS_PER, " ")) ?? cadenceIn(ctx);
+    t.people = peopleIn(t.sentences.map((s) => s.text)).map((p) => p.name);
+    if (t.hoursPerWeek) t.score += t.hoursPerWeek * 1.5;
+    if (t.money) t.score += Math.log10(t.money) * 1.5;
+    if (t.first.afterItch) t.score += 6;
+  }
+  const ranked = topics
+    .filter((t) => t.score >= 2.5 && (t.hoursPerWeek || t.money || t.sentences.some((s) => (s.text.match(PAIN_WORDS) ?? []).length > 0) || t.first.afterItch))
+    .sort((a, b) => b.score - a.score || a.first.idx - b.first.idx);
+
+  const allText = sentences.map((s) => s.text);
+  const people = peopleIn(allText);
+  if (owner && !people.some((p) => p.name === owner)) people.unshift({ name: owner, role: "owner" });
+  else if (owner) people.find((p) => p.name === owner)!.role ??= "owner";
+  const systems = [...new Set(sentences.flatMap((s) => systemsIn(s.text)))];
+  const rules = [...new Set(sentences.filter((s) => APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d[\d,]*\b[^.]*\bapprov/i.test(s.text)).map((s) => s.text))];
+
+  const joined = allText.join(" ");
+  const sms = /\btext(?:s|ing|ed)?\b(?! (?:file|box|field))|\bsms\b|\bweave\b|\bpodium\b/i.test(joined);
+  const slack = /\bslack\b/i.test(joined);
+
+  // Who gets the morning output: the answer to "who should get…" or any "email her/text me" line.
+  let recipient: Discovery["recipient"] = { name: null, channel: null, by: null };
+  const deliveryTurn = turns.findIndex((t, i) => t.agency && /who (?:should|gets?|wants?)|morning stuff|send (?:it|this) to|how do (?:you|your) .* (?:like|want) to hear/i.test(t.text) && !!turns[i + 1]);
+  const deliverySents = sentences.filter((s) => (deliveryTurn >= 0 && s.turn === deliveryTurn + 1) || /\b(?:email|text|send) (?:it to )?(?:me|her|him|them)\b/i.test(s.text));
+  if (deliverySents.length) {
+    const txt = deliverySents.map((s) => s.text).join(" ");
+    const named = people.find((p) => new RegExp(`\\b${p.name.replace(".", "\\.")}\\b`).test(txt) && p.name !== owner);
+    const toMe = /\b(?:text|email|send) (?:it )?(?:to )?me\b/i.test(txt);
+    recipient = {
+      name: toMe ? owner : (named?.name ?? owner),
+      channel: /\btext (?:it )?(?:to )?(?:me|her|him)\b/i.test(txt) ? "sms" : /\bemail (?:it )?(?:to )?(?:me|her|him)|outlook|gmail|inbox\b/i.test(txt) ? "email" : null,
+      by: earliestMorningTime(txt),
+    };
+  }
+
+  const compliance: string[] = [];
+  if (/\bhipaa\b|\bphi\b|\bpatients?\b/i.test(joined)) compliance.push("hipaa");
+  if (/\bssns?\b|social security|\btax returns?\b|\bbank (?:statements|accounts?)\b|\bpii\b|\bW-?2s?\b|\b1099s?\b/i.test(joined)) compliance.push("pii");
+  if (/\bmanagement agreement\b|\bcontract says\b|\bper our (?:agreement|contract)\b/i.test(joined)) compliance.push("contract");
+
+  // Facts: volumes and scale the owner stated about the business ("about 340 units for 28 owners").
+  const facts = sentences
+    .filter((s) => /\b(?:we|i)\b.*\b(?:manage|see|do|serve|run|have|got|employ|handle|send|file|install)\b[^.]*\b\d[\d,]*\b/i.test(s.text) && s.text.length < 260 && !hoursPerWeekIn(s.text))
+    .map((s) => s.text)
+    .slice(0, 6);
+  const preferences = sentences
+    .filter((s) => /\b(?:i|we) (?:prefer|always|never|don'?t want|do not want|like to|want everything|need (?:it|them|everything))\b|\b(?:prefer|definitely) (?:texts?|emails?|calls?)\b|^(?:texts?|email)[,.]/i.test(s.text) && s.text.length < 300)
+    .map((s) => s.text);
+  const resale =
+    sentences.find((s) => /\bsell (?:this|it|that|the [\w\s-]{2,40}?) to (?:my |our |your |their )?(?:own )?(?:customers|clients|owners|members)|\bresell\b|\bpackage (?:this|it) up\b|\bpay (?:us )?extra for\b/i.test(s.text))?.text ?? null;
+
+  return {
+    owner,
+    turns: turns.length,
+    sentences,
+    topics: ranked,
+    people: people.slice(0, 10),
+    systems,
+    rules,
+    channels: { sms, slack, email: true },
+    recipient,
+    compliance,
+    facts,
+    preferences: [...new Set(preferences)].slice(0, 6),
+    resale,
+    vertical: null,
+  };
+}
+
+export const quoteOf = (s: string, max = 240) => truncate(normalizeWhitespace(s.replace(/^(?:so|and|but|yeah|well|okay|like|honestly|oh),?\s+/i, "")), max);

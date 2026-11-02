@@ -262,7 +262,7 @@ export function BrandingForm({ slug, initial, fallbackName }: { slug: string; in
           <span className="truncate text-[13px] font-semibold text-ink">{shownName}</span>
         </div>
         <div className="space-y-2 p-3">
-          <p className="text-[11px] text-ink-4">Preview</p>
+          <p className="text-[11px] text-ink-3">Preview</p>
           <p className="text-[15px] font-semibold tracking-[-0.01em] text-ink">Good morning</p>
           <div className="h-2 w-3/4 rounded-full bg-surface-2" />
           <div className="h-2 w-1/2 rounded-full bg-surface-2" />

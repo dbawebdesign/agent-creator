@@ -29,7 +29,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ org: 
   const branding = p.org.branding ?? {};
 
   return (
-    <div className="mx-auto w-full max-w-[960px] px-4 pt-8 md:px-6 md:pt-14">
+    <div className="mx-auto w-full max-w-[1040px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="mb-10 animate-rise">
         <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">Settings</h1>
         <p className="mt-1.5 text-[15px] text-ink-3">{p.org.name}</p>
@@ -47,7 +47,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ org: 
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] font-medium text-ink">
                   {m.name ?? m.email}
-                  {m.userId === p.user.id ? <span className="ml-1.5 font-normal text-ink-4">(you)</span> : null}
+                  {m.userId === p.user.id ? <span className="ml-1.5 font-normal text-ink-3">(you)</span> : null}
                 </p>
                 {m.name ? <p className="truncate text-[12.5px] text-ink-3">{m.email}</p> : null}
               </div>
@@ -59,7 +59,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ org: 
               <Avatar name={i.email} size={30} className="opacity-60" />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13.5px] text-ink-2">{i.email}</p>
-                <p className="text-[12.5px] text-ink-4">Invited · {ROLE[i.role] ?? i.role}</p>
+                <p className="text-[12.5px] text-ink-3">Invited · {ROLE[i.role] ?? i.role}</p>
               </div>
               {p.isAdmin ? <RevokeInvite slug={slug} inviteId={i.id} email={i.email} /> : <Badge tone="warn">Pending</Badge>}
             </li>

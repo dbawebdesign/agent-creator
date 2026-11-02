@@ -117,3 +117,27 @@ export async function expireApprovals(database: DB, now: Date = new Date(), ttlM
   if (expired.length) logger.info({ expired: expired.length }, "expired stale approvals");
   return expired.length;
 }
+
+/** Local wall-clock hour (0-23) of `at` in `timezone`. */
+export function localHour(timezone: string, at: Date): number {
+  try {
+    const h = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hourCycle: "h23" }).format(at);
+    return Number(h) % 24;
+  } catch {
+    return at.getUTCHours();
+  }
+}
+
+/**
+ * When the first ("overnight wow") deliverable is worked on and when it is handed over, in the client's timezone:
+ * - hired before 1:00 AM: work at 1:00, release at 6:00;
+ * - hired 1:00–6:00 AM: work now, release at 6:00;
+ * - hired after 6:00 AM: work now and release as soon as it is done (releaseAt null).
+ * Work starts hours early so the deliverable is ready (and retried if needed) well before the owner wakes up.
+ */
+export function firstDeliverableSchedule(timezone: string, now: Date = new Date()): { runAt: Date; releaseAt: Date | null } {
+  const h = localHour(timezone, now);
+  if (h < 1) return { runAt: nextLocalTime(timezone, 1, 0, now), releaseAt: nextLocalTime(timezone, 6, 0, now) };
+  if (h < 6) return { runAt: now, releaseAt: nextLocalTime(timezone, 6, 0, now) };
+  return { runAt: now, releaseAt: null };
+}

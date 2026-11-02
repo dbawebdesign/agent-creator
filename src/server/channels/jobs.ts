@@ -56,6 +56,8 @@ const deliverPayload = z.object({
   to: z.string().max(320).optional(),
   subject: z.string().max(300).optional(),
   text: z.string().max(100_000).optional().default(""),
+  /** An approved approval that authorized sending to `to` (required for Slack targets outside the allowlist). */
+  approvalId: z.uuid().optional(),
 });
 type DeliverPayload = z.infer<typeof deliverPayload>;
 
@@ -167,6 +169,7 @@ async function sendOne(
       inReplyTo: prevId,
       references,
       idempotencyKey: `roster-msg-${message.id}`,
+      autoSubmitted: prevId && !deliverable ? "auto-replied" : "auto-generated",
     });
     if (!result.simulated) await recordUsage(tx, org, agent.id, "email", 1);
     return {
@@ -218,6 +221,11 @@ async function sendOne(
     }
     if (!target) throw new ProviderError("no slack channel", false);
     if (!conn) throw new ProviderError("slack not connected", false);
+    // A conversation's own key came from a verified Slack event (or an earlier allowed post); anything else
+    // must be on the org's allowlist or carry an approved approval.
+    if (!m && !/^[A-Z0-9]{2,32}$/.test(key) && !(await slackTargetAllowed(tx, { orgId: org.id, conn, target, approvalId: payload.approvalId, runId: message.runId }))) {
+      throw new ProviderError(`slack target ${target} needs approval (not this conversation, the install channel, or a known channel/person)`, false);
+    }
     const token = await slackBotToken(org.id, conn.secretId);
     // A connection with a stored token that can't be read is an error, not a demo: never silently drop.
     if (conn.secretId && !token) throw new ProviderError("slack bot token unavailable; reconnect Slack", false);
@@ -241,6 +249,37 @@ async function sendOne(
 
   // portal / api / mcp: nothing to push.
   return { result: { providerId: null, simulated: false }, externalId: null, meta: {} };
+}
+
+/**
+ * Slack destinations the agent may use without a human: the install's default channel, channels where
+ * people in this org's workspace already talk to the agent (inbound-keyed conversations), and people who have
+ * messaged it (contacts' Slack user ids). Anything else needs an approved approval naming that target.
+ */
+async function slackTargetAllowed(
+  tx: DB,
+  i: { orgId: string; conn: typeof schema.channelConnections.$inferSelect; target: string; approvalId?: string; runId: string | null },
+): Promise<boolean> {
+  if (i.conn.config.defaultChannelId === i.target) return true;
+  const known = await tx.execute(sql`
+    select 1 from conversations
+    where org_id = ${i.orgId} and channel = 'slack'
+      and (external_thread_id = ${i.target} or external_thread_id like ${`${i.target}:%`})
+    union all
+    select 1 from contacts where org_id = ${i.orgId} and slack_user_id = ${i.target}
+    limit 1`);
+  if (known.rows.length) return true;
+  const approvalCond = i.approvalId ? sql`id = ${i.approvalId}` : i.runId ? sql`run_id = ${i.runId}` : null;
+  if (!approvalCond) return false;
+  const approved = await tx.execute(sql`
+    select 1 from approvals
+    where org_id = ${i.orgId} and status = 'approved' and ${approvalCond}
+      and (
+        (payload->'input'->>'channel' = 'slack' and payload->'input'->>'to' = ${i.target})
+        or (payload->>'kind' = 'reply' and payload->>'to' = ${i.target})
+      )
+    limit 1`);
+  return approved.rows.length > 0;
 }
 
 /**

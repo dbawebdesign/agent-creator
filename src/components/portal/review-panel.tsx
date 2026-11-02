@@ -3,12 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, Loader2, PenLine, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Loader2, PenLine, RotateCcw, Send, ThumbsUp, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { reviewDeliverableAction } from "@/app/p/[org]/actions";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
+import { holdWithUndo, UNDO_MS } from "./undo";
 
 export function ReviewPanel({
   slug,
@@ -20,6 +21,8 @@ export function ReviewPanel({
   feedback,
   canAct,
   next,
+  sendTo,
+  sentAt,
 }: {
   slug: string;
   deliverableId: string;
@@ -31,19 +34,39 @@ export function ReviewPanel({
   canAct: boolean;
   /** The next item waiting on you, offered once this one is decided. */
   next?: { href: string; title: string } | null;
+  /** Who the linked send goes to (e.g. an email address), and when it went, once approved. */
+  sendTo?: string | null;
+  sentAt?: string | null;
 }) {
   const [mode, setMode] = useState<"idle" | "changes">("idle");
   const [text, setText] = useState("");
   const [local, setLocal] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [which, setWhich] = useState<"approve" | "changes" | null>(null);
+  const [holding, setHolding] = useState<null | (() => void)>(null);
   const router = useRouter();
   const current = local ?? status;
 
   if (current === "approved") {
+    const sent = sendTo && (sendsOnApprove || sentAt);
     return (
-      <Done tone="good" icon={<Check className="size-4" aria-hidden />} next={local ? next : null}>
-        Approved{sendsOnApprove && local ? ` — ${agentName} is sending it now` : ""}.
+      <Done tone="good" icon={sent ? <Send className="size-4" aria-hidden /> : <Check className="size-4" aria-hidden />} next={local ? next : null}>
+        {sent ? (
+          local ? (
+            <span>
+              Approved. {agentName} is sending it to <span className="font-semibold">{sendTo}</span> now.
+            </span>
+          ) : (
+            <span>
+              Approved and sent to <span className="font-semibold">{sendTo}</span>
+              {sentAt ? <span className="font-normal"> · {sentAt}</span> : null}
+            </span>
+          )
+        ) : local ? (
+          `Thanks. ${agentName} will remember you liked this.`
+        ) : (
+          "Approved."
+        )}
       </Done>
     );
   }
@@ -73,11 +96,26 @@ export function ReviewPanel({
         return;
       }
       setLocal(action === "approve" ? "approved" : "changes_requested");
-      toast.success(action === "approve" ? (sendsOnApprove ? "Approved — sending now" : "Approved") : `Sent to ${agentName}`, {
-        description: action === "approve" ? `${agentName} will remember you liked this.` : `${agentName} will revise it and deliver a new version.`,
+      toast.success(action === "approve" ? (sendsOnApprove ? "Approved and sending" : "Approved") : `Sent to ${agentName}`, {
+        description: action === "approve" ? (sendsOnApprove && sendTo ? `On its way to ${sendTo}.` : `${agentName} will remember you liked this.`) : `${agentName} will revise it and deliver a new version.`,
       });
       router.refresh();
     });
+  };
+
+  // Approving a send lets something leave the building: hold it a few seconds behind Undo.
+  const approve = () => {
+    if (!sendsOnApprove) return run("approve");
+    const undo = holdWithUndo({
+      title: `Sending in ${UNDO_MS / 1000} seconds`,
+      description: sendTo ? `${agentName} will email ${sendTo}.` : `${agentName} will send it.`,
+      commit: () => {
+        setHolding(null);
+        run("approve");
+      },
+      onUndo: () => setHolding(null),
+    });
+    setHolding(() => undo);
   };
 
   return (
@@ -88,24 +126,39 @@ export function ReviewPanel({
         needsReview ? "sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] bg-raised shadow-lg md:bottom-6" : "bg-surface shadow-sm",
       )}
     >
-      {mode === "idle" ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="min-w-0 flex-1 pl-1 text-[13.5px] text-ink-2">
-            {needsReview ? (sendsOnApprove ? `${agentName} will send this once you approve.` : "Does this look right?") : "How did they do?"}
+      {holding ? (
+        <div className="flex flex-wrap items-center gap-3" role="status">
+          <p className="flex min-w-0 flex-1 items-center gap-2 pl-1 text-[13.5px] text-ink-2">
+            <Loader2 className="size-4 shrink-0 animate-spin text-ink-3" aria-hidden />
+            <span className="min-w-0">Sending{sendTo ? <> to <span className="font-medium text-ink">{sendTo}</span></> : null} in a few seconds…</span>
           </p>
+          <Button variant="secondary" size="lg" className="w-full sm:w-auto" onClick={() => holding()}>
+            <Undo2 aria-hidden /> Undo
+          </Button>
+        </div>
+      ) : mode === "idle" && !needsReview ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="min-w-0 flex-1 pl-1 text-[13.5px] text-ink-2">How did {agentName} do?</p>
           <div className="flex w-full gap-2 sm:w-auto">
-            <Button
-              variant="secondary"
-              size="lg"
-              className="flex-1 sm:flex-none"
-              onClick={() => {
-                setMode("changes");
-              }}
-              disabled={pending}
-            >
+            <Button variant="ghost" className="flex-1 sm:flex-none" onClick={() => setMode("changes")} disabled={pending}>
               <PenLine aria-hidden /> Request changes
             </Button>
-            <Button variant="accent" size="lg" className="flex-1 sm:flex-none" onClick={() => run("approve")} disabled={pending} aria-busy={pending}>
+            <Button variant="secondary" className="flex-1 sm:flex-none" onClick={() => run("approve")} disabled={pending} aria-busy={pending}>
+              {pending && which === "approve" ? <Loader2 className="animate-spin" /> : <ThumbsUp aria-hidden />}
+              Looks good
+            </Button>
+          </div>
+        </div>
+      ) : mode === "idle" ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="min-w-0 flex-1 pl-1 text-[13.5px] text-ink-2">
+            {sendsOnApprove ? (sendTo ? <>{agentName} will send this to <span className="font-medium text-ink">{sendTo}</span> once you approve.</> : `${agentName} will send this once you approve.`) : "Does this look right?"}
+          </p>
+          <div className="flex w-full gap-2 sm:w-auto">
+            <Button variant="secondary" size="lg" className="flex-1 sm:flex-none" onClick={() => setMode("changes")} disabled={pending}>
+              <PenLine aria-hidden /> Request changes
+            </Button>
+            <Button variant="accent" size="lg" className="flex-1 sm:flex-none" onClick={approve} disabled={pending} aria-busy={pending}>
               {pending && which === "approve" ? <Loader2 className="animate-spin" /> : <Check aria-hidden />}
               {sendsOnApprove ? "Approve & send" : "Approve"}
             </Button>

@@ -16,4 +16,5 @@ that judge the *running product* (screenshots, HTTP, tests), never builder summa
 |---|---|---|---|
 | 0 | 04:00 | Scaffold: schema (30 tables), auth/session, access/tenancy, queue, crypto, design tokens, UI primitives | — |
 | 1a | 04:30 | Channels & API slice done (65 tests). Security critic r1 on channels/API/auth. | NOT production bar: prompt injection via inbound email (H), ReDoS in email/html parsing (H), MCP batch rate-limit bypass, no inbound caps, Slack sends ungated, XFF trust, fetch deadline. Fixes dispatched to engine + channels builders; XFF fixed by lead. |
-| 1b | 04:50 | Engine slice done (39 tests, 126 total). Engine/Architect critic r1 launched. | pending |
+| 1b | 04:50 | Engine slice done (39 tests, 126 total). Engine/Architect critic r1. | Plumbing solid (queue, leases, DST, budget, SSRF OK). Gaps: offline Architect = keyword templates, fails on unseen calls (C); external mail injection/leak (C); approvals partly decorative; email-triggered workflows blind to email; offline output filler; crash duplicates side effects. Split fixes: engine builder (runtime) + new Architect builder. |
+| 1c | 04:58 | Channels security fixes done (75 tests): linear parsers, MCP batch limits, inbound caps + senderAuth, Slack target allowlist. Studio + Portal done. Design critics (studio, portal) + product critic launched. | pending |

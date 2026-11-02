@@ -53,19 +53,19 @@ export default async function AgentPage({ params }: { params: Promise<{ org: str
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {agent.email ? (
               <span className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface pr-1 pl-3 text-[13px] text-ink-2">
-                <Mail className="size-3.5 shrink-0 text-ink-4" aria-hidden />
+                <Mail className="size-3.5 shrink-0 text-ink-3" aria-hidden />
                 <span className="truncate">{agent.email}</span>
                 <CopyButton value={agent.email} label={`Copy ${agent.name}'s email`} toastLabel="Email address copied" className="size-6 rounded-full [&_svg]:size-3.5" />
               </span>
             ) : null}
             {agent.phone ? (
               <span className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface pr-1 pl-3 text-[13px] text-ink-2 tabular">
-                <Phone className="size-3.5 text-ink-4" aria-hidden />
+                <Phone className="size-3.5 text-ink-3" aria-hidden />
                 {agent.phone}
                 <CopyButton value={agent.phone} label={`Copy ${agent.name}'s number`} toastLabel="Number copied" className="size-6 rounded-full [&_svg]:size-3.5" />
               </span>
             ) : null}
-            <Link href={`/p/${slug}/connect`} className="inline-flex h-8 items-center rounded-full px-2 text-[13px] font-medium text-accent hover:bg-accent-soft">
+            <Link href={`/p/${slug}/connect`} className="inline-flex h-8 items-center rounded-full px-2 text-[13px] font-medium text-accent-text hover:bg-accent-soft">
               More ways to reach {agent.name}
             </Link>
           </div>
@@ -130,7 +130,7 @@ export default async function AgentPage({ params }: { params: Promise<{ org: str
                       {!w.enabled ? <Badge>Off</Badge> : null}
                     </div>
                     <p className="mt-0.5 text-[13px] text-ink-3">{capitalize(humanizeTrigger(w.trigger))}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-4">
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
                       {w.deliverTo.length ? (
                         <span className="inline-flex items-center gap-1.5" aria-label={`Delivered to ${w.deliverTo.map((c) => CHANNEL_LABEL[c]).join(", ")}`}>
                           {w.deliverTo.map((c) => (

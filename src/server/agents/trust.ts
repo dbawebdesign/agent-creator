@@ -32,6 +32,8 @@ export type RunTrust = {
   reason: string;
   /** Display label for the sender (email, phone, Slack user or user id). */
   sender: string | null;
+  /** The platform or channel vouched for who sent it (portal session, API key, senderAuth "pass"). */
+  authenticated: boolean;
   /** The person on the other side of the run's conversation (null for runs without one). */
   participant: Participant | null;
 };
@@ -133,7 +135,7 @@ export async function conversationParticipant(database: DB, orgId: string, conve
 /** Classify the run's triggering sender. Non-message runs (schedules, manual, setup) are trusted. */
 export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
   const participant = run.conversationId ? await conversationParticipant(database, run.orgId, run.conversationId) : null;
-  if (run.input?.kind !== "message") return { trusted: true, reason: "not message-triggered", sender: null, participant };
+  if (run.input?.kind !== "message") return { trusted: true, reason: "not message-triggered", sender: null, authenticated: true, participant };
 
   const messageId = typeof run.input.messageId === "string" ? run.input.messageId : null;
   const msg = messageId
@@ -145,7 +147,7 @@ export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
           .limit(1)
       )[0]
     : undefined;
-  if (!msg) return { trusted: false, reason: "triggering message not found", sender: null, participant };
+  if (!msg) return { trusted: false, reason: "triggering message not found", sender: null, authenticated: false, participant };
   const meta = (msg.meta ?? {}) as Record<string, unknown>;
   const conv = run.conversationId
     ? (await database.select().from(schema.conversations).where(and(eq(schema.conversations.id, run.conversationId), eq(schema.conversations.orgId, run.orgId))).limit(1))[0]
@@ -154,11 +156,11 @@ export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
 
   // Portal / API / MCP: the platform authenticated the caller.
   if (!EXTERNAL_CHANNELS.has(channel)) {
-    if (msg.author === "system") return { trusted: true, reason: "system", sender: "system", participant };
-    if (typeof meta.apiKeyId === "string") return { trusted: true, reason: "org API key", sender: `api key ${meta.apiKeyId}`, participant };
+    if (msg.author === "system") return { trusted: true, reason: "system", sender: "system", authenticated: true, participant };
+    if (typeof meta.apiKeyId === "string") return { trusted: true, reason: "org API key", sender: `api key ${meta.apiKeyId}`, authenticated: true, participant };
     const userId = typeof meta.userId === "string" ? meta.userId : (conv?.userId ?? null);
-    if (userId && (await isMemberOfOrgOrAncestor(database, run.orgId, userId))) return { trusted: true, reason: "org member", sender: userId, participant };
-    return { trusted: false, reason: "sender is not a member of this business", sender: userId, participant };
+    if (userId && (await isMemberOfOrgOrAncestor(database, run.orgId, userId))) return { trusted: true, reason: "org member", sender: userId, authenticated: true, participant };
+    return { trusted: false, reason: "sender is not a member of this business", sender: userId, authenticated: Boolean(userId), participant };
   }
 
   // Email / SMS / Slack: the channel must vouch for the sender, and the sender must be linked to a member.
@@ -169,8 +171,12 @@ export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
     ((meta.slack as { user?: unknown } | undefined)?.user as string | undefined) ||
     null;
   const auth = meta.senderAuthFailed === true ? "fail" : typeof meta.senderAuth === "string" ? meta.senderAuth : "none";
-  if (auth !== "pass") return { trusted: false, reason: auth === "fail" ? "sender authentication failed" : "sender not authenticated by the channel", sender, participant };
+  if (auth !== "pass") return { trusted: false, reason: auth === "fail" ? "sender authentication failed" : "sender not authenticated by the channel", sender, authenticated: false, participant };
+  // channels sets meta.senderUserId only when senderAuth is "pass" and the contact is linked to a platform user.
+  if (typeof meta.senderUserId === "string" && (await isMemberOfOrgOrAncestor(database, run.orgId, meta.senderUserId))) {
+    return { trusted: true, reason: "verified member", sender, authenticated: true, participant };
+  }
   const contactId = typeof meta.contactId === "string" ? meta.contactId : (conv?.contactId ?? null);
-  if (await contactIsMember(database, run.orgId, contactId)) return { trusted: true, reason: "verified member", sender, participant };
-  return { trusted: false, reason: "sender is not a member of this business", sender, participant };
+  if (await contactIsMember(database, run.orgId, contactId)) return { trusted: true, reason: "verified member", sender, authenticated: true, participant };
+  return { trusted: false, reason: "sender is not a member of this business", sender, authenticated: true, participant };
 }

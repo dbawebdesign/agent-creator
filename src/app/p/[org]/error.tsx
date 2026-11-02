@@ -15,7 +15,7 @@ export default function PortalError({ error, reset }: { error: Error & { digest?
       <Button variant="secondary" className="mt-6" onClick={reset}>
         <RotateCcw aria-hidden /> Try again
       </Button>
-      {error.digest ? <p className="mt-4 font-mono text-[11px] text-ink-4">Ref {error.digest}</p> : null}
+      {error.digest ? <p className="mt-4 font-mono text-[11px] text-ink-3">Ref {error.digest}</p> : null}
     </div>
   );
 }

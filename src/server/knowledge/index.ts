@@ -111,9 +111,11 @@ export type KnowledgeHit = { id: string; sourceId: string; title: string; conten
 
 export async function searchKnowledge(
   database: DB,
-  input: { orgId: string; agentId: string | null; query: string; limit?: number },
+  input: { orgId: string; agentId: string | null; query: string; limit?: number; excludeKinds?: string[] },
 ): Promise<KnowledgeHit[]> {
   const limit = Math.min(Math.max(input.limit ?? 5, 1), 20);
+  // e.g. ["transcript"] for unverified senders: the discovery call is internal and must never be quoted to them.
+  const kindFilter = input.excludeKinds?.length ? sql`and s.kind not in (${sql.join(input.excludeKinds.map((k) => sql`${k}`), sql`, `)})` : sql``;
   const q = orTsQuery(input.query);
   const agentScope = input.agentId
     ? sql`(c.agent_id = ${input.agentId} or c.agent_id is null)`
@@ -125,7 +127,7 @@ export async function searchKnowledge(
                  ts_rank_cd(c.tsv, to_tsquery('english', ${q}), 32) as score
           from knowledge_chunks c
           join knowledge_sources s on s.id = c.source_id and s.org_id = c.org_id
-          where c.org_id = ${input.orgId} and ${agentScope}
+          where c.org_id = ${input.orgId} and ${agentScope} ${kindFilter}
             and c.tsv @@ to_tsquery('english', ${q})
           order by score desc, c.seq asc
           limit ${limit * 2}`)
@@ -143,7 +145,7 @@ export async function searchKnowledge(
           select c.id, c.source_id as "sourceId", s.title, c.content, 1 - (c.embedding <=> ${literal}::vector) as score
           from knowledge_chunks c
           join knowledge_sources s on s.id = c.source_id and s.org_id = c.org_id
-          where c.org_id = ${input.orgId} and ${agentScope} and c.embedding is not null
+          where c.org_id = ${input.orgId} and ${agentScope} ${kindFilter} and c.embedding is not null
           order by c.embedding <=> ${literal}::vector
           limit ${limit * 2}`)
       ).rows as KnowledgeHit[];

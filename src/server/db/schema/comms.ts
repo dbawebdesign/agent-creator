@@ -104,6 +104,7 @@ export const messages = pgTable(
   (t) => [
     index("messages_conversation_created_idx").on(t.conversationId, t.createdAt),
     uniqueIndex("messages_external_uq").on(t.orgId, t.externalId),
+    index("messages_run_idx").on(t.runId),
   ],
 );
 

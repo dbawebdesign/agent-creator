@@ -57,7 +57,7 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
     <>
       {viewingAs ? (
         <div className="border-b border-line bg-surface-2 text-[12.5px] text-ink-3">
-          <div className="mx-auto flex h-8 max-w-[1120px] items-center justify-between gap-3 px-4 md:px-6">
+          <div className="mx-auto flex h-8 max-w-[1040px] items-center justify-between gap-3 px-4 md:px-6">
             <span className="truncate">
               Viewing {orgName}&rsquo;s portal as {viewingAs.name}
             </span>
@@ -71,11 +71,11 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
       ) : null}
 
       <header className="sticky top-0 z-30 border-b border-line bg-canvas/85 backdrop-blur-md supports-[backdrop-filter]:bg-canvas/70">
-        <div className="mx-auto flex h-14 max-w-[1120px] items-center gap-6 px-4 md:px-6">
+        <div className="mx-auto flex h-14 max-w-[1040px] items-center gap-6 px-4 md:px-6">
           <Link href={base} className="flex min-w-0 items-center gap-2.5 rounded-md" aria-label={`${brand.name} home`}>
             <BrandMark name={brand.name} logoUrl={brand.logoUrl} />
             <span className="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-ink">{brand.name}</span>
-            {isCustomer ? <span className="hidden truncate text-[13px] text-ink-4 sm:inline">for {orgName}</span> : null}
+            {isCustomer ? <span className="hidden truncate text-[13px] text-ink-3 sm:inline">for {orgName}</span> : null}
           </Link>
 
           <nav aria-label="Portal" className="hidden items-center gap-0.5 md:flex">
@@ -87,13 +87,13 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
                   href={it.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "relative inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[13.5px] transition-colors duration-150",
+                    "relative inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-[13.5px] transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
                     active ? "bg-surface-2 font-medium text-ink" : "text-ink-3 hover:bg-surface-2/60 hover:text-ink",
                   )}
                 >
                   {it.label}
                   {it.badge ? (
-                    <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-accent px-1 text-[11px] font-semibold text-accent-ink tabular">
+                    <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-ink px-1 text-[11px] font-semibold text-canvas tabular">
                       {it.badge}
                     </span>
                   ) : null}
@@ -138,7 +138,7 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
       <main id="main" className="pb-28 md:pb-16">
         {children}
         {!brand.whiteLabel ? (
-          <p className="mt-16 text-center text-[12px] text-ink-4">
+          <p className="mt-16 text-center text-[12px] text-ink-3">
             Powered by <span className="font-medium text-ink-3">Roster</span>
           </p>
         ) : null}
@@ -158,14 +158,14 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
                   href={it.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "relative flex h-16 flex-col items-center justify-center gap-1 rounded-lg text-[11px] font-medium transition-colors",
-                    active ? "text-ink" : "text-ink-4 hover:text-ink-2",
+                    "relative flex h-16 flex-col items-center justify-center gap-1 rounded-lg text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
+                    active ? "text-ink" : "text-ink-3 hover:text-ink-2",
                   )}
                 >
                   <span className="relative">
-                    <Icon className={cn("size-[21px]", active ? "text-accent" : "")} />
+                    <Icon className={cn("size-[21px]", active ? "text-accent-text" : "")} />
                     {it.badge ? (
-                      <span className="absolute -top-1 -right-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-ink tabular">
+                      <span className="absolute -top-1 -right-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-ink px-1 text-[10px] font-semibold text-canvas tabular">
                         {it.badge}
                       </span>
                     ) : null}

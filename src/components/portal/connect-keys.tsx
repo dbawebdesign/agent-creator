@@ -19,7 +19,24 @@ const TABS = [
   { id: "codex", label: "Codex" },
 ] as const;
 
-export function ConnectKeys({ slug, appUrl, keys, isAdmin, providerName }: { slug: string; appUrl: string; keys: Key[]; isAdmin: boolean; providerName: string }) {
+export function ConnectKeys({
+  slug,
+  appUrl,
+  keys,
+  isAdmin,
+  providerName,
+  agentName,
+  userFirstName,
+}: {
+  slug: string;
+  appUrl: string;
+  keys: Key[];
+  isAdmin: boolean;
+  providerName: string;
+  /** A real teammate's name for the example prompt; null when the team is empty. */
+  agentName: string | null;
+  userFirstName: string | null;
+}) {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("claudeCode");
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -71,14 +88,14 @@ export function ConnectKeys({ slug, appUrl, keys, isAdmin, providerName }: { slu
           ))}
         </div>
         <div className="relative mt-2 rounded-lg border border-line bg-surface-2/60">
-          <pre className="overflow-x-auto px-4 py-3.5 pr-12 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all text-ink-2">
+          <pre className="overflow-x-auto px-4 py-3.5 pr-12 font-mono text-[12px] leading-relaxed whitespace-pre text-ink-2">
             <code>{snippet}</code>
           </pre>
           <CopyButton value={snippet} label="Copy setup snippet" toastLabel="Copied" className="absolute top-2 right-2" />
         </div>
         <p className="mt-2 text-[12.5px] text-ink-3">
           {tab === "claudeCode"
-            ? "Paste into your terminal. Then just ask Claude: “Have Maya draft this week’s status email.”"
+            ? `Paste into your terminal. Then just ask Claude: “${agentName ? `Have ${agentName} draft` : "Have my team draft"} this week’s status update.”`
             : tab === "claudeDesktop"
               ? "Add to Claude Desktop → Settings → Developer → Edit config, then restart Claude."
               : "Add to your Codex config and set the key in your shell."}
@@ -106,7 +123,7 @@ export function ConnectKeys({ slug, appUrl, keys, isAdmin, providerName }: { slu
               <label htmlFor="key-name" className="sr-only">
                 Key name
               </label>
-              <Input id="key-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Name it, e.g. Dana’s Claude" maxLength={80} />
+              <Input id="key-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={userFirstName ? `Name it, e.g. ${userFirstName}’s Claude` : "Name it, e.g. My laptop"} maxLength={80} />
               <div className="flex gap-2">
                 <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
                   Cancel
@@ -141,10 +158,10 @@ function KeyRow({ k, slug }: { k: Key; slug: string }) {
   const router = useRouter();
   return (
     <li className="flex items-center gap-3 px-3.5 py-2.5">
-      <KeyRound className="size-4 shrink-0 text-ink-4" aria-hidden />
+      <KeyRound className="size-4 shrink-0 text-ink-3" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-medium text-ink">{k.name}</p>
-        <p className="truncate text-[12px] text-ink-4">
+        <p className="truncate text-[12px] text-ink-3">
           <span className="font-mono">{k.prefix}…</span> · {k.lastUsed ? `Last used ${k.lastUsed}` : "Never used"}
         </p>
       </div>

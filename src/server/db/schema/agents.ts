@@ -66,6 +66,15 @@ export type AgentConfig = {
    * reply. Default false. Replies on email/SMS still need approval while send_external_* is in requireApprovalFor.
    */
   autoReplyUnknownSenders?: boolean;
+  /**
+   * Outside senders whose replies go out without approval: exact addresses ("buyer@acme.com"), whole domains
+   * ("@acme.com") or E.164 numbers. They still get the restricted, untrusted tool set.
+   */
+  replyAllowlist?: string[];
+  /** Spend guard: at most this many inbound-message runs per hour (default 60); extra messages are stored, not run. */
+  inboundRunsPerHour?: number;
+  /** Spend guard: share of monthlyBudgetCents that inbound-message runs may use (default 0.5). */
+  inboundBudgetShare?: number;
 };
 
 export const blueprints = pgTable(
@@ -223,6 +232,7 @@ export const runs = pgTable(
   (t) => [
     index("runs_agent_created_idx").on(t.agentId, t.createdAt),
     index("runs_org_created_idx").on(t.orgId, t.createdAt),
+    index("runs_conversation_idx").on(t.conversationId),
   ],
 );
 
@@ -240,7 +250,11 @@ export const runSteps = pgTable(
     data: jsonb("data").$type<Record<string, unknown>>().notNull().default({}),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("run_steps_run_seq_uq").on(t.runId, t.seq)],
+  (t) => [
+    uniqueIndex("run_steps_run_seq_uq").on(t.runId, t.seq),
+    // One durable outcome per tool call: the runtime replays it on resume instead of repeating the side effect.
+    uniqueIndex("run_steps_tool_result_uq").on(t.runId, sql`(${t.data}->>'toolUseId')`).where(sql`${t.kind} = 'tool_result'`),
+  ],
 );
 
 export const deliverables = pgTable(
@@ -277,6 +291,7 @@ export const deliverables = pgTable(
   (t) => [
     index("deliverables_org_created_idx").on(t.orgId, t.createdAt),
     index("deliverables_agent_created_idx").on(t.agentId, t.createdAt),
+    index("deliverables_run_idx").on(t.runId),
   ],
 );
 
@@ -301,7 +316,11 @@ export const approvals = pgTable(
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [index("approvals_org_status_idx").on(t.orgId, t.status)],
+  (t) => [
+    index("approvals_org_status_idx").on(t.orgId, t.status),
+    // Expiry sweep (scheduler.expireApprovals) scans only pending rows by age.
+    index("approvals_pending_created_idx").on(t.createdAt).where(sql`${t.status} = 'pending'`),
+  ],
 );
 
 /** Short- and long-term memory. Facts and preferences the agent learned. */

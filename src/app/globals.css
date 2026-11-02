@@ -22,6 +22,7 @@
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
   --color-warn: var(--warn);
@@ -69,8 +70,10 @@
   --ink: #18181b;
   --ink-2: #3f3f46;
   --ink-3: #71717a;
-  --ink-4: #a1a1aa;
+  --ink-4: #8e8e96;
   --accent: #4f46e5;
+  /* Accent for text on canvas/surface; tenants with light brand colors override this darker. */
+  --accent-text: color-mix(in oklab, var(--accent) 82%, black);
   --accent-ink: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
   --good: #15803d;
@@ -93,8 +96,9 @@
     --ink: #f4f4f5;
     --ink-2: #d4d4d8;
     --ink-3: #a1a1aa;
-    --ink-4: #6b6b73;
+    --ink-4: #85858d;
     --accent: #818cf8;
+    --accent-text: color-mix(in oklab, var(--accent) 85%, white);
     --accent-ink: #0c0c0e;
     --good: #4ade80;
     --good-soft: rgb(74 222 128 / 0.1);
@@ -116,8 +120,9 @@
   --ink: #f4f4f5;
   --ink-2: #d4d4d8;
   --ink-3: #a1a1aa;
-  --ink-4: #6b6b73;
+  --ink-4: #85858d;
   --accent: #818cf8;
+  --accent-text: color-mix(in oklab, var(--accent) 85%, white);
   --accent-ink: #0c0c0e;
   --good: #4ade80;
   --good-soft: rgb(74 222 128 / 0.1);

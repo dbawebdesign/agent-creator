@@ -236,7 +236,7 @@ export function NewPlanDialog({ slug, trigger }: { slug: string; trigger?: React
           </Field>
           <Field label="Monthly price (USD)" htmlFor="p-price">
             <div className="relative">
-              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[13.5px] text-ink-4">$</span>
+              <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[13.5px] text-ink-3">$</span>
               <Input id="p-price" name="price" required inputMode="decimal" type="number" min={1} step="1" placeholder="750" className="pl-6 tabular" />
             </div>
           </Field>

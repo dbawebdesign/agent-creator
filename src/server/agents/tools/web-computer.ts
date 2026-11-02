@@ -46,6 +46,9 @@ export const computerClick = defineTool({
   name: "computer_click",
   description: "Click at screen coordinates on your cloud computer.",
   schema: z.object({ x: z.number().int().min(0).max(10_000), y: z.number().int().min(0).max(10_000), button: z.enum(["left", "right"]).optional(), double: z.boolean().optional() }),
+  // Clicking, typing and key presses change the client's systems (forms, records): gate as write_client_system.
+  approvalAction: () => "write_client_system",
+  describe: (i) => `Click at (${i.x}, ${i.y}) on the agent's computer (may change a client system)`,
   run: (i, ctx) => act(ctx, { type: "click", x: i.x, y: i.y, button: i.button, double: i.double }),
 });
 
@@ -53,6 +56,9 @@ export const computerType = defineTool({
   name: "computer_type",
   description: "Type text on your cloud computer.",
   schema: z.object({ text: z.string().min(1).max(5000) }),
+  // Clicking, typing and key presses change the client's systems (forms, records): gate as write_client_system.
+  approvalAction: () => "write_client_system",
+  describe: (i) => `Type on the agent's computer (may change a client system): “${truncate(i.text, 160)}”`,
   run: (i, ctx) => act(ctx, { type: "type", text: i.text }),
 });
 
@@ -60,6 +66,9 @@ export const computerKey = defineTool({
   name: "computer_key",
   description: "Press a key or key combination on your cloud computer (e.g. Enter, ctrl+c).",
   schema: z.object({ key: z.string().min(1).max(40) }),
+  // Clicking, typing and key presses change the client's systems (forms, records): gate as write_client_system.
+  approvalAction: () => "write_client_system",
+  describe: (i) => `Press ${i.key} on the agent's computer (may submit a form in a client system)`,
   run: (i, ctx) => act(ctx, { type: "key", key: i.key }),
 });
 

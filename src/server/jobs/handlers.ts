@@ -3,7 +3,7 @@
  * channel.deliver / inbound.process are owned by the channels slice.
  */
 import "server-only";
-import { executeRun, failRun } from "@/server/agents/runtime";
+import { executeRun, failRun, releaseDeliverable } from "@/server/agents/runtime";
 import { channelDeliver, inboundProcess } from "@/server/channels/jobs";
 import type { DB } from "@/server/db/client";
 import { db } from "@/server/db/client";
@@ -36,6 +36,7 @@ export const HANDLERS: Record<JobType, JobHandler> = {
     }
   },
   "agent.provision": async (payload, ctx) => provisionAgentComputer(payload, ctx.db),
+  "deliverable.release": async (payload, ctx) => releaseDeliverable(ctx.db, payload),
   "discovery.analyze": async (payload) => {
     await analyzeDiscovery(String(payload.discoveryId ?? ""));
   },

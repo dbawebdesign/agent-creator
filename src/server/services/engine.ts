@@ -12,13 +12,13 @@ import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { architect, finalizeSpec } from "@/server/agents/architect";
 import { executeRun } from "@/server/agents/runtime";
-import { agentSpec, type AgentSpec } from "@/server/agents/spec";
+import { agentSpec, DEFAULT_APPROVALS, normalizeApprovals, type AgentSpec } from "@/server/agents/spec";
 import { computerProvider } from "@/server/computer";
 import { db, schema, type DB } from "@/server/db/client";
 import type { AgentConfig, ChannelKind, WorkflowTrigger } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { enqueue } from "@/server/jobs/queue";
-import { isValidCron, nextLocalTime, nextRunForTrigger } from "@/server/jobs/scheduler";
+import { firstDeliverableSchedule, isValidCron, nextRunForTrigger } from "@/server/jobs/scheduler";
 import { indexText } from "@/server/knowledge";
 import { logger } from "@/server/lib/logger";
 import { costMicros, LlmError } from "@/server/llm";
@@ -214,11 +214,13 @@ export async function hireAgent(input: {
 
   const now = new Date();
   const computer = computerProvider();
+  const approvals = normalizeApprovals(spec.requireApprovalFor);
   const deliveryChannels = spec.channels.filter((c): c is ChannelKind => c === "portal" || c === "email" || c === "slack" || c === "sms");
   const config: AgentConfig = {
     modelTier: "smart",
     tools: spec.tools,
-    requireApprovalFor: spec.requireApprovalFor,
+    // Only actions the tools actually emit (plus the defaults) — anything else would never be enforced.
+    requireApprovalFor: approvals.actions,
     defaultDelivery: deliveryChannels.length ? deliveryChannels : ["portal"],
     voice: spec.voice,
     monthlyBudgetCents: i.monthlyBudgetCents ?? DEFAULT_MONTHLY_BUDGET_CENTS,
@@ -290,7 +292,8 @@ export async function hireAgent(input: {
           { orgId: org.id, agentId, kind: "portal", externalId: `portal:${agentId}`, status: "connected", config: {} },
           { orgId: org.id, agentId, kind: "email", externalId: address, status: "connected", config: { address } },
         ]);
-        // The overnight wow: first deliverable lands at the next 6:00 AM in the client's timezone.
+        // The overnight wow: worked on from ~1:00 AM, handed over at 6:00 AM in the client's timezone.
+        const first = firstDeliverableSchedule(org.timezone, now);
         await tx.insert(schema.runs).values({
           id: firstRunId,
           orgId: org.id,
@@ -305,9 +308,10 @@ export async function hireAgent(input: {
             outputKind: "document",
             deliverTo: deliveryChannels.filter((c) => c !== "sms"),
             hoursSaved: Math.max(1, Math.round((spec.weeklyHoursSaved / 5) * 10) / 10),
+            ...(first.releaseAt ? { releaseAt: first.releaseAt.toISOString() } : {}),
           },
         });
-        await enqueue(tx, "agent.run", { orgId: org.id, runId: firstRunId }, { orgId: org.id, runAt: nextLocalTime(org.timezone, 6, 0, now), idempotencyKey: `run:${firstRunId}` });
+        await enqueue(tx, "agent.run", { orgId: org.id, runId: firstRunId }, { orgId: org.id, runAt: first.runAt, idempotencyKey: `run:${firstRunId}` });
         if (computer.configured) await enqueue(tx, "agent.provision", { orgId: org.id, agentId }, { orgId: org.id, idempotencyKey: `provision:${agentId}` });
         await tx.update(schema.agents).set({ status: "active", activatedAt: new Date() }).where(and(eq(schema.agents.id, agentId), eq(schema.agents.orgId, org.id)));
       });
@@ -327,7 +331,7 @@ export async function hireAgent(input: {
       await enqueue(database, "knowledge.index", { orgId: org.id, sourceId, text: discovery.transcript }, { orgId: org.id, idempotencyKey: `kindex:${sourceId}` });
     }
   }
-  await audit({ orgId: org.id, ...actorAudit(i.actor), action: "agent.hired", targetType: "agent", targetId: agentId, metadata: { name: spec.name, discoveryId: i.discoveryId ?? null, handle } });
+  await audit({ orgId: org.id, ...actorAudit(i.actor), action: "agent.hired", targetType: "agent", targetId: agentId, metadata: { name: spec.name, discoveryId: i.discoveryId ?? null, handle, ...(approvals.unenforceable.length ? { unenforceableApprovals: approvals.unenforceable } : {}) } });
   return { agentId };
 }
 
@@ -472,6 +476,45 @@ export async function startConversationRun(input: { orgId: string; agentId: stri
   // Durable dedupe: a webhook redelivered after the first reply run finished must not trigger a second reply.
   const already = await findPrior();
   if (already) return { runId: already.id };
+  // One run per inbound message: when an event workflow handles this channel's messages, it replaces the generic
+  // reply run (the channels slice's own triggerEvent call afterwards is deduped by message id).
+  const priorEvent = await findEventRun(database, i.orgId, agent.id, msg.id);
+  if (priorEvent) return { runId: priorEvent };
+  const conv = (
+    await database
+      .select({ channel: schema.conversations.channel })
+      .from(schema.conversations)
+      .where(and(eq(schema.conversations.id, i.conversationId), eq(schema.conversations.orgId, i.orgId)))
+      .limit(1)
+  )[0];
+  // Spend guard: cap inbound-message runs per agent per hour. Over the cap the message stays stored for the team and a
+  // canceled run records why (no model call, no cost).
+  const cap = Math.max(1, agent.config.inboundRunsPerHour ?? 60);
+  const recent = await database.execute(sql`
+    select count(*)::int as n from runs where org_id = ${i.orgId} and agent_id = ${agent.id} and created_at > now() - interval '1 hour'
+      and (trigger = 'message' or (trigger = 'event' and input->'eventPayload' ? 'messageId'))`);
+  if (Number((recent.rows[0] as { n: number } | undefined)?.n ?? 0) >= cap) {
+    const runId = randomUUID();
+    await database.insert(schema.runs).values({
+      id: runId,
+      orgId: i.orgId,
+      agentId: agent.id,
+      conversationId: i.conversationId,
+      trigger: "message",
+      status: "canceled",
+      input: { kind: "message", messageId: msg.id, text: msg.body },
+      error: `Inbound limit reached (${cap} messages/hour); the message is stored but was not answered automatically`,
+      finishedAt: new Date(),
+    });
+    logger.warn({ agentId: agent.id, cap }, "inbound run cap reached");
+    return { runId };
+  }
+  const event = conv ? EVENT_FOR_CHANNEL[conv.channel] : undefined;
+  if (event && agent.status === "active" && (await hasEventWorkflow(database, i.orgId, agent.id, event))) {
+    const { runIds } = await triggerEvent({ orgId: i.orgId, agentId: agent.id, event, payload: { conversationId: i.conversationId, messageId: msg.id }, dedupeKey: msg.id });
+    const handled = runIds[0] ?? (await findEventRun(database, i.orgId, agent.id, msg.id));
+    if (handled) return { runId: handled };
+  }
   const runId = randomUUID();
   const existing = await database.transaction(async (tx) => {
     await tx.insert(schema.runs).values({
@@ -496,6 +539,37 @@ export async function startConversationRun(input: { orgId: string; agentId: stri
   return { runId: existing ?? runId };
 }
 class DuplicateRun extends Error {}
+
+const EVENT_FOR_CHANNEL: Record<string, "email.received" | "sms.received" | "slack.message" | undefined> = {
+  email: "email.received",
+  sms: "sms.received",
+  slack: "slack.message",
+};
+
+async function hasEventWorkflow(database: DB, orgId: string, agentId: string, event: string): Promise<boolean> {
+  const r = await database
+    .select({ id: schema.workflows.id })
+    .from(schema.workflows)
+    .where(
+      and(
+        eq(schema.workflows.orgId, orgId),
+        eq(schema.workflows.agentId, agentId),
+        eq(schema.workflows.enabled, true),
+        sql`${schema.workflows.trigger}->>'type' = 'event' and ${schema.workflows.trigger}->>'event' = ${event}`,
+      ),
+    )
+    .limit(1);
+  return r.length > 0;
+}
+
+async function findEventRun(database: DB, orgId: string, agentId: string, messageId: string): Promise<string | null> {
+  const r = await database
+    .select({ id: schema.runs.id })
+    .from(schema.runs)
+    .where(and(eq(schema.runs.orgId, orgId), eq(schema.runs.agentId, agentId), eq(schema.runs.trigger, "event"), sql`${schema.runs.input}->'eventPayload'->>'messageId' = ${messageId}`))
+    .limit(1);
+  return r[0]?.id ?? null;
+}
 
 /** For the channels slice/webhooks: fire event-triggered workflows (e.g. "email.received"). Returns run ids. */
 export async function triggerEvent(input: {
@@ -522,6 +596,17 @@ export async function triggerEvent(input: {
     .select()
     .from(schema.workflows)
     .where(and(eq(schema.workflows.orgId, i.orgId), eq(schema.workflows.agentId, agent.id), eq(schema.workflows.enabled, true), sql`${schema.workflows.trigger}->>'type' = 'event' and ${schema.workflows.trigger}->>'event' = ${i.event}`));
+  // An inbound-message event threads the run into that conversation (validated against the org).
+  const convId = typeof i.payload?.conversationId === "string" && /^[0-9a-f-]{36}$/i.test(i.payload.conversationId) ? i.payload.conversationId : null;
+  const conversationId = convId
+    ? ((
+        await database
+          .select({ id: schema.conversations.id })
+          .from(schema.conversations)
+          .where(and(eq(schema.conversations.id, convId), eq(schema.conversations.orgId, i.orgId), eq(schema.conversations.agentId, agent.id)))
+          .limit(1)
+      )[0]?.id ?? null)
+    : null;
   const runIds: string[] = [];
   for (const wf of wfs) {
     if (i.dedupeKey) {
@@ -542,6 +627,7 @@ export async function triggerEvent(input: {
         orgId: i.orgId,
         agentId: agent.id,
         workflowId: wf.id,
+        conversationId,
         trigger: "event",
         status: "queued",
         input: { kind: "workflow", event: i.event, eventPayload: i.payload ?? {}, ...(i.dedupeKey ? { dedupeKey: i.dedupeKey } : {}) },
@@ -723,7 +809,7 @@ async function specFromAgent(database: DB, orgId: string, agentId: string): Prom
       seedMemories: [],
       channels: agent.config.defaultDelivery?.length ? agent.config.defaultDelivery : ["portal", "email"],
       tools: agent.config.tools ?? [],
-      requireApprovalFor: agent.config.requireApprovalFor ?? ["send_external_email"],
+      requireApprovalFor: agent.config.requireApprovalFor ?? [...DEFAULT_APPROVALS],
       firstDeliverable: {
         title: truncate(String(setup?.title ?? `Welcome brief from ${agent.name}`), 120),
         description: truncate(String(setup?.description ?? `A first overnight deliverable from ${agent.name}.`), 600),

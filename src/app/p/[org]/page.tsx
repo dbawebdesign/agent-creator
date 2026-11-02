@@ -52,7 +52,7 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
     : null;
 
   return (
-    <div className="mx-auto w-full max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
+    <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="animate-rise">
         <div className="flex items-center gap-2.5">
           {t.agents.length ? (
@@ -118,7 +118,7 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
         ))
       ) : !needs.length ? (
         <div className="mt-10 rounded-xl border border-dashed border-line-strong px-6 py-12 text-center">
-          <span className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-accent-soft text-accent">
+          <span className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-accent-soft text-accent-text">
             <CalendarClock className="size-5" aria-hidden />
           </span>
           <p className="text-[14.5px] font-medium text-ink">
@@ -129,7 +129,7 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
               ? `${t.nextRun.agentName} is scheduled to start on “${t.nextRun.name}”. You’ll find the finished work right here.`
               : "Finished reports, documents and drafts from your team land here — no need to ask."}
           </p>
-          <Link href={`/p/${slug}/team`} className="mt-5 inline-block text-[13px] font-medium text-accent hover:underline">
+          <Link href={`/p/${slug}/team`} className="mt-5 inline-block text-[13px] font-medium text-accent-text hover:underline">
             Meet your team
           </Link>
         </div>

@@ -9,6 +9,7 @@ import { AskComposer } from "@/components/portal/composer";
 import { ChannelIcon, KindIcon, kindLabel } from "@/components/portal/icons";
 import { CHANNEL_LABEL, clockTime, hoursPhrase, longDate } from "@/components/portal/lib";
 import { ReviewPanel } from "@/components/portal/review-panel";
+import { whenLabel } from "@/components/portal/deliverable-card";
 import { db, schema } from "@/server/db/client";
 import { logger } from "@/server/lib/logger";
 import { getDeliverable, getPortal, nextToReview } from "@/server/queries/portal";
@@ -48,27 +49,27 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
     d.status === "approved"
       ? { tone: "good" as const, label: "Approved" }
       : d.status === "changes_requested"
-        ? { tone: "warn" as const, label: "Changes requested" }
+        ? { tone: "neutral" as const, label: "Changes requested" }
         : d.needsReview
-          ? { tone: "accent" as const, label: "Needs your OK" }
+          ? { tone: "warn" as const, label: "Needs your OK" }
           : null;
 
   const meta = (
     <dl className="grid grid-cols-2 gap-x-6 gap-y-5 text-[13px] md:grid-cols-1">
       {d.workflowName ? (
         <div>
-          <dt className="text-ink-4">Part of</dt>
+          <dt className="text-ink-3">Part of</dt>
           <dd className="mt-1 text-ink-2">{d.workflowName}</dd>
         </div>
       ) : null}
       <div>
-        <dt className="text-ink-4">Type</dt>
+        <dt className="text-ink-3">Type</dt>
         <dd className="mt-1 inline-flex items-center gap-1.5 text-ink-2">
           <KindIcon kind={d.kind} className="text-ink-3" /> {kindLabel(d.kind)}
         </dd>
       </div>
       <div>
-        <dt className="text-ink-4">Delivered via</dt>
+        <dt className="text-ink-3">Delivered via</dt>
         <dd className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-ink-2">
           {via.map((v) => (
             <span key={v} className="inline-flex items-center gap-1.5">
@@ -79,12 +80,12 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
       </div>
       {d.hoursSaved > 0 ? (
         <div>
-          <dt className="text-ink-4">Time saved</dt>
+          <dt className="text-ink-3">Time saved</dt>
           <dd className="mt-1 text-ink-2">{hoursPhrase(d.hoursSaved).replace(/^~/, "About ")}</dd>
         </div>
       ) : null}
       <div>
-        <dt className="text-ink-4">Delivered</dt>
+        <dt className="text-ink-3">Delivered</dt>
         <dd className="mt-1 text-ink-2 tabular">
           {longDate(tz, d.createdAt)}, {clockTime(d.createdAt, tz)}
         </dd>
@@ -104,16 +105,16 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
       <div className="mt-4 grid gap-10 md:grid-cols-[minmax(0,1fr)_220px] md:gap-12">
         <article className="min-w-0 animate-rise">
           <header>
-            <div className="flex items-center gap-2.5 text-[13px] text-ink-3">
+            <div className="flex min-w-0 items-center gap-2.5 text-[13px] text-ink-3">
               <AgentOrb seed={d.agent.seed} size={28} />
-              <span>
+              <span className="min-w-0 truncate">
                 <Link href={`/p/${slug}/team/${d.agent.id}`} className="font-medium text-ink-2 hover:text-ink">
                   {d.agent.name}
                 </Link>
-                <span className="text-ink-4"> · {d.agent.role}</span>
+                <span> · {d.agent.role}</span>
               </span>
             </div>
-            <h1 className="mt-4 text-[26px] leading-[1.2] font-semibold tracking-[-0.025em] text-ink text-balance md:text-[30px]">{d.title}</h1>
+            <h1 className="mt-4 text-[22px] leading-[1.25] font-semibold tracking-[-0.02em] text-ink text-balance md:text-[30px] md:leading-[1.2]">{d.title}</h1>
             {status ? (
               <div className="mt-3">
                 <Badge tone={status.tone} dot>
@@ -124,7 +125,9 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
           </header>
 
           <div className="mt-6 rounded-2xl border border-line bg-surface px-5 py-6 shadow-sm md:px-10 md:py-9">
-            <Markdown className="portal-reading">{d.body}</Markdown>
+            <Markdown className="portal-reading" title={d.title}>
+              {d.body}
+            </Markdown>
           </div>
 
           <ReviewPanel
@@ -137,6 +140,8 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
             feedback={d.feedback}
             canAct={p.canAct}
             next={next ? { href: `/p/${slug}/d/${next.id}`, title: next.title } : null}
+            sendTo={d.sendTo}
+            sentAt={d.sentAt ? whenLabel(d.sentAt, p.org.timezone) : null}
           />
 
           <div className="mt-8 md:hidden">{meta}</div>

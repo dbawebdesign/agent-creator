@@ -53,7 +53,7 @@ export default async function ConnectPage({ params }: { params: Promise<{ org: s
   const first = c.agents[0]?.name ?? "your team";
 
   return (
-    <div className="mx-auto w-full max-w-[760px] px-4 pt-8 md:px-6 md:pt-14">
+    <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="mb-8 animate-rise">
         <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">Reach your team wherever you work</h1>
         <p className="mt-1.5 max-w-[60ch] text-[15px] text-ink-3 text-pretty">
@@ -137,7 +137,15 @@ export default async function ConnectPage({ params }: { params: Promise<{ org: s
           title="Use from Claude or Codex"
           body="Give your AI assistant a direct line to your team. Ask Claude to check on work, hand off a task, or pull the latest delivery."
         >
-          <ConnectKeys slug={slug} appUrl={c.appUrl} keys={keys} isAdmin={p.isAdmin} providerName={provider} />
+          <ConnectKeys
+            slug={slug}
+            appUrl={c.appUrl}
+            keys={keys}
+            isAdmin={p.isAdmin}
+            providerName={provider}
+            agentName={c.agents[0]?.name ?? null}
+            userFirstName={p.user.name ? p.user.firstName : null}
+          />
         </Section>
       </div>
     </div>

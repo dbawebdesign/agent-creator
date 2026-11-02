@@ -32,7 +32,7 @@ export default async function RequestPage({ params }: { params: Promise<{ org: s
           : "This conversation came in through your connected tools.";
 
   return (
-    <div className="mx-auto w-full max-w-[760px] px-4 pt-5 md:px-6 md:pt-8">
+    <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-5 md:px-6 md:pt-8">
       <Link
         href={`/p/${slug}/requests`}
         className="-ml-2 inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
@@ -44,15 +44,15 @@ export default async function RequestPage({ params }: { params: Promise<{ org: s
           {r.subject || `Conversation with ${r.agent.name}`}
         </h1>
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[13px] text-ink-3">
-          <ChannelIcon channel={r.channel} className="text-ink-4" />
+          <ChannelIcon channel={r.channel} className="text-ink-3" />
           {channel}
-          <span aria-hidden className="text-ink-4">·</span>
+          <span aria-hidden className="text-ink-3">·</span>
           <Link href={`/p/${slug}/team/${r.agent.id}`} className="text-ink-2 hover:text-ink">
             {r.agent.name}
           </Link>
           {r.who ? (
             <>
-              <span aria-hidden className="text-ink-4">·</span> {r.who}
+              <span aria-hidden className="text-ink-3">·</span> {r.who}
             </>
           ) : null}
         </p>

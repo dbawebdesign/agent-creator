@@ -174,6 +174,8 @@ export type OutboundEmail = {
   references?: string[];
   /** Provider idempotency key so a retried job never sends twice. */
   idempotencyKey: string;
+  /** RFC 3834 marker: "auto-replied" for replies, "auto-generated" for proactive mail. Default auto-generated. */
+  autoSubmitted?: "auto-replied" | "auto-generated";
 };
 
 export type SendResult = { providerId: string | null; simulated: boolean };
@@ -191,7 +193,13 @@ export class ProviderError extends Error {
 export async function sendEmail(msg: OutboundEmail): Promise<SendResult> {
   const to = msg.to.filter(isEmailAddress);
   if (!to.length) throw new ProviderError("no valid recipients", false);
-  const headers: Record<string, string> = { "Message-ID": msg.messageId };
+  const headers: Record<string, string> = {
+    "Message-ID": msg.messageId,
+    // Agent mail is machine-written: tell autoresponders (vacation replies, Exchange OOF, ticket systems) not
+    // to answer it, which prevents agent ↔ autoresponder loops.
+    "Auto-Submitted": msg.autoSubmitted ?? "auto-generated",
+    "X-Auto-Response-Suppress": "All",
+  };
   if (msg.inReplyTo && MSGID_RE.test(msg.inReplyTo)) headers["In-Reply-To"] = msg.inReplyTo;
   const refs = (msg.references ?? []).filter((r) => MSGID_RE.test(r)).slice(-20);
   if (refs.length) headers.References = refs.join(" ");

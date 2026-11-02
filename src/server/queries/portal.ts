@@ -258,15 +258,20 @@ export async function getDeliverable(orgId: string, id: string) {
   const row = rows[0];
   if (!row) return null;
   const { d } = row;
-  const pending = d.runId
+  // The send/act approval riding along with this delivery, if any: pending means approving sends it.
+  const [link] = d.runId
     ? await db()
-        .select({ id: schema.approvals.id })
+        .select({ status: schema.approvals.status, payload: schema.approvals.payload, decidedAt: schema.approvals.decidedAt })
         .from(schema.approvals)
-        .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.runId, d.runId), eq(schema.approvals.status, "pending")))
+        .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.runId, d.runId)))
+        .orderBy(desc(schema.approvals.createdAt))
         .limit(1)
     : [];
+  const to = link && typeof link.payload?.to === "string" ? (link.payload.to as string).slice(0, 200) : null;
   return {
-    sendsOnApprove: pending.length > 0,
+    sendsOnApprove: link?.status === "pending",
+    sendTo: link && (link.status === "pending" || link.status === "approved") ? to : null,
+    sentAt: link?.status === "approved" ? link.decidedAt : null,
     id: d.id,
     title: d.title,
     kind: d.kind,

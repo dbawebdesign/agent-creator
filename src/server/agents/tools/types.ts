@@ -18,6 +18,8 @@ export type ToolContext = {
   toolUseId: string;
   /** Who triggered the run and who is on the other side of its conversation (see agents/trust.ts). */
   trust: RunTrust;
+  /** Set when this call runs because a human approved it (channels require it for sends outside the conversation). */
+  approvalId?: string;
   /** Mutable per-run state shared across tool calls. */
   state: { deliverableIds: string[]; followups: number; messagesSent: number };
 };
@@ -45,11 +47,13 @@ export type ToolDef<S extends z.ZodType = z.ZodType> = {
 /**
  * Is this action gated for the agent? An action is gated when it is listed in requireApprovalFor. On top of that,
  * "send_external_email" (on by default) is the umbrella switch for every send that leaves the run's conversation,
- * so send_external_sms / send_external_slack are gated by it too.
+ * so send_external_sms / send_external_slack are gated by it too; write_client_system also gates computer_bash.
  */
 export function requiresApproval(action: string, requireApprovalFor: ReadonlySet<string>): boolean {
   if (requireApprovalFor.has(action)) return true;
-  return action.startsWith("send_external_") && requireApprovalFor.has("send_external_email");
+  if (action.startsWith("send_external_") && requireApprovalFor.has("send_external_email")) return true;
+  // Shell commands can change client systems too.
+  return action === "computer_bash" && requireApprovalFor.has("write_client_system");
 }
 
 export function defineTool<S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> {

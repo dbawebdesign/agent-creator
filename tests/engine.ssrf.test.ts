@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { isPublicIp, validateUrl, type LookupFn } from "@/server/security/ssrf";
+import https from "node:https";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { htmlToText, isPublicIp, safeFetch, validateUrl, type LookupFn } from "@/server/security/ssrf";
 
 const dns = (map: Record<string, string[]>): LookupFn => async (host) => {
   const addrs = map[host];
@@ -49,5 +52,72 @@ describe("SSRF guard", () => {
     const target = await validateUrl("https://catalog.example.com/products?page=2", dns({ "catalog.example.com": ["93.184.215.14"] }));
     expect(target.address).toBe("93.184.215.14");
     expect(target.url.pathname).toBe("/products");
+  });
+});
+
+describe("htmlToText", () => {
+  it("extracts readable text", () => {
+    const html = "<html><head><style>p{color:red}</style></head><body><p>Hi &amp; welcome</p><script>alert(1)</script><!-- note --><div>Tumblers<br>$4.10 each</div></body></html>";
+    expect(htmlToText(html)).toBe("Hi & welcome\n\nTumblers\n$4.10 each");
+  });
+
+  it("runs in linear time on hostile input (was 52 s on 200k '<')", () => {
+    for (const evil of ["<".repeat(200_000), "<script".repeat(40_000), "<script>".repeat(40_000), "<!--".repeat(50_000), "<a ".repeat(100_000), "<p>".repeat(100_000), "\n \n".repeat(100_000)]) {
+      const t = performance.now();
+      htmlToText(evil);
+      expect(performance.now() - t).toBeLessThan(500);
+    }
+  });
+});
+
+describe("safeFetch limits", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const publicDns = dns({ "slow.example.com": ["93.184.215.14"] });
+
+  it("applies the overall deadline to DNS resolution", async () => {
+    const hang: LookupFn = () => new Promise(() => undefined);
+    const t = Date.now();
+    await expect(safeFetch("https://slow.example.com/", { lookup: hang, timeoutMs: 300 })).rejects.toThrow(/timed out/);
+    expect(Date.now() - t).toBeLessThan(2_000);
+  });
+
+  /** Fake https.request whose response drips one byte every 50 ms forever (socket never idles). */
+  function slowDrip(chunk = "x") {
+    return vi.spyOn(https, "request").mockImplementation(((_opts: unknown, cb: (res: unknown) => void) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: (e?: Error) => void };
+      const res = Object.assign(new PassThrough(), { statusCode: 200, headers: { "content-type": "text/plain" } });
+      let timer: NodeJS.Timeout | undefined;
+      req.end = () => {
+        cb(res);
+        timer = setInterval(() => res.write(chunk), 50);
+      };
+      req.destroy = (e?: Error) => {
+        clearInterval(timer);
+        res.destroy();
+        if (e) req.emit("error", e);
+      };
+      return req;
+    }) as unknown as typeof https.request);
+  }
+
+  it("aborts a slow-drip body at the overall deadline", async () => {
+    slowDrip();
+    const t = Date.now();
+    await expect(safeFetch("https://slow.example.com/", { lookup: publicDns, timeoutMs: 400 })).rejects.toThrow(/timed out/);
+    expect(Date.now() - t).toBeLessThan(2_000);
+  });
+
+  it("honours a caller abort signal", async () => {
+    slowDrip();
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    await expect(safeFetch("https://slow.example.com/", { lookup: publicDns, timeoutMs: 10_000, signal: ac.signal })).rejects.toThrow(/timed out/);
+  });
+
+  it("caps the body at maxBytes", async () => {
+    slowDrip("y".repeat(400));
+    const res = await safeFetch("https://slow.example.com/", { lookup: publicDns, timeoutMs: 5_000, maxBytes: 1_000 });
+    expect(res.truncated).toBe(true);
+    expect(res.body.length).toBe(1_000);
   });
 });

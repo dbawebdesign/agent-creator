@@ -69,7 +69,13 @@ export const anthropicProvider: LlmProvider = {
     const params: Anthropic.Beta.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: req.maxTokens,
-      system: req.system,
+      // Prompt caching: an explicit breakpoint after the stable prefix (tools + stable system prompt), plus top-level
+      // automatic caching so each loop turn re-reads the growing conversation instead of re-billing it.
+      system: [
+        { type: "text", text: req.system, cache_control: { type: "ephemeral" } },
+        ...(req.systemVolatile ? [{ type: "text" as const, text: req.systemVolatile }] : []),
+      ],
+      cache_control: { type: "ephemeral" },
       messages: req.messages,
       thinking: { type: "adaptive" },
       output_config: { effort: req.tier === "smart" ? "high" : "low" },

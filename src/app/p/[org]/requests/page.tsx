@@ -27,7 +27,7 @@ export default async function RequestsPage({ params }: { params: Promise<{ org: 
   const tz = p.org.timezone;
 
   return (
-    <div className="mx-auto w-full max-w-[760px] px-4 pt-8 md:px-6 md:pt-14">
+    <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="mb-6 animate-rise">
         <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">Requests</h1>
         <p className="mt-1.5 text-[15px] text-ink-3 text-pretty">Everything you and your customers have asked your team — by email, text, Slack or right here.</p>
@@ -49,14 +49,14 @@ export default async function RequestsPage({ params }: { params: Promise<{ org: 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2">
                       <p className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{r.subject || preview.slice(0, 80) || "Conversation"}</p>
-                      <time dateTime={r.lastMessageAt.toISOString()} className="shrink-0 text-[12px] text-ink-4 tabular">
+                      <time dateTime={r.lastMessageAt.toISOString()} className="shrink-0 text-[12px] text-ink-3 tabular">
                         {whenLabel(r.lastMessageAt, tz)}
                       </time>
                     </div>
                     <p className="mt-0.5 line-clamp-1 text-[13px] text-ink-3">
                       <span className="text-ink-2">{fromAgent ? r.agent.name : (r.who ?? "You")}:</span> {preview}
                     </p>
-                    <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-ink-4">
+                    <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-ink-3">
                       <ChannelIcon channel={r.channel} />
                       {CHANNEL_LABEL[r.channel] ?? r.channel}
                       <span aria-hidden>·</span>

@@ -26,14 +26,14 @@ export function DeliverableCardView({ d, slug, tz, compact, hideAgent }: { d: Ca
           <>
             <AgentOrb seed={d.agent.seed} size={20} />
             <span className="font-medium text-ink-2">{d.agent.name}</span>
-            <span aria-hidden className="text-ink-4">·</span>
+            <span aria-hidden className="text-ink-3">·</span>
           </>
         )}
         <time dateTime={d.createdAt.toISOString()} className="tabular">
           {whenLabel(d.createdAt, tz)}
         </time>
         {unseen ? (
-          <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-medium text-accent">
+          <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-medium text-ink-2">
             <span className="size-1.5 rounded-full bg-accent" aria-hidden />
             New
           </span>
@@ -49,7 +49,7 @@ export function DeliverableCardView({ d, slug, tz, compact, hideAgent }: { d: Ca
         <DeliveredVia via={d.deliveredVia} />
         {d.status === "approved" ? <span className="text-good">Approved</span> : null}
         {d.status === "changes_requested" ? <span className="text-warn">Changes requested</span> : null}
-        {d.hoursSaved > 0 ? <span className="ml-auto tabular">Saved {shortHours(d.hoursSaved)}</span> : null}
+        {d.hoursSaved > 0 ? <span className="ml-auto tabular">~{shortHours(d.hoursSaved)} saved</span> : null}
       </div>
     </Link>
   );

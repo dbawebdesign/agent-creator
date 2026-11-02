@@ -84,6 +84,8 @@ describe("email via Resend", () => {
     expect(body.headers["In-Reply-To"]).toBe("<in-1@mail.brandlord.co>");
     expect(body.headers.References).toBe("<in-1@mail.brandlord.co>");
     expect(body.headers["Message-ID"]).toMatch(/@agents\.roster\.test>$/);
+    expect(body.headers["Auto-Submitted"]).toBe("auto-replied");
+    expect(body.headers["X-Auto-Response-Suppress"]).toBe("All");
     expect(body.html).toContain("<strong");
     expect(body.text).toContain("Quote:");
 
@@ -169,5 +171,48 @@ describe("slack", () => {
     expect(body.thread_ts).toBeUndefined();
     const [conv] = await db().select().from(schema.conversations).where(eq(schema.conversations.orgId, org.id));
     expect(conv!.externalThreadId).toBe("DDANA");
+  });
+
+  it("only posts to Slack targets on the allowlist unless an approval names the target", async () => {
+    const org = await makeOrg();
+    const agent = await makeAgent(org.id);
+    const [secret] = await db().insert(schema.secrets).values({ orgId: org.id, name: `slack:bot:T${rid(3)}`, ciphertext: encrypt("xoxb-test-token") }).returning();
+    await db().insert(schema.channelConnections).values({ orgId: org.id, kind: "slack", externalId: `T${rid(4).toUpperCase()}`, status: "connected", secretId: secret!.id, config: { defaultChannelId: "CDEFAULT" } });
+    const [run] = await db().insert(schema.runs).values({ orgId: org.id, agentId: agent.id, trigger: "message" }).returning();
+    // A new outbound conversation as the engine's send_message tool creates it (no thread key).
+    const newMessage = async () => {
+      const [conv] = await db().insert(schema.conversations).values({ orgId: org.id, agentId: agent.id, channel: "slack", externalThreadId: null }).returning();
+      const [m] = await db().insert(schema.messages).values({ orgId: org.id, conversationId: conv!.id, direction: "outbound", author: "agent", body: "Announcement", runId: run!.id }).returning();
+      return m!;
+    };
+    const deliver = (messageId: string, to: string, approvalId?: string) =>
+      channelDeliver({ orgId: org.id, agentId: agent.id, channel: "slack", messageId, to, ...(approvalId ? { approvalId } : {}) }, { db: db(), jobId: rid() });
+    const status = async (id: string) => (await db().select().from(schema.messages).where(eq(schema.messages.id, id)))[0]!;
+
+    const blocked = await newMessage();
+    await deliver(blocked.id, "CRANDOM");
+    expect(calls).toHaveLength(0);
+    expect((await status(blocked.id)).deliveryStatus).toBe("failed");
+    expect(String((await status(blocked.id)).meta.lastError)).toContain("needs approval");
+
+    const toDefault = await newMessage();
+    await deliver(toDefault.id, "CDEFAULT");
+    expect((await status(toDefault.id)).deliveryStatus).toBe("sent");
+
+    const [wrong] = await db().insert(schema.approvals).values({ orgId: org.id, agentId: agent.id, runId: run!.id, action: "send_external_slack", description: "x", payload: { tool: "send_message", input: { channel: "slack", to: "COTHER" } }, status: "approved" }).returning();
+    const stillBlocked = await newMessage();
+    await deliver(stillBlocked.id, "CRANDOM", wrong!.id);
+    expect((await status(stillBlocked.id)).deliveryStatus).toBe("failed");
+
+    const [pending] = await db().insert(schema.approvals).values({ orgId: org.id, agentId: agent.id, runId: run!.id, action: "send_external_slack", description: "x", payload: { tool: "send_message", input: { channel: "slack", to: "CRANDOM" } }, status: "pending" }).returning();
+    const notYet = await newMessage();
+    await deliver(notYet.id, "CRANDOM", pending!.id);
+    expect((await status(notYet.id)).deliveryStatus).toBe("failed");
+
+    await db().update(schema.approvals).set({ status: "approved" }).where(eq(schema.approvals.id, pending!.id));
+    const approved = await newMessage();
+    await deliver(approved.id, "CRANDOM", pending!.id);
+    expect((await status(approved.id)).deliveryStatus).toBe("sent");
+    expect(calls.map((c) => JSON.parse(String(c.init.body)).channel)).toEqual(["CDEFAULT", "CRANDOM"]);
   });
 });
