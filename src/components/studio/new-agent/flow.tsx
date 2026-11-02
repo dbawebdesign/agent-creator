@@ -11,6 +11,7 @@ import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } fr
 import { Kbd } from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 import { hire, pollDiscovery, startDiscovery } from "@/app/a/_actions/agents";
+import { clientPickerSearch } from "@/app/a/_actions/search";
 import { CHANNEL_LABEL, OrgMark } from "../bits";
 import { ArchitectReading, transcriptStats } from "./reading";
 import { fromDraft, ProposalReview, toDraft, type Draft } from "./proposal";
@@ -22,7 +23,8 @@ type Phase = "compose" | "reading" | "review" | "hiring";
 
 export function NewAgentFlow({
   agency,
-  clients,
+  clients: initialClients,
+  searchable = false,
   initialClientId,
   resume,
   blueprint,
@@ -30,12 +32,18 @@ export function NewAgentFlow({
 }: {
   agency: string;
   clients: Client[];
+  /** More clients exist than were sent: the picker searches the rest on the server. */
+  searchable?: boolean;
   initialClientId?: string;
   resume?: { discoveryId: string; clientId: string; clientName: string; transcript: string; proposal?: AgentSpec | null } | null;
   blueprint?: { id: string; name: string; spec: AgentSpec } | null;
   priceLabel: string | null;
 }) {
   const router = useRouter();
+  // Clients the page sent plus any picked from a search, so lookups by id keep working.
+  const [clients, setClients] = useState<Client[]>(initialClients);
+  const remember = useCallback((c: Client) => setClients((list) => (list.some((x) => x.id === c.id) ? list : [c, ...list])), []);
+  const search = useCallback((q: string) => clientPickerSearch(agency, q), [agency]);
   const [phase, setPhase] = useState<Phase>(resume?.proposal ? "review" : resume ? "reading" : blueprint ? "review" : "compose");
   const [clientId, setClientId] = useState<string | "new" | "">(resume?.clientId ?? initialClientId ?? (clients.length === 1 ? clients[0]!.id : ""));
   const [newClient, setNewClient] = useState({ name: "", industry: "" });
@@ -214,7 +222,7 @@ export function NewAgentFlow({
         {blueprint && !resolvedClient ? (
           <div className="mb-8 flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface px-4 py-3">
             <span className="text-[13px] text-ink-3">From blueprint <span className="font-medium text-ink-2">{blueprint.name}</span> for</span>
-            <ClientPicker clients={clients} value={clientId} onChange={setClientId} allowNew={false} />
+            <ClientPicker clients={clients} value={clientId} onChange={setClientId} onPick={remember} search={searchable ? search : undefined} allowNew={false} />
           </div>
         ) : null}
         <ProposalReview
@@ -254,6 +262,8 @@ export function NewAgentFlow({
               setClientId(v);
               if (v !== "new" && transcript.trim().length === 0) setTimeout(() => textRef.current?.focus(), 50);
             }}
+            onPick={remember}
+            search={searchable ? search : undefined}
             allowNew
             open={pickerOpen}
             onOpenChange={setPickerOpen}
@@ -374,6 +384,8 @@ function ClientPicker({
   clients,
   value,
   onChange,
+  onPick,
+  search,
   allowNew,
   open,
   onOpenChange,
@@ -382,14 +394,48 @@ function ClientPicker({
   clients: Client[];
   value: string;
   onChange: (v: string) => void;
+  /** Called with a client chosen from search results (so the parent can keep it). */
+  onPick?: (c: Client) => void;
+  /** Server-side name search; shown when the agency has more clients than were sent. */
+  search?: (q: string) => Promise<Client[]>;
   allowNew: boolean;
   open?: boolean;
   onOpenChange?: (o: boolean) => void;
   invalid?: boolean;
 }) {
   const selected = clients.find((c) => c.id === value);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<Client[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const term = q.trim();
+    if (!search || !term) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    let alive = true;
+    setSearching(true);
+    const t = setTimeout(() => {
+      search(term)
+        .then((r) => alive && setResults(r))
+        .catch(() => alive && setResults([]))
+        .finally(() => alive && setSearching(false));
+    }, 180);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [q, search]);
+  const shown = results ?? clients;
   return (
-    <Menu open={open} onOpenChange={onOpenChange}>
+    <Menu
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) setQ("");
+        onOpenChange?.(o);
+      }}
+    >
       <MenuTrigger
         aria-invalid={invalid || undefined}
         className={cn(
@@ -410,19 +456,49 @@ function ClientPicker({
         <ChevronsUpDown className="size-3.5 text-ink-4" aria-hidden />
       </MenuTrigger>
       <MenuContent className="w-72">
-        {clients.length ? <MenuLabel>Clients</MenuLabel> : null}
+        {search ? (
+          <div
+            className="px-1 pt-1 pb-1.5"
+            // Radix focuses the menu on open; move focus to the search field right after.
+            ref={(el) => {
+              if (el) requestAnimationFrame(() => el.querySelector("input")?.focus());
+            }}
+          >
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              // Keep typing in the field: Radix menus otherwise use letters for typeahead.
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowDown" && e.key !== "Escape") e.stopPropagation();
+              }}
+              placeholder="Search clients"
+              aria-label="Search clients"
+              className="h-8 text-[13px]"
+            />
+          </div>
+        ) : null}
+        {shown.length ? <MenuLabel>{results ? "Matches" : "Clients"}</MenuLabel> : null}
         <div className="max-h-64 overflow-y-auto">
-          {clients.map((c) => (
-            <MenuItem key={c.id} onSelect={() => onChange(c.id)}>
+          {shown.map((c) => (
+            <MenuItem
+              key={c.id}
+              onSelect={() => {
+                onPick?.(c);
+                onChange(c.id);
+              }}
+            >
               <OrgMark name={c.name} size={20} />
               <span className="truncate">{c.name}</span>
               {c.id === value ? <Check className="ml-auto" /> : null}
             </MenuItem>
           ))}
+          {results && !shown.length && !searching ? <p className="px-2 py-2 text-[12.5px] text-ink-3">No clients match “{q.trim()}”.</p> : null}
+          {searching && !results ? <p className="px-2 py-2 text-[12.5px] text-ink-3">Searching…</p> : null}
+          {search && !results ? <p className="px-2 pt-1 pb-1.5 text-[11.5px] text-ink-4">Showing the first {clients.length}. Type to search the rest.</p> : null}
         </div>
         {allowNew ? (
           <>
-            {clients.length ? <MenuSeparator /> : null}
+            {shown.length || search ? <MenuSeparator /> : null}
             <MenuItem onSelect={() => onChange("new")}>
               <Plus /> New client
             </MenuItem>

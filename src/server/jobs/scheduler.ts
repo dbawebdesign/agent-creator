@@ -47,6 +47,35 @@ type DueRow = { id: string; org_id: string; agent_id: string; trigger: WorkflowT
 
 /** One scheduler pass. Returns the number of runs enqueued. */
 export async function schedulerTick(database: DB, now: Date = new Date(), batch = 100): Promise<number> {
+  return (await schedulerBatch(database, now, batch)).enqueued;
+}
+
+/**
+ * Drain the due backlog: repeat batches (each its own short transaction, rows locked SKIP LOCKED so other workers
+ * take other rows in parallel) until a batch comes back short, the time budget runs out, or `shouldStop()` says the
+ * worker is shutting down. Anything left is picked up on the next tick, by this worker or another.
+ */
+export async function schedulerDrain(
+  database: DB,
+  opts: { now?: () => Date; batch?: number; budgetMs?: number; shouldStop?: () => boolean } = {},
+): Promise<{ due: number; enqueued: number; batches: number; ms: number; more: boolean }> {
+  const started = Date.now();
+  const batch = opts.batch ?? 250;
+  const budget = opts.budgetMs ?? 10_000;
+  let due = 0;
+  let enqueued = 0;
+  let batches = 0;
+  for (;;) {
+    const r = await schedulerBatch(database, opts.now?.() ?? new Date(), batch);
+    batches++;
+    due += r.due;
+    enqueued += r.enqueued;
+    const more = r.due >= batch;
+    if (!more || Date.now() - started >= budget || opts.shouldStop?.()) return { due, enqueued, batches, ms: Date.now() - started, more };
+  }
+}
+
+async function schedulerBatch(database: DB, now: Date, batch: number): Promise<{ due: number; enqueued: number }> {
   return database.transaction(async (tx) => {
     const due = (
       await tx.execute(sql`
@@ -86,7 +115,7 @@ export async function schedulerTick(database: DB, now: Date = new Date(), batch 
       await tx.update(schema.workflows).set({ nextRunAt: next }).where(eq(schema.workflows.id, w.id));
       if (!next) logger.warn({ workflowId: w.id }, "workflow has no next run (invalid cron or non-schedule trigger)");
     }
-    return enqueued;
+    return { due: due.length, enqueued };
   });
 }
 

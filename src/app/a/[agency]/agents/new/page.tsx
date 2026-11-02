@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { AgentSpec } from "@/server/agents/spec";
 import { agentSpec } from "@/server/agents/spec";
 import { requireOrg } from "@/server/auth/access";
 import { db, schema } from "@/server/db/client";
-import { agencyOrgs, getDiscovery } from "@/server/queries/studio";
+import { clientTotals, getDiscovery, pickerClients } from "@/server/queries/studio";
 import { NewAgentFlow } from "@/components/studio/new-agent/flow";
 import { money } from "@/components/studio/bits";
 
@@ -19,25 +19,20 @@ export default async function NewAgentPage({
 }) {
   const [{ agency: slug }, sp] = await Promise.all([params, searchParams]);
   const { org: agency } = await requireOrg(slug, "member");
-  const orgs = await agencyOrgs(agency.id);
-  const clientOrgs = orgs.filter((o) => o.kind === "client");
-  const subs = clientOrgs.length
-    ? await db()
-        .select({ orgId: schema.subscriptions.orgId, priceCents: schema.plans.priceCents, planName: schema.plans.name })
-        .from(schema.subscriptions)
-        .innerJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId))
-        .where(and(inArray(schema.subscriptions.orgId, clientOrgs.map((o) => o.id)), eq(schema.plans.orgId, agency.id), ne(schema.subscriptions.status, "canceled")))
-    : [];
-  const priceFor = new Map(subs.map((x) => [x.orgId, `${money(x.priceCents)} / mo · ${x.planName}`] as const));
-  const clients = clientOrgs.map((o) => ({ id: o.id, name: o.name, slug: o.slug, price: priceFor.get(o.id) ?? null }));
+  // Bounded: the first 30 clients by name, plus the one in ?client= / the resumed discovery. Larger agencies search.
+  const resumeRow = sp.d ? await getDiscovery(agency.id, sp.d) : null;
+  const [picked, totals] = await Promise.all([
+    pickerClients(agency.id, { limit: 30, pin: { slugs: sp.client ? [sp.client] : [], ids: resumeRow ? [resumeRow.d.orgId] : [] } }),
+    clientTotals(agency.id),
+  ]);
+  const clients = picked.map((o) => ({ id: o.id, name: o.name, slug: o.slug, price: o.plan ? `${money(o.plan.priceCents)} / mo · ${o.plan.name}` : null }));
+  const searchable = totals.count > clients.length;
 
   let resume: { discoveryId: string; clientId: string; clientName: string; transcript: string; proposal: AgentSpec | null } | null = null;
-  if (sp.d) {
-    const row = await getDiscovery(agency.id, sp.d);
-    if (row) {
-      const ready = row.d.status === "ready" && row.d.proposal ? agentSpec.safeParse(row.d.proposal) : null;
-      resume = { discoveryId: row.d.id, clientId: row.d.orgId, clientName: row.orgName, transcript: row.d.transcript, proposal: ready?.success ? ready.data : null };
-    }
+  if (resumeRow) {
+    const row = resumeRow;
+    const ready = row.d.status === "ready" && row.d.proposal ? agentSpec.safeParse(row.d.proposal) : null;
+    resume = { discoveryId: row.d.id, clientId: row.d.orgId, clientName: row.orgName, transcript: row.d.transcript, proposal: ready?.success ? ready.data : null };
   }
 
   let blueprint: { id: string; name: string; spec: AgentSpec } | null = null;
@@ -62,6 +57,7 @@ export default async function NewAgentPage({
         key={resume?.discoveryId ?? blueprint?.id ?? "new"}
         agency={slug}
         clients={clients}
+        searchable={searchable}
         initialClientId={initialClientId}
         resume={resume}
         blueprint={blueprint}

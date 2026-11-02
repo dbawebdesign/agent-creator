@@ -350,10 +350,9 @@ export async function decide(slug: string, approvalId: string, decision: "approv
   if (!uuid.safeParse(approvalId).success || !["approved", "rejected"].includes(decision)) return { ok: false, error: "Invalid request" };
   try {
     const ctx = await studio(slug, "member");
-    const { agencyOrgIds } = await import("@/server/queries/studio");
-    const ids = await agencyOrgIds(ctx.agency.id);
+    const { orgInAgency } = await import("@/server/queries/studio");
     const [row] = await db().select({ id: schema.approvals.id, orgId: schema.approvals.orgId }).from(schema.approvals).where(eq(schema.approvals.id, approvalId)).limit(1);
-    if (!row || !ids.includes(row.orgId)) return { ok: false, error: "Approval not found" };
+    if (!row || !(await orgInAgency(ctx.agency.id, row.orgId))) return { ok: false, error: "Approval not found" };
     const { decideApproval } = await import("@/server/services/engine");
     await decideApproval({ orgId: row.orgId, approvalId, decision, actor: ctx.actor });
     revalidatePath(`/a/${slug}`, "layout");

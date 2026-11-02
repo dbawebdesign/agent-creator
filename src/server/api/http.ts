@@ -4,7 +4,7 @@
  */
 import "server-only";
 import { z } from "zod";
-import { logger } from "@/server/lib/logger";
+import { logger, requestIdFrom, withLogContext } from "@/server/lib/logger";
 import { readTextCapped } from "./body";
 import { rateLimit } from "@/server/security/rate-limit";
 import { authenticateApiKey, hasScope, type ApiPrincipal, type ApiScope } from "./keys";
@@ -113,18 +113,22 @@ export function apiRoute<Ctx>(
   handler: (args: { req: Request; principal: ApiPrincipal; ctx: Ctx }) => Promise<{ status?: number; body: unknown }>,
 ) {
   return async (req: Request, ctx: Ctx): Promise<Response> => {
-    let rateHeaders: Record<string, string> = {};
-    try {
-      const auth = await authenticate(req);
-      rateHeaders = auth.rateHeaders;
-      requireScope(auth.principal, scope);
-      const out = await handler({ req, principal: auth.principal, ctx });
-      return json(out.body, { status: out.status ?? 200, headers: rateHeaders });
-    } catch (err) {
-      const res = toErrorResponse(err);
-      for (const [k, v] of Object.entries(rateHeaders)) if (!res.headers.has(k)) res.headers.set(k, v);
-      return res;
-    }
+    // x-request-id: echoed back and stamped on every log line written while serving the request.
+    const requestId = requestIdFrom(req.headers);
+    return withLogContext({ requestId }, async () => {
+      let rateHeaders: Record<string, string> = { "x-request-id": requestId };
+      try {
+        const auth = await authenticate(req);
+        rateHeaders = { ...auth.rateHeaders, "x-request-id": requestId };
+        requireScope(auth.principal, scope);
+        const out = await handler({ req, principal: auth.principal, ctx });
+        return json(out.body, { status: out.status ?? 200, headers: rateHeaders });
+      } catch (err) {
+        const res = toErrorResponse(err);
+        for (const [k, v] of Object.entries(rateHeaders)) if (!res.headers.has(k)) res.headers.set(k, v);
+        return res;
+      }
+    });
   };
 }
 
@@ -156,8 +160,10 @@ export function parseWith<T extends z.ZodType>(schemaDef: T, input: unknown): z.
 const cursorShape = z.object({ t: z.iso.datetime({ offset: true }), id: z.uuid() });
 export type Cursor = z.infer<typeof cursorShape>;
 
-export function encodeCursor(row: { createdAt: Date; id: string }): string {
-  return Buffer.from(JSON.stringify({ t: row.createdAt.toISOString(), id: row.id })).toString("base64url");
+/** `t` is created_at as an ISO string; pass Postgres' microsecond text (v1 cursorTs) so pages never skip rows. */
+export function encodeCursor(row: { t: string; id: string } | { createdAt: Date; id: string }): string {
+  const t = "t" in row ? row.t : row.createdAt.toISOString();
+  return Buffer.from(JSON.stringify({ t, id: row.id })).toString("base64url");
 }
 
 export function decodeCursor(raw: string | null | undefined): Cursor | null {

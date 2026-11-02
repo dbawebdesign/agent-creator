@@ -9,7 +9,7 @@ import { EngineInputError, EngineNotFoundError, type Actor } from "@/server/serv
 import { ApiKeyError } from "@/server/api/keys";
 import { ChannelError } from "@/server/channels/service";
 import { logger } from "@/server/lib/logger";
-import { agencyOrgs, getAgent } from "@/server/queries/studio";
+import { getAgent, orgInAgency } from "@/server/queries/studio";
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -31,7 +31,7 @@ export async function studioAgent(slug: string, agentId: string, min: Role = "me
 /** A client org in this agency's tree, or 404. */
 export async function studioClient(slug: string, clientId: string, min: Role = "member") {
   const ctx = await studio(slug, min);
-  const org = (await agencyOrgs(ctx.agency.id)).find((o) => o.id === clientId);
+  const org = await orgInAgency(ctx.agency.id, clientId);
   if (!org) notFound();
   return { ...ctx, client: org };
 }

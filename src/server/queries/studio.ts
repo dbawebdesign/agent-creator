@@ -53,6 +53,17 @@ function inAgency(col: Parameters<typeof eq>[0], agencyId: string) {
   return sql`${col} in (select o.id from organizations o where (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and o.id <> ${agencyId} and o.deleted_at is null)`;
 }
 
+/**
+ * Deliverables in this agency's client/customer orgs, via the denormalized deliverables.agency_id
+ * (indexes: (agency_id, created_at) and the partial changes_requested one). Excludes the agency's own org and
+ * soft-deleted orgs, matching inAgency.
+ */
+function agencyDeliverables(agencyId: string, alias?: string) {
+  const agency = alias ? sql.raw(`${alias}.agency_id`) : s.deliverables.agencyId;
+  const org = alias ? sql.raw(`${alias}.org_id`) : s.deliverables.orgId;
+  return sql`(${agency} = ${agencyId} and ${org} <> ${agencyId} and ${org} not in (select o.id from organizations o where o.agency_id = ${agencyId} and o.deleted_at is not null))`;
+}
+
 /** Escape LIKE wildcards in user search text. */
 function likeEscape(q: string) {
   return q.replace(/[\\%_]/g, (m) => `\\${m}`);
@@ -68,7 +79,8 @@ export async function getShellData(agencyId: string) {
       .from(s.agents)
       .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
       .where(and(inAgency(s.agents.orgId, agencyId), ne(s.agents.status, "archived")))
-      .orderBy(desc(s.agents.updatedAt))
+      // Most recently active: last delivery (trigger-maintained) or last edit, whichever is newer.
+      .orderBy(sql`greatest(${s.agents.updatedAt}, coalesce(${s.agents.lastDeliveredAt}, ${s.agents.updatedAt})) desc`)
       .limit(SHELL_RECENT),
     db()
       .select({
@@ -176,7 +188,7 @@ export async function getHome(agencyId: string) {
       .from(s.deliverables)
       .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
       .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
-      .where(and(inAgency(s.deliverables.orgId, agencyId), gte(s.deliverables.createdAt, since)))
+      .where(and(agencyDeliverables(agencyId), gte(s.deliverables.createdAt, since)))
       .orderBy(desc(s.deliverables.createdAt))
       .limit(8),
     db()
@@ -226,7 +238,7 @@ export async function getHome(agencyId: string) {
           inAgency(s.agents.orgId, agencyId),
           or(
             eq(s.agents.status, "provisioning"),
-            and(eq(s.agents.status, "active"), sql`not exists (select 1 from deliverables d where d.agent_id = ${s.agents.id})`),
+            and(eq(s.agents.status, "active"), eq(s.agents.deliveredCount, 0)),
           ),
         ),
       )
@@ -247,7 +259,7 @@ export async function getHome(agencyId: string) {
         n: sql<number>`count(*)`.mapWith(Number),
       })
       .from(s.deliverables)
-      .where(and(inAgency(s.deliverables.orgId, agencyId), gte(s.deliverables.createdAt, week))),
+      .where(and(agencyDeliverables(agencyId), gte(s.deliverables.createdAt, week))),
     clientTotals(agencyId).then((t) => t.mrrCents),
     db()
       .select({
@@ -273,7 +285,7 @@ export async function getHome(agencyId: string) {
       .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
       .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
       // Select-list subqueries run only for these few rows (LIMIT first); open/revised are filtered below.
-      .where(and(inAgency(s.deliverables.orgId, agencyId), eq(s.deliverables.status, "changes_requested")))
+      .where(and(agencyDeliverables(agencyId), eq(s.deliverables.status, "changes_requested")))
       .orderBy(desc(s.deliverables.createdAt))
       .limit(20),
   ]);
@@ -323,11 +335,12 @@ export async function listClients(agencyId: string, opts: { page?: number; q?: s
       .from(s.agents)
       .where(and(inArray(s.agents.orgId, ids), ne(s.agents.status, "archived")))
       .groupBy(s.agents.orgId),
-    // Latest delivery per client on this page only (index on deliverables(org_id, created_at)).
+    // Latest delivery per client on this page only, from the agents' trigger-maintained last_delivered_at.
     db()
-      .select({ orgId: s.organizations.id, at: sql<Date | null>`(select max(d.created_at) from deliverables d where d.org_id = ${s.organizations.id})`.mapWith((v) => (v ? new Date(v) : null)) })
-      .from(s.organizations)
-      .where(inArray(s.organizations.id, ids)),
+      .select({ orgId: s.agents.orgId, at: sql<Date | null>`max(${s.agents.lastDeliveredAt})`.mapWith((v) => (v ? new Date(v) : null)) })
+      .from(s.agents)
+      .where(inArray(s.agents.orgId, ids))
+      .groupBy(s.agents.orgId),
     db()
       .select({ orgId: s.subscriptions.orgId, status: s.subscriptions.status, planName: s.plans.name, priceCents: s.plans.priceCents })
       .from(s.subscriptions)
@@ -348,8 +361,61 @@ export async function listClients(agencyId: string, opts: { page?: number; q?: s
   return { items, page, more };
 }
 
+/** One client or customer org in this agency's tree by id (for action guards). */
+export async function orgInAgency(agencyId: string, orgId: string): Promise<ClientOrg | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(orgId)) return null;
+  const rows = await db().select().from(s.organizations).where(and(eq(s.organizations.id, orgId), inAgency(s.organizations.id, agencyId))).limit(1);
+  return rows[0] ?? null;
+}
+
+/** Clients for the new-agent picker: a bounded first page (or a name search), plus any pinned ids/slugs, with plan labels. */
+export async function pickerClients(agencyId: string, opts: { q?: string; pin?: { ids?: string[]; slugs?: string[] }; limit?: number } = {}) {
+  const limit = Math.min(opts.limit ?? 30, 50);
+  const q = opts.q?.trim().toLowerCase();
+  const term = q ? likeEscape(q) : null;
+  const pinIds = (opts.pin?.ids ?? []).filter((x) => /^[0-9a-f-]{36}$/i.test(x));
+  const pinSlugs = (opts.pin?.slugs ?? []).filter(Boolean).slice(0, 4);
+  const cols = { id: s.organizations.id, name: s.organizations.name, slug: s.organizations.slug };
+  const base = and(inAgency(s.organizations.id, agencyId), eq(s.organizations.kind, "client"));
+  const [page, pinned] = await Promise.all([
+    db()
+      .select(cols)
+      .from(s.organizations)
+      .where(and(base, term ? sql`(lower(${s.organizations.name}) like ${`${term}%`} or lower(${s.organizations.name}) like ${`% ${term}%`})` : undefined))
+      .orderBy(...(term ? [sql`lower(${s.organizations.name}) like ${`${term}%`} desc`, asc(s.organizations.name)] : [asc(s.organizations.name)]))
+      .limit(limit),
+    pinIds.length || pinSlugs.length
+      ? db()
+          .select(cols)
+          .from(s.organizations)
+          .where(and(base, or(pinIds.length ? inArray(s.organizations.id, pinIds) : undefined, pinSlugs.length ? inArray(s.organizations.slug, pinSlugs) : undefined)))
+      : Promise.resolve([]),
+  ]);
+  const orgs = [...pinned, ...page.filter((o) => !pinned.some((p) => p.id === o.id))];
+  if (!orgs.length) return [];
+  const subs = await db()
+    .select({ orgId: s.subscriptions.orgId, priceCents: s.plans.priceCents, planName: s.plans.name })
+    .from(s.subscriptions)
+    .innerJoin(s.plans, eq(s.plans.id, s.subscriptions.planId))
+    .where(and(inArray(s.subscriptions.orgId, orgs.map((o) => o.id)), eq(s.plans.orgId, agencyId), ne(s.subscriptions.status, "canceled")));
+  return orgs.map((o) => {
+    const sub = subs.find((x) => x.orgId === o.id);
+    return { ...o, plan: sub ? { priceCents: sub.priceCents, name: sub.planName } : null };
+  });
+}
+
+/** One client org of this agency by slug (no full-agency load). */
+export const clientBySlug = cache(async (agencyId: string, slug: string): Promise<ClientOrg | null> => {
+  const rows = await db()
+    .select()
+    .from(s.organizations)
+    .where(and(eq(s.organizations.slug, slug), eq(s.organizations.kind, "client"), inAgency(s.organizations.id, agencyId)))
+    .limit(1);
+  return rows[0] ?? null;
+});
+
 export async function getClient(agencyId: string, slug: string) {
-  const org = (await agencyOrgs(agencyId)).find((o) => o.slug === slug && o.kind === "client");
+  const org = await clientBySlug(agencyId, slug);
   if (!org) return null;
   const [agents, deliverables, subs, members, invites, customers] = await Promise.all([
     db()
@@ -415,6 +481,7 @@ export async function listAgents(agencyId: string, opts: { page?: number; q?: st
       orgName: s.organizations.name,
       orgSlug: s.organizations.slug,
       orgKind: s.organizations.kind,
+      lastDeliveryAt: s.agents.lastDeliveredAt,
     })
     .from(s.agents)
     .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
@@ -435,15 +502,12 @@ export async function listAgents(agencyId: string, opts: { page?: number; q?: st
   const ids = list.map((r) => r.id);
   if (!ids.length) return { items: [], page, more: false };
   const [stats, wfs] = await Promise.all([
-    // Per-agent, this page only: latest delivery and this week's hours (index on deliverables(agent_id, created_at)).
+    // This week's hours for this page's agents only (index on deliverables(agent_id, created_at)).
     db()
-      .select({
-        agentId: s.agents.id,
-        last: sql<Date | null>`(select max(d.created_at) from deliverables d where d.agent_id = ${s.agents.id})`.mapWith((v) => (v ? new Date(v) : null)),
-        hours: sql<number>`(select coalesce(sum(d.hours_saved), 0) from deliverables d where d.agent_id = ${s.agents.id} and d.created_at >= ${week})`.mapWith(Number),
-      })
-      .from(s.agents)
-      .where(inArray(s.agents.id, ids)),
+      .select({ agentId: s.deliverables.agentId, hours: sql<number>`coalesce(sum(${s.deliverables.hoursSaved}), 0)`.mapWith(Number) })
+      .from(s.deliverables)
+      .where(and(inArray(s.deliverables.agentId, ids), gte(s.deliverables.createdAt, week)))
+      .groupBy(s.deliverables.agentId),
     db()
       .select({ agentId: s.workflows.agentId, n: sql<number>`count(*)`.mapWith(Number), next: sql<Date | null>`min(${s.workflows.nextRunAt})`.mapWith((v) => (v ? new Date(v) : null)) })
       .from(s.workflows)
@@ -453,7 +517,7 @@ export async function listAgents(agencyId: string, opts: { page?: number; q?: st
   const items = list.map((r) => {
     const st = stats.find((x) => x.agentId === r.id);
     const wf = wfs.find((x) => x.agentId === r.id);
-    return { ...r, lastDeliveryAt: st?.last ?? null, hoursWeek: st?.hours ?? 0, workflows: wf?.n ?? 0, nextRunAt: wf?.next ?? null };
+    return { ...r, hoursWeek: st?.hours ?? 0, workflows: wf?.n ?? 0, nextRunAt: wf?.next ?? null };
   });
   return { items, page, more };
 }
@@ -461,13 +525,11 @@ export async function listAgents(agencyId: string, opts: { page?: number; q?: st
 /** One agent, only if it belongs to the authorized agency tree. */
 export async function getAgent(agencyId: string, agentId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(agentId)) return null;
-  const ids = await agencyOrgIds(agencyId);
-  if (!ids.length) return null;
   const rows = await db()
     .select({ agent: s.agents, org: s.organizations })
     .from(s.agents)
     .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
-    .where(and(eq(s.agents.id, agentId), inArray(s.agents.orgId, ids)))
+    .where(and(eq(s.agents.id, agentId), inAgency(s.agents.orgId, agencyId)))
     .limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -573,13 +635,11 @@ export async function provisioningStatus(agencyId: string, agentId: string) {
 
 export async function getDiscovery(agencyId: string, discoveryId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(discoveryId)) return null;
-  const ids = await agencyOrgIds(agencyId);
-  if (!ids.length) return null;
   const rows = await db()
     .select({ d: s.discoveries, orgName: s.organizations.name, orgSlug: s.organizations.slug })
     .from(s.discoveries)
     .innerJoin(s.organizations, eq(s.organizations.id, s.discoveries.orgId))
-    .where(and(eq(s.discoveries.id, discoveryId), inArray(s.discoveries.orgId, ids)))
+    .where(and(eq(s.discoveries.id, discoveryId), inAgency(s.discoveries.orgId, agencyId)))
     .limit(1);
   return rows[0] ?? null;
 }
@@ -726,7 +786,7 @@ export async function agentTotals(agencyId: string) {
   const [row] = await db()
     .select({
       count: sql<number>`(select count(*) from agents a where ${inAgency(sql`a.org_id`, agencyId)} and a.status <> 'archived')`.mapWith(Number),
-      hours: sql<number>`(select coalesce(sum(d.hours_saved), 0) from deliverables d where ${inAgency(sql`d.org_id`, agencyId)} and d.created_at >= ${week})`.mapWith(Number),
+      hours: sql<number>`(select coalesce(sum(d.hours_saved), 0) from deliverables d where ${agencyDeliverables(agencyId, "d")} and d.created_at >= ${week})`.mapWith(Number),
     })
     .from(sql`(select 1) as one`);
   return { count: row?.count ?? 0, hoursWeek: row?.hours ?? 0 };

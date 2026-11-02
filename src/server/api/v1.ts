@@ -5,7 +5,7 @@
  * existence is never leaked. Token usage / cost is never returned.
  */
 import "server-only";
-import { and, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { env } from "@/server/env";
@@ -135,27 +135,31 @@ function serializeDeliverable(d: DeliverableRow, orgSlug: string): ApiDeliverabl
   };
 }
 
-/** Millisecond-truncated created_at so cursors round-trip exactly through JS Dates. */
-function createdMs(col: typeof schema.agents.createdAt | typeof schema.deliverables.createdAt) {
-  return sql`date_trunc('milliseconds', ${col})`;
+/*
+ * Keyset pagination: `order by created_at desc, id desc` with a row cursor `(created_at, id) < ($t, $id)`.
+ * The cursor carries created_at at full microsecond precision as text straight from Postgres (a JS Date would
+ * truncate to milliseconds and skip or repeat rows), and the bare column comparison lets the planner walk
+ * (org_id, created_at, id) backward: page N costs the same as page 1 (deliverables_org_created_id_idx).
+ */
+type CreatedCol = typeof schema.agents.createdAt | typeof schema.deliverables.createdAt;
+type IdCol = typeof schema.agents.id | typeof schema.deliverables.id;
+
+/** created_at as an exact UTC ISO string with microseconds, for the cursor. */
+function cursorTs(col: CreatedCol) {
+  return sql<string>`to_char(${col} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 }
 
-function afterCursor(
-  col: typeof schema.agents.createdAt | typeof schema.deliverables.createdAt,
-  idCol: typeof schema.agents.id | typeof schema.deliverables.id,
-  raw: string | undefined,
-): SQL | undefined {
+function afterCursor(col: CreatedCol, idCol: IdCol, raw: string | undefined): SQL | undefined {
   const c = decodeCursor(raw);
   if (!c) return undefined;
-  const t = new Date(c.t);
-  return or(lt(createdMs(col), t), and(eq(createdMs(col), t), lt(idCol, c.id)));
+  return sql`(${col}, ${idCol}) < (${c.t}::timestamptz, ${c.id}::uuid)`;
 }
 
-function page<T extends { createdAt: Date; id: string }, O>(rows: T[], limit: number, map: (r: T) => O) {
+function page<T extends { id: string }, O>(rows: Array<{ row: T; ts: string }>, limit: number, map: (r: T) => O) {
   const hasMore = rows.length > limit;
   const items = rows.slice(0, limit);
   const last = items[items.length - 1];
-  return { data: items.map(map), nextCursor: hasMore && last ? encodeCursor(last) : null, hasMore };
+  return { data: items.map((r) => map(r.row)), nextCursor: hasMore && last ? encodeCursor({ t: last.ts, id: last.row.id }) : null, hasMore };
 }
 
 function agentScope(p: ApiPrincipal): SQL {
@@ -178,10 +182,10 @@ export async function loadAgent(p: ApiPrincipal, agentId: string): Promise<Agent
 export async function listAgents(p: ApiPrincipal, query: unknown) {
   const q = parseWith(listQuery, query);
   const rows = await db()
-    .select()
+    .select({ row: schema.agents, ts: cursorTs(schema.agents.createdAt) })
     .from(schema.agents)
     .where(and(agentScope(p), afterCursor(schema.agents.createdAt, schema.agents.id, q.cursor)))
-    .orderBy(desc(createdMs(schema.agents.createdAt)), desc(schema.agents.id))
+    .orderBy(desc(schema.agents.createdAt), desc(schema.agents.id))
     .limit(q.limit + 1);
   return page(rows, q.limit, serializeAgent);
 }
@@ -310,10 +314,10 @@ export async function listDeliverables(p: ApiPrincipal, query: unknown) {
   if (q.status) conds.push(eq(schema.deliverables.status, q.status));
   conds.push(afterCursor(schema.deliverables.createdAt, schema.deliverables.id, q.cursor));
   const rows = await db()
-    .select()
+    .select({ row: schema.deliverables, ts: cursorTs(schema.deliverables.createdAt) })
     .from(schema.deliverables)
     .where(and(...conds))
-    .orderBy(desc(createdMs(schema.deliverables.createdAt)), desc(schema.deliverables.id))
+    .orderBy(desc(schema.deliverables.createdAt), desc(schema.deliverables.id))
     .limit(q.limit + 1);
   return page(rows, q.limit, (d) => serializeDeliverable(d, p.orgSlug));
 }

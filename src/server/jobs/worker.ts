@@ -4,17 +4,22 @@
  */
 import { sql } from "drizzle-orm";
 import type { DB } from "@/server/db/client";
-import { logger } from "@/server/lib/logger";
-import { backoffMs, type JobType } from "./queue";
-import { expireApprovals, schedulerTick } from "./scheduler";
+import { logger, withLogContext } from "@/server/lib/logger";
+import { backoffMs, reclaimExpired, type JobType } from "./queue";
+import { expireApprovals, schedulerDrain } from "./scheduler";
 
 export type ClaimedRow = { id: string; type: string; payload: Record<string, unknown>; orgId: string | null; attempts: number; maxAttempts: number };
 type Handler = (payload: Record<string, unknown>, ctx: { db: DB; jobId: string; attempts: number; maxAttempts: number }) => Promise<void>;
 
 export const LEASE_MS = 5 * 60_000;
 
-/** Like queue.claim, optionally restricted to job types. */
+/**
+ * Like queue.claim, optionally restricted to job types. Expired leases are first put back in the queue (or
+ * dead-lettered once their attempts are spent) by `reclaimExpired`; the claim itself only reads `status='queued'`
+ * through jobs_claim_idx (queue, priority desc, run_at), so it stays sub-millisecond with a large backlog.
+ */
 export async function claimTypes(database: DB, workerId: string, limit: number, types: JobType[] | null, leaseMs = LEASE_MS, queue = "default"): Promise<ClaimedRow[]> {
+  await reclaimExpired(database, queue);
   const typeFilter = types?.length ? sql`and type in (${sql.join(types.map((t) => sql`${t}`), sql`, `)})` : sql``;
   const res = await database.execute(sql`
     update jobs set status = 'running', locked_by = ${workerId},
@@ -22,15 +27,19 @@ export async function claimTypes(database: DB, workerId: string, limit: number, 
       attempts = attempts + 1
     where id in (
       select id from jobs
-      where queue = ${queue} ${typeFilter}
-        and ((status = 'queued' and run_at <= now())
-          or (status = 'running' and locked_until < now()))
+      where queue = ${queue} ${typeFilter} and status = 'queued' and run_at <= now()
       order by priority desc, run_at asc
       limit ${limit}
       for update skip locked
     )
     returning id, type, payload, org_id as "orgId", attempts, max_attempts as "maxAttempts"`);
   return res.rows as ClaimedRow[];
+}
+
+/** Log fields for a job: jobId, type, orgId and (when the payload has one) runId. */
+export function jobLogContext(job: Pick<ClaimedRow, "id" | "type" | "orgId" | "payload">) {
+  const runId = typeof job.payload?.runId === "string" ? job.payload.runId : undefined;
+  return { jobId: job.id, type: job.type, orgId: job.orgId ?? undefined, ...(runId ? { runId } : {}) };
 }
 
 async function renewLease(database: DB, jobId: string, workerId: string, leaseMs = LEASE_MS) {
@@ -41,6 +50,10 @@ async function renewLease(database: DB, jobId: string, workerId: string, leaseMs
 
 /** Run one claimed job with lease renewal; completes or fails (with backoff / dead-letter) it. */
 export async function processJob(database: DB, job: ClaimedRow, handlers: Record<string, Handler>, workerId: string): Promise<void> {
+  return withLogContext(jobLogContext(job), () => processJobInContext(database, job, handlers, workerId));
+}
+
+async function processJobInContext(database: DB, job: ClaimedRow, handlers: Record<string, Handler>, workerId: string): Promise<void> {
   const handler = handlers[job.type];
   const timer = setInterval(() => {
     renewLease(database, job.id, workerId).catch((err) => logger.warn({ err: (err as Error).message, jobId: job.id }, "lease renewal failed"));
@@ -54,10 +67,10 @@ export async function processJob(database: DB, job: ClaimedRow, handlers: Record
     await database.execute(sql`
       update jobs set status = 'succeeded', finished_at = now(), locked_by = null, locked_until = null
       where id = ${job.id} and locked_by = ${workerId}`);
-    logger.info({ jobId: job.id, type: job.type, ms: Date.now() - started }, "job succeeded");
+    logger.info({ attempts: job.attempts, ms: Date.now() - started }, "job succeeded");
   } catch (err) {
     const dead = await failOwned(database, job, workerId, err);
-    logger.warn({ jobId: job.id, type: job.type, attempts: job.attempts, dead, err: err instanceof Error ? err.message : String(err) }, "job failed");
+    logger.warn({ attempts: job.attempts, maxAttempts: job.maxAttempts, dead, ms: Date.now() - started, err: err instanceof Error ? err.message : String(err) }, "job failed");
   } finally {
     clearInterval(timer);
   }
@@ -78,7 +91,7 @@ async function failOwned(database: DB, job: ClaimedRow, workerId: string, error:
   return dead;
 }
 
-export type WorkerHandle = { stop(): Promise<void>; readonly running: number };
+export type WorkerHandle = { stop(): Promise<void>; readonly running: number; readonly lastLoopAt: number };
 
 export function startWorker(opts: {
   database: DB;
@@ -87,6 +100,8 @@ export function startWorker(opts: {
   workerId: string;
   pollMs?: number;
   schedulerMs?: number;
+  /** Called after each scheduler tick (the worker process uses it for maintenance scheduling and heartbeats). */
+  onTick?: () => Promise<unknown> | unknown;
 }): WorkerHandle {
   const inflight = new Set<Promise<void>>();
   let stopping = false;
@@ -100,8 +115,10 @@ export function startWorker(opts: {
       };
     });
 
+  let lastLoopAt = Date.now();
   const loop = (async () => {
     while (!stopping) {
+      lastLoopAt = Date.now();
       const free = opts.concurrency - inflight.size;
       let claimed: ClaimedRow[] = [];
       if (free > 0) {
@@ -122,17 +139,32 @@ export function startWorker(opts: {
     }
   })();
 
+  // Scheduler: drain every due workflow (in SKIP LOCKED batches, bounded by a time budget) each tick; ticks never
+  // overlap within a worker, and several workers share the backlog. Jitter keeps a fleet from ticking in lockstep.
+  let ticking = false;
+  const tickMs = opts.schedulerMs ?? 15_000;
   const tick = setInterval(() => {
-    if (stopping) return;
-    schedulerTick(opts.database)
-      .then((n) => n && logger.info({ enqueued: n }, "scheduler enqueued runs"))
-      .then(() => expireApprovals(opts.database))
-      .catch((err) => logger.error({ err: (err as Error).message }, "scheduler tick failed"));
-  }, opts.schedulerMs ?? 15_000);
+    if (stopping || ticking) return;
+    ticking = true;
+    const jitter = Math.floor(Math.random() * Math.min(2_000, tickMs / 4));
+    setTimeout(() => {
+      schedulerDrain(opts.database, { budgetMs: Math.max(1_000, tickMs - 2_000), shouldStop: () => stopping })
+        .then((r) => r.enqueued && logger.info(r, "scheduler enqueued runs"))
+        .then(() => expireApprovals(opts.database))
+        .then(() => opts.onTick?.())
+        .catch((err) => logger.error({ err: (err as Error).message }, "scheduler tick failed"))
+        .finally(() => {
+          ticking = false;
+        });
+    }, jitter).unref?.();
+  }, tickMs);
 
   return {
     get running() {
       return inflight.size;
+    },
+    get lastLoopAt() {
+      return lastLoopAt;
     },
     async stop() {
       stopping = true;

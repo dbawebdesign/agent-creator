@@ -8,7 +8,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { ArrowUpRight, Bot, ChevronRight, Plus } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
 import { db, schema } from "@/server/db/client";
-import { agencyOrgs, getClient } from "@/server/queries/studio";
+import { clientBySlug, getClient } from "@/server/queries/studio";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { buttonClass } from "@/components/ui/button";
 import { RelativeTime } from "@/components/shared/relative-time";
@@ -18,7 +18,7 @@ import { AgentStatus, ClientStatus, hours, money, OrgMark, OUTPUT_LABEL, Section
 export async function generateMetadata({ params }: { params: Promise<{ agency: string; clientSlug: string }> }) {
   const { agency, clientSlug } = await params;
   const { org } = await requireOrg(agency, "viewer");
-  const client = (await agencyOrgs(org.id)).find((o) => o.slug === clientSlug);
+  const client = await clientBySlug(org.id, clientSlug);
   return { title: client?.name ?? "Client" };
 }
 

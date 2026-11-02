@@ -33,6 +33,10 @@ const schema = z.object({
   /** Platform application fee on subscriptions, basis points (0 = none). */
   PLATFORM_FEE_BPS: z.string().optional(),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(8),
+  DB_POOL_MAX: z.coerce.number().int().positive().optional(),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
+  APPROVAL_TTL_HOURS: z.coerce.number().positive().optional(),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).optional(),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -45,15 +49,50 @@ let cached: Env | undefined;
  */
 export function env(): Env {
   if (cached) return cached;
-  const parsed = schema.parse(Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== "")));
-  if (parsed.NODE_ENV === "production" && process.env.ROSTER_ALLOW_INSECURE_DEFAULTS !== "1") {
-    const missing: string[] = (["ENCRYPTION_KEY", "AUTH_SECRET"] as const).filter((k) => !parsed[k]);
-    // Without it, inbound sender verification fails closed (no email is trusted) — refuse to boot half-configured.
-    if ((parsed.RESEND_API_KEY || parsed.RESEND_WEBHOOK_SECRET) && !parsed.EMAIL_AUTHSERV_ID) missing.push("EMAIL_AUTHSERV_ID");
-    if (missing.length) throw new Error(`Missing required env in production: ${missing.join(", ")}`);
+  const result = schema.safeParse(Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== "")));
+  if (!result.success) {
+    // Variable names and the rule they broke only: never echo values (they may be secrets).
+    const issues = result.error.issues.map((i) => `${i.path.join(".") || "env"}: ${i.message}`);
+    throw new Error(`Invalid environment: ${issues.join("; ")}`);
   }
+  const parsed = result.data;
+  const problems = productionProblems(parsed);
+  if (problems.length) throw new Error(`Invalid production configuration: ${problems.join("; ")}`);
   cached = parsed;
   return parsed;
+}
+
+/** Production-only rules (skipped with ROSTER_ALLOW_INSECURE_DEFAULTS=1). Messages name variables, never values. */
+function productionProblems(parsed: Env): string[] {
+  if (parsed.NODE_ENV !== "production" || process.env.ROSTER_ALLOW_INSECURE_DEFAULTS === "1") return [];
+  const problems: string[] = [];
+  const missing: string[] = (["ENCRYPTION_KEY", "AUTH_SECRET"] as const).filter((k) => !parsed[k]);
+  // Without it, inbound sender verification fails closed (no email is trusted) — refuse to boot half-configured.
+  if ((parsed.RESEND_API_KEY || parsed.RESEND_WEBHOOK_SECRET) && !parsed.EMAIL_AUTHSERV_ID) missing.push("EMAIL_AUTHSERV_ID");
+  if (missing.length) problems.push(`missing ${missing.join(", ")}`);
+  if (parsed.ENCRYPTION_KEY && Buffer.from(parsed.ENCRYPTION_KEY, "base64").length !== 32) problems.push("ENCRYPTION_KEY must be 32 bytes, base64 encoded (openssl rand -base64 32)");
+  if (parsed.AUTH_SECRET && parsed.AUTH_SECRET.length < 32) problems.push("AUTH_SECRET must be at least 32 characters (openssl rand -base64 48)");
+  try {
+    const u = new URL(parsed.APP_URL);
+    // Secure cookies and OAuth/webhook callbacks need https in production (localhost is allowed for smoke tests).
+    if (u.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(u.hostname)) problems.push("APP_URL must be https in production");
+  } catch {
+    problems.push("APP_URL is not a valid URL");
+  }
+  return problems;
+}
+
+/**
+ * Configuration problems for /api/health and the boot check, without throwing and without values.
+ * Empty when the config is good.
+ */
+export function configProblems(): string[] {
+  try {
+    env();
+    return [];
+  } catch (err) {
+    return [(err as Error).message];
+  }
 }
 
 /** True when running without a real model (deterministic offline mode). */

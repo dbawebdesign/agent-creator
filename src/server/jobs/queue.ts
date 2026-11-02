@@ -2,13 +2,15 @@
  * Durable Postgres job queue.
  *
  * - Claims with FOR UPDATE SKIP LOCKED: any number of workers, no double processing.
- * - Lease-based locking: a crashed worker's jobs are reclaimed after `lockedUntil`.
+ * - Lease-based locking: a crashed worker's jobs are reclaimed after `lockedUntil` (reclaimExpired). Every claim
+ *   counts as an attempt, so a job that keeps crashing its worker is dead-lettered at `maxAttempts` too.
  * - Exponential backoff with jitter, dead-lettering after `maxAttempts`.
  * - Idempotency keys: at most one queued/running job per key.
  */
 import { sql } from "drizzle-orm";
 import type { DB } from "@/server/db/client";
 import { schema } from "@/server/db/client";
+import { logger } from "@/server/lib/logger";
 
 export type JobType =
   | "agent.run" // execute a run (workflow, message reply, manual task)
@@ -17,7 +19,8 @@ export type JobType =
   | "knowledge.index" // chunk + index a knowledge source
   | "channel.deliver" // send a deliverable/message out through a channel
   | "inbound.process" // process an inbound email/SMS/Slack event
-  | "deliverable.release"; // hand over a deliverable finished early (first overnight deliverable: work ~1 AM, release 6 AM)
+  | "deliverable.release" // hand over a deliverable finished early (first overnight deliverable: work ~1 AM, release 6 AM)
+  | "maintenance.prune"; // retention: delete finished jobs, old webhook events, expired sessions/tokens/rate limits
 
 export type EnqueueOptions = {
   runAt?: Date;
@@ -49,16 +52,49 @@ export async function enqueue(database: Pick<DB, "insert">, type: JobType, paylo
 
 export type ClaimedJob = typeof schema.jobs.$inferSelect;
 
+export type ReclaimedJob = { id: string; type: string; orgId: string | null; payload: Record<string, unknown>; status: "queued" | "dead"; attempts: number };
+
+/**
+ * Leases that ran out (the worker crashed, was OOM-killed, or stalled past its renewals): back to `queued` for
+ * another attempt, or `dead` when the attempt that crashed was the last one. The attempt was already counted when
+ * it was claimed, so a poison-pill job that kills every worker stops after `max_attempts` claims. Uses
+ * jobs_locked_idx; a no-op probe when nothing expired.
+ */
+export async function reclaimExpired(database: Pick<DB, "execute">, queue = "default", limit = 100): Promise<ReclaimedJob[]> {
+  const res = await database.execute(sql`
+    update jobs set
+      status = case when attempts >= max_attempts then 'dead' else 'queued' end,
+      finished_at = case when attempts >= max_attempts then now() else null end,
+      last_error = left('LeaseExpired: the worker stopped renewing its lease (crashed or stalled) on attempt ' || attempts
+        || coalesce(' after: ' || last_error, ''), 4000),
+      run_at = now(), locked_by = null, locked_until = null
+    where id in (
+      select id from jobs
+      where status = 'running' and locked_until < now() and queue = ${queue}
+      order by locked_until
+      limit ${limit}
+      for update skip locked
+    )
+    returning id, type, org_id as "orgId", payload, status, attempts`);
+  const rows = res.rows as ReclaimedJob[];
+  for (const j of rows) {
+    const runId = typeof j.payload?.runId === "string" ? j.payload.runId : undefined;
+    const log = { jobId: j.id, type: j.type, orgId: j.orgId, runId, attempts: j.attempts };
+    if (j.status === "dead") logger.error(log, "job dead-lettered after its lease expired on the last attempt");
+    else logger.warn(log, "reclaimed job with an expired lease");
+  }
+  return rows;
+}
+
 export async function claim(database: DB, workerId: string, limit: number, leaseMs = 5 * 60_000, queue = "default") {
+  await reclaimExpired(database, queue);
   const res = await database.execute(sql`
     update jobs set status = 'running', locked_by = ${workerId},
       locked_until = now() + (${leaseMs} || ' milliseconds')::interval,
       attempts = attempts + 1
     where id in (
       select id from jobs
-      where queue = ${queue}
-        and ((status = 'queued' and run_at <= now())
-          or (status = 'running' and locked_until < now()))
+      where queue = ${queue} and status = 'queued' and run_at <= now()
       order by priority desc, run_at asc
       limit ${limit}
       for update skip locked
