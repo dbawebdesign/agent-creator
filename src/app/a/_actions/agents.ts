@@ -3,8 +3,7 @@
 import { CronExpressionParser } from "cron-parser";
 import { and, eq, sql } from "drizzle-orm";
 import { after } from "next/server";
-import { complete as completeJob, fail as failJob } from "@/server/jobs/queue";
-import { logger } from "@/server/lib/logger";
+import { claimQueuedJobByKey, runClaimedJobInline } from "@/server/jobs/handlers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { agentSpec, APPROVAL_ACTIONS, channelKind, workflowSpec, type AgentSpec } from "@/server/agents/spec";
@@ -14,7 +13,6 @@ import type { WorkflowTrigger } from "@/server/db/schema";
 import { db, schema } from "@/server/db/client";
 import {
   addKnowledge,
-  analyzeDiscovery,
   createDiscovery,
   hireAgent,
   runWorkflowNow,
@@ -67,22 +65,14 @@ export async function startDiscovery(raw: z.input<typeof startInput>): Promise<R
  * Fallback for when no worker is running: if the Architect job is still unclaimed a few seconds after
  * creation, claim it atomically (so a worker can't double-process it) and run the Architect after the response.
  */
+/**
+ * Dev/demo fallback when no worker picked the Architect job up: claim it (with a renewed lease) and run it after the
+ * response. Production skips this path unless ROSTER_INLINE_JOBS=1 (enforced in runClaimedJobInline).
+ */
 async function analyzeInlineIfIdle(discoveryId: string) {
-  const [job] = await db()
-    .update(schema.jobs)
-    .set({ status: "running", lockedBy: "web-inline", lockedUntil: new Date(Date.now() + 5 * 60_000), attempts: sql`${schema.jobs.attempts} + 1` })
-    .where(and(eq(schema.jobs.idempotencyKey, `discovery:${discoveryId}`), eq(schema.jobs.status, "queued")))
-    .returning({ id: schema.jobs.id, attempts: schema.jobs.attempts, maxAttempts: schema.jobs.maxAttempts });
+  const job = await claimQueuedJobByKey(`discovery:${discoveryId}`);
   if (!job) return;
-  after(async () => {
-    try {
-      await analyzeDiscovery(discoveryId);
-      await completeJob(db(), job.id);
-    } catch (err) {
-      logger.error({ err, discoveryId }, "inline architect failed");
-      await failJob(db(), job, err);
-    }
-  });
+  after(() => runClaimedJobInline(job));
 }
 
 export async function pollDiscovery(slug: string, discoveryId: string) {
