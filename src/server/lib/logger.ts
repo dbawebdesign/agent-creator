@@ -12,10 +12,42 @@ export type LogContext = { requestId?: string; jobId?: string; type?: string; or
 
 const store = new AsyncLocalStorage<LogContext>();
 
+/**
+ * Database errors carry the query's parameter values ("Failed query: … params: a@b.com,…"): emails, message text.
+ * Strip them from anything logged, whatever field or message string they arrive in.
+ */
+export function scrubDbParams(text: string): string {
+  return text.replace(/\bparams: [\s\S]*?(?=\n\s*at |\n\n|$)/g, "params: [redacted]");
+}
+
+function scrubValue(v: unknown, depth = 0): unknown {
+  if (typeof v === "string") return v.includes("params:") ? scrubDbParams(v) : v;
+  if (depth > 3 || v === null || typeof v !== "object") return v;
+  if (v instanceof Error) {
+    const out: Record<string, unknown> = { type: v.name, message: scrubDbParams(v.message) };
+    if (v.stack) out.stack = scrubDbParams(v.stack);
+    const cause = (v as { cause?: unknown }).cause;
+    if (cause) out.cause = scrubValue(cause, depth + 1);
+    const code = (v as { code?: unknown }).code;
+    if (typeof code === "string") out.code = code;
+    return out;
+  }
+  if (Array.isArray(v)) return v.map((x) => scrubValue(x, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v)) out[k] = k === "params" ? "[redacted]" : scrubValue(x, depth + 1);
+  return out;
+}
+
 export const logger = pino({
   level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info"),
   base: { service: process.env.ROSTER_PROCESS ?? "roster-web" },
   mixin: () => store.getStore() ?? {},
+  formatters: { log: (obj) => scrubValue(obj) as Record<string, unknown> },
+  hooks: {
+    logMethod(args, method) {
+      method.apply(this, args.map((a) => (typeof a === "string" && a.includes("params:") ? scrubDbParams(a) : a)) as Parameters<typeof method>);
+    },
+  },
   redact: {
     paths: ["*.password", "*.token", "*.apiKey", "*.authorization", "*.secret", "headers.cookie", "headers.authorization"],
     censor: "[redacted]",

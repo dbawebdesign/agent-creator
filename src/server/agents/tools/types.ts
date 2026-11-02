@@ -55,7 +55,7 @@ export type ToolDef<S extends z.ZodType = z.ZodType> = {
  * so send_external_sms / send_external_slack are gated by it too; write_client_system also gates computer_bash.
  */
 /** Gated for every agent regardless of configuration. */
-export const ALWAYS_GATED = new Set(["change_payment_details"]);
+export const ALWAYS_GATED = new Set(["change_payment_details", "send_untrusted_reply"]);
 
 export function requiresApproval(action: string, requireApprovalFor: ReadonlySet<string>): boolean {
   if (ALWAYS_GATED.has(action) || requireApprovalFor.has(action)) return true;

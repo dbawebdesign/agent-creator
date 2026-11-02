@@ -12,11 +12,11 @@ import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
 import { rateLimit } from "@/server/security/rate-limit";
 import * as engine from "@/server/services/engine";
-import { fetchReceivedEmail, htmlToText, MAX_TEXT, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "./email";
+import { fetchReceivedEmail, htmlToText, MAX_TEXT, normalizeSubject, parseAddress, parseMessageIds, ROSTER_LOOP_HEADER, stripQuotedReply } from "./email";
 import { E164_RE, START_WORDS, STOP_WORDS } from "./sms";
 import { stripMention } from "./slack";
 import { attachmentList, attachmentNote, emailSenderTrustedForFiles, processEmailAttachments } from "./attachments";
-import { isOwnEmailDomain, orgIsInChain, resolveInboundDomain } from "./domains";
+import { orgIsInChain, ourMessageIdDomain, resolveInboundDomain } from "./domains";
 
 type Agent = typeof schema.agents.$inferSelect;
 
@@ -335,6 +335,18 @@ function headerRaw(headers: unknown, name: string): string | null {
  * a verified white-label domain — then the agent must belong to the domain's org or an org below it, so
  * maya@agents.other-agency.com can't reach Northbeam's Maya.
  */
+/**
+ * Is this inbound message our own outbound mail coming back? True when the From address is a real agent address
+ * (the handle exists and is valid on that domain), when it carries our loop header, or when its Message-ID is
+ * one we minted (newMessageId format on one of our domains).
+ */
+export async function isOwnAgentMail(database: DB, fromEmail: string, headers: unknown, messageId: string | null): Promise<boolean> {
+  if (header(headers, ROSTER_LOOP_HEADER)) return true;
+  const mid = parseMessageIds(messageId ?? header(headers, "message-id"))[0];
+  if (mid && (await ourMessageIdDomain(mid, database))) return true;
+  return (await agentForRecipients(database, [fromEmail])) !== null;
+}
+
 export async function agentForRecipients(database: DB, recipients: string[]): Promise<Agent | null> {
   const wanted: { handle: string; domain: string }[] = [];
   for (const r of recipients.slice(0, 50)) {
@@ -475,7 +487,9 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   }
   const from = parseAddress(str(full.from) ?? "");
   if (!from) return "ignored:bad-from";
-  if (await isOwnEmailDomain(from.email.split("@")[1] ?? "", database)) return "ignored:loop"; // agent ↔ agent mail loops (platform + white-label domains)
+  // Agent ↔ agent mail loops: only our OWN mail counts — a real agent address, our Message-ID, or our loop header.
+  // (Not merely a verified domain: other people at a tenant's domain must still reach every tenant.)
+  if (await isOwnAgentMail(database, from.email, full.headers, str(full.message_id))) return "ignored:loop";
 
   const headers = full.headers;
   const messageIdHeader = parseMessageIds(str(full.message_id) ?? header(headers, "message-id"))[0] ?? null;

@@ -137,9 +137,10 @@ describe("inbound routing across tenants", () => {
     expect(await inboundCount(t.customer.id)).toBe(2);
     expect(await inboundCount(other.agency.id)).toBe(0);
 
-    // Mail from any of our domains is an agent↔agent loop.
-    expect(await processResendEvent(db(), inbound(`${t.agencyAgent.emailHandle}@${agencyDomain}`, `bot@${agencyDomain}`))).toBe("ignored:loop");
-    expect(await processResendEvent(db(), inbound(`${t.agencyAgent.emailHandle}@${agencyDomain}`, "bot@agents.roster.test"))).toBe("ignored:loop");
+    // Only our own agents' addresses are loops — not anyone else at the domain (security r3 M2).
+    expect(await processResendEvent(db(), inbound(`${t.agencyAgent.emailHandle}@${agencyDomain}`, `${t.clientAgent.emailHandle}@${agencyDomain}`))).toBe("ignored:loop");
+    expect(await processResendEvent(db(), inbound(`${t.agencyAgent.emailHandle}@${agencyDomain}`, `${other.agencyAgent.emailHandle}@agents.roster.test`))).toBe("ignored:loop");
+    expect(await processResendEvent(db(), inbound(`${t.agencyAgent.emailHandle}@${agencyDomain}`, `ops@${agencyDomain}`))).toBe("stored");
   });
 });
 

@@ -11,6 +11,9 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { architect, finalizeSpec } from "@/server/agents/architect";
+import { draftsIn, internalNotes, recipientProblem, sharesNoteText } from "@/server/agents/tools/recipients";
+import type { ToolContext } from "@/server/agents/tools/types";
+import { runTrust } from "@/server/agents/trust";
 import { executeRun } from "@/server/agents/runtime";
 import { agentSpec, DEFAULT_APPROVALS, normalizeApprovals, type AgentSpec } from "@/server/agents/spec";
 import { computerProvider } from "@/server/computer";
@@ -374,7 +377,20 @@ export async function provisionAgentComputer(payload: Record<string, unknown>, d
     return;
   }
   if (!agent.computerId) {
-    const r = await provider.provision({ name: `${agent.name}-${agent.id.slice(0, 8)}` });
+    // Compare-and-set: only one caller (a job, or "Retry setup" clicked twice) gets to provision a computer.
+    const claimed = await database
+      .update(schema.agents)
+      .set({ computerStatus: "starting" })
+      .where(and(eq(schema.agents.id, agent.id), eq(schema.agents.orgId, p.orgId), isNull(schema.agents.computerId), sql`(${schema.agents.computerStatus} <> 'starting' or ${schema.agents.updatedAt} < now() - interval '10 minutes')`))
+      .returning({ id: schema.agents.id });
+    if (!claimed[0]) return;
+    let r;
+    try {
+      r = await provider.provision({ name: `${agent.name}-${agent.id.slice(0, 8)}` });
+    } catch (err) {
+      await database.update(schema.agents).set({ computerStatus: "error" }).where(and(eq(schema.agents.id, agent.id), eq(schema.agents.orgId, p.orgId), isNull(schema.agents.computerId)));
+      throw err;
+    }
     await database.update(schema.agents).set({ computerId: r.computerId, computerStatus: r.status }).where(and(eq(schema.agents.id, agent.id), eq(schema.agents.orgId, p.orgId)));
     if (r.status === "ready") return;
   } else if (agent.computerStatus === "ready") return;
@@ -809,31 +825,6 @@ export function firstDeliverableInstructions(spec: AgentSpec): string {
   return truncate(parts.join("\n\n"), 4000);
 }
 
-export type ParsedDraft = { to: string; name: string | null; subject: string; body: string };
-
-/** The email drafts in a deliverable body (`**To:** Name <addr>` / `**Subject:**` / quoted body), addressed ones only. */
-export function draftsIn(markdown: string): ParsedDraft[] {
-  const out: ParsedDraft[] = [];
-  const blocks = `\n${markdown}`.split(/\n(?=\*\*To:\*\*)/);
-  for (const b of blocks.slice(1)) {
-    const to = /^\*\*To:\*\*\s*(.+?)\s*$/m.exec(b)?.[1] ?? "";
-    const addr = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.exec(to)?.[0];
-    if (!addr) continue;
-    const subject = /^\*\*Subject:\*\*\s*(.+?)\s*$/m.exec(b)?.[1] ?? "";
-    const quoted: string[] = [];
-    let started = false;
-    for (const line of b.split("\n")) {
-      if (/^>/.test(line)) {
-        started = true;
-        quoted.push(line.replace(/^>\s?/, ""));
-      } else if (started) break;
-    }
-    if (!quoted.length) continue;
-    out.push({ to: addr.toLowerCase(), name: /^(.+?)\s*</.exec(to)?.[1]?.trim() ?? null, subject: truncate(subject || "Following up", 200), body: quoted.join("\n").trim() });
-  }
-  return out;
-}
-
 /**
  * Send what a human just approved. One outbound message per addressed draft, delivered by the channels slice (simulated
  * when no provider is configured, which it records truthfully per message). Idempotent: approving twice sends once.
@@ -842,32 +833,22 @@ async function sendApprovedDrafts(database: DB, d: typeof schema.deliverables.$i
   const drafts = draftsIn(d.body).slice(0, 20);
   if (!drafts.length) return;
   // Internal rules and the client's private change-request notes never leave in an email body.
-  const [rules, notes] = await Promise.all([
-    database
-      .select({ content: schema.memories.content })
-      .from(schema.memories)
-      .where(and(eq(schema.memories.orgId, d.orgId), eq(schema.memories.agentId, d.agentId), sql`${schema.memories.content} ~* '^(approval rule|hard rule|feedback on)'`))
-      .limit(200),
-    database
-      .select({ feedback: schema.deliverables.feedback })
-      .from(schema.deliverables)
-      .where(and(eq(schema.deliverables.orgId, d.orgId), eq(schema.deliverables.agentId, d.agentId), sql`${schema.deliverables.feedback} is not null`))
-      .limit(200),
-  ]);
-  const secrets = [...rules.map((r) => /“([^”]+)”/.exec(r.content)?.[1] ?? r.content.replace(/^[^:]+:\s*/, "")), ...notes.map((n) => n.feedback ?? "")]
-    .map((t) => t.replace(/\s+/g, " ").trim().toLowerCase())
-    .filter((t) => t.length >= 24)
-    .map((t) => t.slice(0, 48));
-  const leaks = (body: string) => {
-    const b = body.replace(/\s+/g, " ").toLowerCase();
-    return secrets.some((x) => b.includes(x));
-  };
+  const secrets = await internalNotes(database, d.orgId, d.agentId);
+  const leaks = (body: string) => sharesNoteText(body, secrets);
+  // Recipients are checked again at send time, against the run that wrote the draft (an untrusted run: sender only).
+  const ctx = await draftContext(database, d);
   const sent: Array<{ to: string; messageId: string }> = [];
   const held: Array<{ to: string; reason: string }> = [];
   for (const [n, e] of drafts.entries()) {
     if (leaks(`${e.subject}\n${e.body}`)) {
       held.push({ to: e.to, reason: "quotes an internal rule or a private note" });
       logger.warn({ deliverableId: d.id }, "approved draft held: it quotes internal notes");
+      continue;
+    }
+    const problem = ctx ? await recipientProblem(ctx, "email", e.to) : null;
+    if (problem) {
+      held.push({ to: e.to, reason: "not a recipient this agent may write to" });
+      logger.warn({ deliverableId: d.id }, "approved draft held: recipient not grounded");
       continue;
     }
     const externalId = `approved:${d.id}:${n}`;
@@ -901,6 +882,17 @@ async function sendApprovedDrafts(database: DB, d: typeof schema.deliverables.$i
     .update(schema.deliverables)
     .set({ data: { ...(d.data ?? {}), sentDrafts: sent, ...(held.length ? { heldDrafts: held } : {}), sentAt: new Date().toISOString() } })
     .where(and(eq(schema.deliverables.id, d.id), eq(schema.deliverables.orgId, d.orgId)));
+}
+
+/** The tool context of the run that wrote a deliverable, for re-checking its draft recipients (null: written by a person). */
+async function draftContext(database: DB, d: typeof schema.deliverables.$inferSelect): Promise<ToolContext | null> {
+  if (!d.runId) return null;
+  const run = (await database.select().from(schema.runs).where(and(eq(schema.runs.id, d.runId), eq(schema.runs.orgId, d.orgId))).limit(1))[0];
+  if (!run) return null;
+  const agent = await getAgent(database, d.orgId, d.agentId);
+  const workflow = run.workflowId ? ((await database.select().from(schema.workflows).where(and(eq(schema.workflows.id, run.workflowId), eq(schema.workflows.orgId, d.orgId))).limit(1))[0] ?? null) : null;
+  const trust = await runTrust(database, run);
+  return { db: database, run, agent, workflow, trust } as unknown as ToolContext;
 }
 
 /**
@@ -1261,4 +1253,4 @@ export function retargetSpec(spec: AgentSpec, fromName: string, toName: string):
   });
 }
 
-export { LlmError };
+export { LlmError, draftsIn };

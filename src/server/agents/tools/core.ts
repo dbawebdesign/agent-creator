@@ -12,7 +12,7 @@ import { normalizeWhitespace, splitSentences, truncate } from "@/server/llm/text
 import { recallMemories, searchKnowledge } from "@/server/knowledge";
 import { sha256 } from "@/server/security/crypto";
 import { normalizePhone, type Participant } from "../trust";
-import { quotesInternalNotes, recipientProblem } from "./recipients";
+import { draftAddressesIn, quotesInternalNotes, recipientProblem, untrustedRecipientProblem } from "./recipients";
 import { defineTool, ok, toolError, type ToolContext } from "./types";
 
 const DELIVERABLE_KINDS = ["report", "document", "table", "email_draft", "message"] as const;
@@ -113,6 +113,15 @@ export const createDeliverable = defineTool({
     preview: z.string().max(400).optional().describe("One sentence on what is inside, for the client's inbox and portal list."),
     data: z.record(z.string(), z.unknown()).optional(),
   }),
+  /** An email draft may only be addressed to someone the run could send to (checked again when it is approved). */
+  async precheck(input, ctx) {
+    const addresses = draftAddressesIn(input.body);
+    for (const to of addresses.slice(0, 20)) {
+      const problem = await recipientProblem(ctx, "email", to);
+      if (problem) return `This draft is addressed to ${to}, which this run may not write to. ${problem}`;
+    }
+    return null;
+  },
   async run(input, ctx) {
     const { db, run, agent } = ctx;
     const request = requestTextOf(run);
@@ -379,6 +388,8 @@ export const sendMessage = defineTool({
    */
   async approvalAction(input, ctx) {
     if (mentionsPaymentDetails(`${input.subject ?? ""}\n${input.text}`)) return "change_payment_details";
+    // Runs driven by outside content reply only with a human's approval, whatever the agency configured.
+    if (!ctx.trust.trusted) return "send_untrusted_reply";
     if (input.channel === "portal") return null;
     const action = `send_external_${input.channel}`;
     const p = ctx.trust.participant;
@@ -391,6 +402,7 @@ export const sendMessage = defineTool({
   /** Refused before any approval card: sends from a change request, ungrounded recipients, quoted internal notes. */
   async precheck(input, ctx) {
     if (ctx.run.input?.kind === "revision") return "A change request only revises the deliverable — nothing is sent. Deliver the new version with create_deliverable.";
+    if (!ctx.trust.trusted) return untrustedRecipientProblem(ctx, input.channel, input.to);
     if (input.channel === "portal") return null;
     if (await quotesInternalNotes(ctx, `${input.subject ?? ""}\n${input.text}`)) {
       return "This message quotes an internal rule or a private note from the client. Rewrite it without them (or draft it for the team instead).";
@@ -512,7 +524,15 @@ export const scheduleFollowup = defineTool({
         conversationId: ctx.run.conversationId,
         trigger: "schedule",
         status: "queued",
-        input: { kind: "followup", task: input.task, parentRunId: ctx.run.id, parentToolUseId: ctx.toolUseId, at: when.toISOString() },
+        input: {
+          kind: "followup",
+          task: input.task,
+          parentRunId: ctx.run.id,
+          parentToolUseId: ctx.toolUseId,
+          at: when.toISOString(),
+          // Trust never launders through a follow-up: one scheduled from outside content stays untrusted.
+          ...(untrustedOrigin(ctx) ? { origin: untrustedOrigin(ctx) } : {}),
+        },
       });
       await enqueue(tx, "agent.run", { orgId: ctx.run.orgId, runId }, { orgId: ctx.run.orgId, runAt: when, idempotencyKey: `followup:${ctx.run.id}:${ctx.toolUseId}` });
     });
@@ -520,3 +540,18 @@ export const scheduleFollowup = defineTool({
     return ok({ scheduled: true, runId, at: when.toISOString() });
   },
 });
+
+/** The origin a run hands down to anything it schedules, when it handled outside content. */
+function untrustedOrigin(ctx: ToolContext): Record<string, unknown> | null {
+  const inherited = ctx.run.input?.origin as Record<string, unknown> | undefined;
+  if (inherited?.untrusted === true) return inherited;
+  if (ctx.trust.trusted) return null;
+  const payload = (ctx.run.input?.eventPayload ?? {}) as Record<string, unknown>;
+  return {
+    untrusted: true,
+    reason: ctx.trust.reason,
+    sender: ctx.trust.sender,
+    conversationId: ctx.run.conversationId ?? (typeof payload.conversationId === "string" ? payload.conversationId : null),
+    messageId: typeof ctx.run.input?.messageId === "string" ? ctx.run.input.messageId : typeof payload.messageId === "string" ? payload.messageId : null,
+  };
+}

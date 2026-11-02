@@ -132,12 +132,45 @@ export async function conversationParticipant(database: DB, orgId: string, conve
   return { channel: conv.channel, userId, email: email?.toLowerCase() ?? null, phone, slackChannel, internal };
 }
 
-/** Classify the run's triggering sender. Non-message runs (schedules, manual, setup) are trusted. */
-export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
-  const participant = run.conversationId ? await conversationParticipant(database, run.orgId, run.conversationId) : null;
-  if (run.input?.kind !== "message") return { trusted: true, reason: "not message-triggered", sender: null, authenticated: true, participant };
+/** Inbound events whose content (and sender) come from outside the business. */
+export const EXTERNAL_EVENTS = new Set(["email.received", "sms.received", "slack.message", "webhook"]);
 
-  const messageId = typeof run.input.messageId === "string" ? run.input.messageId : null;
+/** Where an untrusted run's work came from; inherited by every follow-up it schedules. */
+export type RunOrigin = { untrusted: true; reason: string; sender: string | null; conversationId: string | null; messageId: string | null };
+
+export function originOf(run: RunRow): RunOrigin | null {
+  const o = run.input?.origin as Partial<RunOrigin> | undefined;
+  return o && o.untrusted === true
+    ? { untrusted: true, reason: String(o.reason ?? "an untrusted run"), sender: o.sender ?? null, conversationId: o.conversationId ?? null, messageId: o.messageId ?? null }
+    : null;
+}
+
+/**
+ * Classify the run's triggering sender. Message runs are classified by their sender; runs fired by inbound events
+ * (email.received, sms.received, slack.message, webhook) by the triggering message's sender (no message → untrusted);
+ * runs scheduled by an untrusted run inherit its origin. Other runs (schedules, manual, setup) are trusted.
+ */
+export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
+  const origin = originOf(run);
+  if (origin) {
+    const participant = origin.conversationId ? await conversationParticipant(database, run.orgId, origin.conversationId) : null;
+    return { trusted: false, reason: `scheduled by ${origin.reason}`, sender: origin.sender, authenticated: false, participant };
+  }
+  const event = typeof run.input?.event === "string" ? run.input.event : null;
+  if (run.input?.kind !== "message" && event && EXTERNAL_EVENTS.has(event)) {
+    const payload = (run.input?.eventPayload ?? {}) as Record<string, unknown>;
+    const messageId = typeof payload.messageId === "string" ? payload.messageId : null;
+    if (!messageId) return { trusted: false, reason: "external event content", sender: null, authenticated: false, participant: null };
+    return classifyMessage(database, run, messageId, typeof payload.conversationId === "string" ? payload.conversationId : null);
+  }
+  if (run.input?.kind !== "message") {
+    const participant = run.conversationId ? await conversationParticipant(database, run.orgId, run.conversationId) : null;
+    return { trusted: true, reason: "not message-triggered", sender: null, authenticated: true, participant };
+  }
+  return classifyMessage(database, run, typeof run.input.messageId === "string" ? run.input.messageId : null, run.conversationId);
+}
+
+async function classifyMessage(database: DB, run: RunRow, messageId: string | null, conversationId: string | null): Promise<RunTrust> {
   const msg = messageId
     ? (
         await database
@@ -147,10 +180,12 @@ export async function runTrust(database: DB, run: RunRow): Promise<RunTrust> {
           .limit(1)
       )[0]
     : undefined;
+  const convId = conversationId ?? msg?.conversationId ?? null;
+  const participant = convId ? await conversationParticipant(database, run.orgId, convId) : null;
   if (!msg) return { trusted: false, reason: "triggering message not found", sender: null, authenticated: false, participant };
   const meta = (msg.meta ?? {}) as Record<string, unknown>;
-  const conv = run.conversationId
-    ? (await database.select().from(schema.conversations).where(and(eq(schema.conversations.id, run.conversationId), eq(schema.conversations.orgId, run.orgId))).limit(1))[0]
+  const conv = convId
+    ? (await database.select().from(schema.conversations).where(and(eq(schema.conversations.id, convId), eq(schema.conversations.orgId, run.orgId))).limit(1))[0]
     : undefined;
   const channel = typeof meta.channel === "string" ? meta.channel : (conv?.channel ?? "portal");
 

@@ -10,13 +10,15 @@
  *   pass); without a key (dev/test) the domain is marked verified + simulated.
  */
 import "server-only";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { resolveTxt } from "node:dns/promises";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { readBytesCapped } from "@/server/api/body";
 import { db, schema, type DB } from "@/server/db/client";
 import type { DnsRecord } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
 import { audit } from "@/server/security/audit";
+import { randomToken } from "@/server/security/crypto";
 
 export type EmailDomain = typeof schema.emailDomains.$inferSelect;
 
@@ -74,7 +76,7 @@ export async function emailDomainsFor(orgIds: string[], database: DB = db()): Pr
       where c.depth < 8
     )
     select distinct on (c.start_id) c.start_id, d.domain
-    from chain c join email_domains d on d.org_id = c.id and d.status = 'verified'
+    from chain c join email_domains d on d.org_id = c.id and d.status = 'verified' and (d.simulated = false or ${simulationAllowed()})
     order by c.start_id, c.depth`);
   for (const row of r.rows as { start_id: string; domain: string }[]) out.set(row.start_id, row.domain);
   for (const id of unique) if (!out.has(id)) out.set(id, platformDomain());
@@ -106,7 +108,7 @@ export async function resolveInboundDomain(domain: string, database: DB = db()):
   const [row] = await database
     .select({ orgId: schema.emailDomains.orgId })
     .from(schema.emailDomains)
-    .where(and(eq(schema.emailDomains.domain, d), eq(schema.emailDomains.status, "verified")))
+    .where(and(eq(schema.emailDomains.domain, d), eq(schema.emailDomains.status, "verified"), simulationAllowed() ? sql`true` : eq(schema.emailDomains.simulated, false)))
     .limit(1);
   return row ? { platform: false, orgId: row.orgId } : null;
 }
@@ -116,19 +118,67 @@ export async function orgIsInChain(agentOrgId: string, domainOrgId: string, data
   return (await chainIds(database, agentOrgId)).includes(domainOrgId);
 }
 
-/** Domains that are ours (platform + all verified), for loop detection on From. */
-export async function isOwnEmailDomain(domain: string, database: DB = db()): Promise<boolean> {
-  return (await resolveInboundDomain(domain, database)) !== null;
+/** The local part email.ts newMessageId() produces: base36 time "." 12 base64url chars. */
+const OUR_MESSAGE_ID_LOCAL = /^[0-9a-z]{6,12}\.[A-Za-z0-9_-]{12}$/;
+
+/** Does `<local@domain>` look like a Message-ID we minted, on one of our domains? */
+export async function ourMessageIdDomain(messageId: string, database: DB = db()): Promise<boolean> {
+  const m = /^<([^@<>\s]{1,64})@([a-z0-9.-]{1,253})>$/i.exec(messageId.trim());
+  if (!m || !OUR_MESSAGE_ID_LOCAL.test(m[1]!)) return false;
+  return (await resolveInboundDomain(m[2]!, database)) !== null;
+}
+
+/**
+ * Verification without DNS ("simulated") is honored only in dev/test with no Resend key. In production, or as
+ * soon as a key is configured, simulated rows stop counting and must be re-verified for real.
+ */
+export function simulationAllowed(): boolean {
+  const e = env();
+  return e.NODE_ENV !== "production" && !e.RESEND_API_KEY;
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
+
+/** Pending claims lapse after this; the domain is then free to claim again (by anyone). */
+export const CLAIM_TTL_MS = 72 * 3600_000;
+
+/** Mailbox providers: nobody "owns" these, so they can never be a workspace's agent domain. */
+const FREE_MAIL = [
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "ymail.com",
+  "rocketmail.com", "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com",
+  "gmx.net", "gmx.de", "web.de", "mail.com", "zoho.com", "yandex.com", "yandex.ru", "mail.ru", "qq.com", "163.com",
+  "126.com", "fastmail.com", "hey.com", "tutanota.com", "tuta.io", "duck.com", "hushmail.com", "comcast.net",
+  "verizon.net", "att.net", "btinternet.com", "orange.fr", "free.fr", "libero.it", "naver.com", "rediffmail.com",
+];
+
+/** Common multi-label public suffixes (bare TLDs are already refused: a domain needs 2+ labels). */
+const PUBLIC_SUFFIXES = new Set([
+  "co.uk", "org.uk", "me.uk", "ltd.uk", "plc.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "org.nz",
+  "co.jp", "ne.jp", "or.jp", "com.br", "com.cn", "com.hk", "com.tw", "co.in", "co.za", "com.mx", "com.ar", "com.sg",
+  "com.my", "co.kr", "com.tr", "co.il", "com.ua", "com.pl", "co.id", "com.ph", "com.vn", "com.ng", "com.eg",
+  "github.io", "gitlab.io", "vercel.app", "netlify.app", "herokuapp.com", "pages.dev", "workers.dev", "web.app",
+  "firebaseapp.com", "appspot.com", "blogspot.com", "azurewebsites.net", "cloudfront.net", "amazonaws.com",
+  "onrender.com", "fly.dev", "railway.app", "ngrok.io", "ngrok-free.app", "repl.co", "glitch.me", "wixsite.com",
+  "squarespace.com", "myshopify.com",
+]);
+
+/** Why a domain can't be claimed, or null when it's acceptable. */
+export function domainRefusal(domain: string): string | null {
+  const platform = platformDomain();
+  if (domain === platform || domain.endsWith(`.${platform}`)) return "That's the platform's own domain. Use a domain you own.";
+  if (FREE_MAIL.some((f) => domain === f || domain.endsWith(`.${f}`))) return "That's a public mailbox provider. Use a domain your business owns.";
+  if (PUBLIC_SUFFIXES.has(domain)) return "That's a public suffix, not a domain. Use a domain your business owns.";
+  const tld = domain.split(".").pop()!;
+  if (RESERVED_TLDS.has(tld) && !simulationAllowed()) return "Use a real, public domain.";
+  return null;
+}
 
 export async function getOrgEmailDomain(orgId: string): Promise<EmailDomain | null> {
   const [row] = await db().select().from(schema.emailDomains).where(eq(schema.emailDomains.orgId, orgId)).limit(1);
   return row ?? null;
 }
 
-type ResendDomain = { id?: string; name?: string; status?: string; records?: unknown[] };
+type ResendDomain = { id?: string; name?: string; status?: string; records?: unknown[]; data?: ResendDomain[] };
 
 async function resend(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<ResendDomain | null> {
   const key = env().RESEND_API_KEY;
@@ -164,38 +214,76 @@ function toRecords(raw: unknown[] | undefined): DnsRecord[] {
   });
 }
 
-function statusFrom(resendStatus: string | undefined): EmailDomain["status"] {
-  return resendStatus === "verified" ? "verified" : resendStatus === "failed" ? "failed" : "pending";
+/** Our ownership record: proves THIS workspace controls the domain (Resend's records are shared by all claimers). */
+export function ownershipRecord(domain: string, token: string): DnsRecord {
+  return { record: "Ownership", name: `_roster-verify.${domain}`, type: "TXT", value: `roster-verify=${token}` };
+}
+
+async function ownershipPublished(domain: string, token: string): Promise<boolean> {
+  try {
+    const txt = await resolveTxt(`_roster-verify.${domain}`);
+    return txt.some((parts) => parts.join("") === `roster-verify=${token}`);
+  } catch {
+    return false;
+  }
+}
+
+/** Register the domain with Resend (or find it when another claim already registered it). */
+async function ensureResendDomain(domain: string): Promise<{ id: string | null; records: DnsRecord[]; status?: string }> {
+  try {
+    const created = await resend("POST", "/domains", { name: domain });
+    return { id: created?.id ?? null, records: toRecords(created?.records), status: created?.status };
+  } catch (err) {
+    if (!(err instanceof DomainError)) throw err;
+    const list = await resend("GET", "/domains").catch(() => null);
+    const found = (list?.data ?? []).find((d) => d.name?.toLowerCase() === domain);
+    if (!found?.id) throw err;
+    const got = await resend("GET", `/domains/${encodeURIComponent(found.id)}`).catch(() => null);
+    return { id: found.id, records: toRecords(got?.records), status: got?.status };
+  }
+}
+
+const NO_PROVIDER_NOTE = "Connect email sending (Resend) to verify this domain.";
+
+async function verifiedElsewhere(database: DB, domain: string, orgId: string): Promise<boolean> {
+  const rows = await database
+    .select({ orgId: schema.emailDomains.orgId, simulated: schema.emailDomains.simulated })
+    .from(schema.emailDomains)
+    .where(and(eq(schema.emailDomains.domain, domain), eq(schema.emailDomains.status, "verified")));
+  return rows.some((r) => r.orgId !== orgId && (!r.simulated || simulationAllowed()));
 }
 
 /**
- * Set (or replace) the org's email domain. Callers must authorize admin on `orgId` first.
- * Agents switch to it only once it's verified; until then they keep their current address.
+ * Claim (or replace) the org's email domain. Callers must authorize admin on `orgId` first.
+ * - Refuses mailbox providers, public suffixes, the platform domain, and domains another workspace has VERIFIED.
+ *   Pending claims never block anyone; they lapse after CLAIM_TTL_MS, and the first claim verified by DNS wins.
+ * - Dev/test without a Resend key: verified at once (simulated). Production without a key: stays pending
+ *   ("Connect email sending…"). With a key: pending until Resend's records AND our ownership TXT are published.
+ * Agents switch to the domain only once it's verified.
  */
 export async function setOrgEmailDomain(orgId: string, rawDomain: string, actor?: { userId?: string | null; ip?: string | null }): Promise<EmailDomain> {
   const domain = normalizeEmailDomain(rawDomain);
   if (!domain) throw new DomainError("invalid_input", "Enter a domain like agents.yourcompany.com.");
-  const platform = platformDomain();
-  if (domain === platform || domain.endsWith(`.${platform}`)) throw new DomainError("invalid_input", "That's the platform's own domain. Use a domain you own.");
-  const tld = domain.split(".").pop()!;
-  const simulatedOk = !env().RESEND_API_KEY;
-  if (RESERVED_TLDS.has(tld) && !simulatedOk) throw new DomainError("invalid_input", "Use a real, public domain.");
-
+  const refusal = domainRefusal(domain);
+  if (refusal) throw new DomainError("invalid_input", refusal);
   const database = db();
-  const [taken] = await database.select({ orgId: schema.emailDomains.orgId }).from(schema.emailDomains).where(eq(schema.emailDomains.domain, domain)).limit(1);
-  if (taken && taken.orgId !== orgId) throw new DomainError("conflict", "That domain is already in use by another workspace.");
+  if (await verifiedElsewhere(database, domain, orgId)) throw new DomainError("conflict", "That domain is already in use by another workspace.");
   const current = await getOrgEmailDomain(orgId);
-  if (current?.domain === domain) return current;
+  if (current?.domain === domain && current.status !== "failed" && (!current.simulated || simulationAllowed())) return current;
 
-  let values: Pick<EmailDomain, "status" | "providerId" | "records" | "simulated" | "verifiedAt">;
-  if (simulatedOk) {
-    values = { status: "verified", providerId: null, records: [], simulated: true, verifiedAt: new Date() };
+  const token = randomToken(16);
+  const expiresAt = new Date(Date.now() + CLAIM_TTL_MS);
+  let values: Pick<EmailDomain, "status" | "providerId" | "records" | "simulated" | "verifiedAt" | "token" | "expiresAt" | "note">;
+  if (simulationAllowed()) {
+    values = { status: "verified", providerId: null, records: [], simulated: true, verifiedAt: new Date(), token, expiresAt: null, note: "Test mode: not checked against DNS." };
+  } else if (!env().RESEND_API_KEY) {
+    values = { status: "pending", providerId: null, records: [ownershipRecord(domain, token)], simulated: false, verifiedAt: null, token, expiresAt, note: NO_PROVIDER_NOTE };
   } else {
-    const created = await resend("POST", "/domains", { name: domain });
-    values = { status: statusFrom(created?.status), providerId: created?.id ?? null, records: toRecords(created?.records), simulated: false, verifiedAt: created?.status === "verified" ? new Date() : null };
+    const r = await ensureResendDomain(domain);
+    values = { status: "pending", providerId: r.id, records: [...r.records, ownershipRecord(domain, token)], simulated: false, verifiedAt: null, token, expiresAt, note: "Publish these DNS records, then check again." };
   }
-  // Replacing: release the old provider domain (best effort).
-  if (current?.providerId) await resend("DELETE", `/domains/${encodeURIComponent(current.providerId)}`).catch(() => null);
+  // Replacing a different domain: release the old provider domain (best effort) unless others still claim it.
+  if (current?.providerId && current.domain !== domain) await resend("DELETE", `/domains/${encodeURIComponent(current.providerId)}`).catch(() => null);
   const [row] = await database
     .insert(schema.emailDomains)
     .values({ orgId, domain, ...values, checkedAt: new Date() })
@@ -205,29 +293,82 @@ export async function setOrgEmailDomain(orgId: string, rawDomain: string, actor?
   return row!;
 }
 
-/** Ask Resend to (re)check DNS and store the result. No-op for simulated domains. */
+/**
+ * Re-check a claim: lapses expired pending claims, converts simulated rows to real claims once real verification
+ * is available, and marks the claim verified only when Resend's records and our ownership TXT both check out
+ * and no other workspace verified the domain first. Other workspaces' pending claims on it then fail.
+ */
 export async function checkOrgEmailDomain(orgId: string): Promise<EmailDomain> {
-  const current = await getOrgEmailDomain(orgId);
+  let current = await getOrgEmailDomain(orgId);
   if (!current) throw new DomainError("not_found", "No email domain set.");
-  if (current.simulated || !current.providerId || !env().RESEND_API_KEY) return current;
-  const id = encodeURIComponent(current.providerId);
+  const database = db();
+  const update = async (set: Partial<EmailDomain>) => {
+    const [row] = await database
+      .update(schema.emailDomains)
+      .set({ ...set, checkedAt: new Date() })
+      .where(and(eq(schema.emailDomains.id, current!.id), eq(schema.emailDomains.orgId, orgId)))
+      .returning();
+    return row!;
+  };
+
+  if (current.simulated) {
+    if (simulationAllowed()) return current;
+    // A key is configured now (or this is production): the test-mode verification no longer counts.
+    const token = current.token ?? randomToken(16);
+    current = await update({ status: "pending", simulated: false, verifiedAt: null, token, expiresAt: new Date(Date.now() + CLAIM_TTL_MS), records: [ownershipRecord(current.domain, token)], note: NO_PROVIDER_NOTE });
+  }
+  if (current.status === "verified") return current;
+  if (current.status === "pending" && current.expiresAt && current.expiresAt.getTime() < Date.now()) {
+    return update({ status: "failed", note: "This claim expired. Set the domain again to restart verification." });
+  }
+  if (!env().RESEND_API_KEY) return update({ note: NO_PROVIDER_NOTE });
+  if (await verifiedElsewhere(database, current.domain, orgId)) return update({ status: "failed", note: "Another workspace verified this domain first." });
+
+  let providerId = current.providerId;
+  let records = current.records;
+  if (!providerId) {
+    const r = await ensureResendDomain(current.domain);
+    providerId = r.id;
+    records = [...r.records, ownershipRecord(current.domain, current.token ?? "")];
+  }
+  if (!providerId) return update({ note: "Couldn't register the domain with Resend. Try again." });
+  const id = encodeURIComponent(providerId);
   await resend("POST", `/domains/${id}/verify`).catch((err: unknown) => {
     if (!(err instanceof DomainError)) throw err;
   });
   const got = await resend("GET", `/domains/${id}`);
-  const status = statusFrom(got?.status);
-  const [row] = await db()
-    .update(schema.emailDomains)
-    .set({ status, records: got?.records ? toRecords(got.records) : current.records, checkedAt: new Date(), verifiedAt: status === "verified" ? (current.verifiedAt ?? new Date()) : null })
-    .where(and(eq(schema.emailDomains.id, current.id), eq(schema.emailDomains.orgId, orgId)))
-    .returning();
-  return row!;
+  if (got?.records) records = [...toRecords(got.records), ownershipRecord(current.domain, current.token ?? "")];
+  const providerOk = got?.status === "verified";
+  const ownerOk = current.token ? await ownershipPublished(current.domain, current.token) : false;
+  if (got?.status === "failed") return update({ providerId, records, status: "failed", note: "Resend couldn't verify the DNS records. Fix them and set the domain again." });
+  if (!providerOk || !ownerOk) {
+    return update({ providerId, records, note: !ownerOk ? "Waiting for the ownership TXT record." : "Waiting for Resend to see the DNS records." });
+  }
+  try {
+    const row = await database.transaction(async (tx) => {
+      const [won] = await tx
+        .update(schema.emailDomains)
+        .set({ providerId, records, status: "verified", verifiedAt: new Date(), expiresAt: null, note: null, checkedAt: new Date() })
+        .where(and(eq(schema.emailDomains.id, current!.id), eq(schema.emailDomains.orgId, orgId)))
+        .returning();
+      // First verified claim wins; everyone else's pending claim on this domain ends.
+      await tx
+        .update(schema.emailDomains)
+        .set({ status: "failed", note: "Another workspace verified this domain.", checkedAt: new Date() })
+        .where(and(eq(schema.emailDomains.domain, current!.domain), ne(schema.emailDomains.orgId, orgId), ne(schema.emailDomains.status, "verified")));
+      return won!;
+    });
+    return row;
+  } catch (err) {
+    if ((err as { code?: string }).code === "23505") return update({ status: "failed", note: "Another workspace verified this domain first." });
+    throw err;
+  }
 }
 
 export async function removeOrgEmailDomain(orgId: string, actor?: { userId?: string | null; ip?: string | null }): Promise<void> {
   const current = await getOrgEmailDomain(orgId);
   if (!current) return;
-  if (current.providerId) await resend("DELETE", `/domains/${encodeURIComponent(current.providerId)}`).catch(() => null);
+  if (current.providerId && current.status === "verified") await resend("DELETE", `/domains/${encodeURIComponent(current.providerId)}`).catch(() => null);
   await db().delete(schema.emailDomains).where(and(eq(schema.emailDomains.id, current.id), eq(schema.emailDomains.orgId, orgId)));
   await audit({ orgId, actorType: actor?.userId ? "user" : "system", actorId: actor?.userId ?? null, action: "email_domain.removed", targetType: "email_domain", targetId: current.id, metadata: { domain: current.domain }, ip: actor?.ip ?? null });
 }
@@ -245,10 +386,24 @@ export type EmailDomainView = {
   records: DnsRecord[];
   verifiedAt: string | null;
   checkedAt: string | null;
+  expiresAt: string | null;
+  /** Plain-words status, e.g. "Connect email sending (Resend) to verify this domain." */
+  note: string | null;
 };
 
 export function domainView(d: EmailDomain): EmailDomainView {
-  return { domain: d.domain, status: d.status, simulated: d.simulated, records: d.records, verifiedAt: d.verifiedAt?.toISOString() ?? null, checkedAt: d.checkedAt?.toISOString() ?? null };
+  // A test-mode verification that no longer counts (key configured / production) shows as pending.
+  const stale = d.simulated && !simulationAllowed();
+  return {
+    domain: d.domain,
+    status: stale ? "pending" : d.status,
+    simulated: d.simulated,
+    records: d.records,
+    verifiedAt: stale ? null : (d.verifiedAt?.toISOString() ?? null),
+    checkedAt: d.checkedAt?.toISOString() ?? null,
+    expiresAt: d.expiresAt?.toISOString() ?? null,
+    note: stale ? "Test-mode verification. Check again to verify against DNS." : d.note,
+  };
 }
 
 /** For a settings page: this org's own domain (if any) and the domain its agents use right now. */

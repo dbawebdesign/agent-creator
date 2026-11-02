@@ -112,7 +112,8 @@ export function EmailDomainForm({
           ) : (
             <>
               <p className="text-[12.5px] text-ink-3">
-                Add these records at your DNS provider, then check again. Until then agents keep using @{effectiveDomain}.
+                {domain.note ?? "Add these records at your DNS provider, then check again."} Until it's verified, agents keep using @{effectiveDomain}.
+                {domain.status === "pending" && domain.expiresAt ? ` This claim lapses ${new Date(domain.expiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })} if it isn't verified.` : ""}
               </p>
               {domain.records.length > 0 ? (
                 <div className="overflow-x-auto rounded-md border border-line">

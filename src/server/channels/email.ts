@@ -66,6 +66,9 @@ export function newMessageId(domain = env().EMAIL_DOMAIN): string {
   return `<${Date.now().toString(36)}.${randomBytes(9).toString("base64url")}@${domain}>`;
 }
 
+/** Stamped on every outbound agent email; inbound mail carrying it is our own mail looping back. */
+export const ROSTER_LOOP_HEADER = "X-Roster-Loop";
+
 /** Keep only well-formed message ids from untrusted headers (In-Reply-To / References). */
 export function parseMessageIds(raw: string | null | undefined, max = 20): string[] {
   if (!raw) return [];
@@ -225,6 +228,7 @@ export async function sendEmail(msg: OutboundEmail): Promise<SendResult> {
     // to answer it, which prevents agent ↔ autoresponder loops.
     "Auto-Submitted": msg.autoSubmitted ?? "auto-generated",
     "X-Auto-Response-Suppress": "All",
+    [ROSTER_LOOP_HEADER]: "1",
   };
   if (msg.inReplyTo && MSGID_RE.test(msg.inReplyTo)) headers["In-Reply-To"] = msg.inReplyTo;
   const refs = (msg.references ?? []).filter((r) => MSGID_RE.test(r)).slice(-20);
