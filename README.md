@@ -92,3 +92,17 @@ On macOS use `sed -i ''`. `APP_URL=http://localhost:3000` is accepted for local 
 | `npm run build:worker` | Bundle `dist/worker.mjs`, `dist/migrate.mjs`, `dist/worker-health.mjs` (worker image) |
 | `npm run db:generate` / `db:migrate` / `db:seed` | Drizzle migrations and demo data |
 | `npm run typecheck` / `npm test` | TypeScript and Vitest (uses `roster_test`) |
+
+## Status (Nov 2, 2026, 08:20 UTC)
+
+Built in one overnight gauntlet loop (builders + fresh-context critics; log in `.workbench/WORKBENCH.md`, reports in
+`.workbench/critique/`).
+
+- **Verified on `main`:** fresh migrate + seed; 350/350 tests (41 files) on a fresh database; strict typecheck; production
+  build with no warnings; worker bundle; standalone server healthy with CSP, HSTS and frame headers; security critic
+  findings (3 rounds) fixed and re-verified; scale measured on 2k orgs / 1.1M runs (see the workbench).
+- **Last critic scores:** Studio design 8/10, Portal design 8.5/10, product "sell it tomorrow?" 5/10 (judged on the
+  offline model).
+- **Before selling it:** run the Architect and agents on Claude (`ANTHROPIC_API_KEY`) and re-run the product critic; the
+  Anthropic adapter is unit-tested against a mocked SDK but has not been exercised against the live API. Connect Resend,
+  Twilio, Slack and Stripe with real keys (all simulated or test mode here). See the final report for the full list.
