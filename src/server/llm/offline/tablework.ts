@@ -497,7 +497,7 @@ export function linkFrom(snips: Snip[], kind: "book" | "pay" = "book"): string |
 }
 
 /** One reminder to the person behind a row (owner/client/contact; never the pet or the item). */
-export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; channel: "text" | "email"; link: string | null; topic: string | null; forbidden: string[] }): RowDraft {
+export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; channel: "text" | "email"; link: string | null; topic: string | null; forbidden: string[]; now?: Date }): RowDraft {
   const { cols } = p;
   const H = p.table.headers;
   const personRaw = cols.person >= 0 ? (r[cols.person] ?? "").trim() : "";
@@ -509,7 +509,7 @@ export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; 
   const itemCol = cols.categorical.find((i) => /vaccine|service|item|product|plan|treatment|invoice|type|policy|reason/.test(norm(H[i]!))) ?? -1;
   const item = itemCol >= 0 ? (r[itemCol] ?? "").trim() : (o.topic ?? "");
   const due = cols.due >= 0 ? parseDate(r[cols.due] ?? "") : null;
-  const od = cols.overdue >= 0 ? numVal(r[cols.overdue] ?? "") : p.derived?.values.get(r) ?? null;
+  const od = cols.overdue >= 0 ? numVal(r[cols.overdue] ?? "") : (p.derived?.values.get(r) ?? (due ? Math.floor(((o.now ?? new Date()).getTime() - due.getTime()) / DAY) : null));
   const itemHead = itemCol >= 0 ? norm(H[itemCol]!) : "";
   const itemPhrase0 = item ? (/^[A-Z]{2,}/.test(item) ? item : item.toLowerCase()) : "";
   const itemPhrase = itemPhrase0 && /^(?:vaccine|vaccination|service|treatment|plan|policy|invoice)$/.test(itemHead) && !itemPhrase0.toLowerCase().includes(itemHead) ? `${itemPhrase0} ${itemHead}` : itemPhrase0;
@@ -539,11 +539,24 @@ export function renderDraft(d: RowDraft): string[] {
 
 const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 
+/** Criteria as prose: "days overdue > 100" → "more than 100 days overdue"; "days overdue > 0" → "overdue". */
+export function criteriaProse(applied: string[]): string {
+  const one = (a: string) =>
+    a
+      .replace(/^days overdue > 0$|^.+ before today$/, "overdue")
+      .replace(/^days overdue ([>≥<≤]) (\d+)$/, (_m, op: string, n: string) => `${op === ">" ? "more than" : op === "≥" ? "at least" : op === "<" ? "less than" : "at most"} ${n} days overdue`)
+      .replace(/^(.+?) ([>≥<≤]) (\$?[\d.]+)$/, (_m, c: string, op: string, n: string) => `${c} ${op === ">" ? "over" : op === "≥" ? "at least" : op === "<" ? "under" : "at most"} ${n}`);
+  const xs = applied.map(one);
+  // "overdue" is implied by "more than 90 days overdue".
+  const ys = xs.filter((x) => !(x === "overdue" && xs.some((y) => y !== x && /overdue/.test(y))));
+  return ys.length <= 1 ? (ys[0] ?? "") : `${ys.slice(0, -1).join(", ")} and ${ys[ys.length - 1]}`;
+}
+
 /** One-line description of what was done to the rows. */
 export function describePlan(p: Plan, noun: string): string {
   const n = p.rows.length;
   const total = p.table.total ?? p.table.rows.length;
-  const crit = p.applied.length ? ` where ${p.applied.join(", ")}` : "";
+  const crit = p.applied.length ? ` (${criteriaProse(p.applied)})` : "";
   const sort = p.sortedBy ? `, ${p.sortedBy}` : "";
   const read = p.table.rows.length < total ? ` I could only read ${p.table.rows.length} of the ${total} rows in ${p.table.title}, so this may be incomplete.` : "";
   return `${n} ${n === 1 ? noun : plural(noun)}${crit}${sort} — from ${p.table.title} (${total} ${total === 1 ? "row" : "rows"}).${read}`;
@@ -577,13 +590,15 @@ export function answerFromRows(question: string, tables: FileTable[], rules: str
   const show = p.rows.slice(0, 12).map((r) => {
     const name = p.cols.subject >= 0 ? r[p.cols.subject] : r[0];
     const od = p.cols.overdue >= 0 ? r[p.cols.overdue] : p.derived?.values.get(r);
-    const bits = [od != null && od !== "" ? `${od} days` : null, p.cols.person >= 0 ? r[p.cols.person] : null].filter(Boolean);
-    return `${name}${bits.length ? ` (${bits.join(", ")})` : ""}`;
+    const who = p.cols.person >= 0 && r[p.cols.person] !== name ? r[p.cols.person] : null;
+    return `${name}${od != null && od !== "" ? ` — ${od} days` : ""}${who ? ` (${who})` : ""}`;
   });
-  const crit = p.applied.length ? p.applied.join(", ") : p.sortedBy ?? "";
-  if (!p.rows.length) return `None: no ${plural(noun)} in ${p.table.title} match ${crit} (${p.table.total ?? p.table.rows.length} rows checked).`;
+  const crit = p.applied.length ? criteriaProse(p.applied) : "";
+  const total = p.table.total ?? p.table.rows.length;
+  if (!p.rows.length) return `None: no ${plural(noun)} in ${p.table.title} are ${crit || "a match"} (${total} rows checked).`;
   const many = p.rows.length === 1 ? `1 ${noun}` : `${p.rows.length} ${plural(noun)}`;
-  const partial = p.table.total != null && p.table.rows.length < p.table.total ? ` (I could read ${p.table.rows.length} of ${p.table.total} rows)` : "";
-  const left = p.excluded.length ? ` Left out by your rules: ${p.excluded.map((e) => (p.cols.subject >= 0 ? e.row[p.cols.subject] : e.row[0])).join(", ")}.` : "";
-  return `${many} in ${p.table.title} match ${crit}${partial}: ${show.join("; ")}${p.rows.length > 12 ? `; and ${p.rows.length - 12} more` : ""}.${left}`;
+  const partial = p.table.total != null && p.table.rows.length < p.table.total ? ` (I could only read ${p.table.rows.length} of ${p.table.total} rows)` : "";
+  const verb = crit ? ` ${p.rows.length === 1 ? "is" : "are"} ${/^[a-z ]+ (?:is|over|under|at)/.test(crit) ? `a match (${crit})` : crit}` : "";
+  const order = p.sortedBy && !crit ? `, ${p.sortedBy}` : "";
+  return `${many} in ${p.table.title}${verb}${order}${partial}: ${show.join("; ")}${p.rows.length > 12 ? `; and ${p.rows.length - 12} more` : ""}.`;
 }

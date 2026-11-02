@@ -8,6 +8,7 @@
  */
 import { answerQuestion, compose, emailFromInstruction, whoAmI } from "./offline/compose";
 import { withoutQuotedContext } from "./offline/quotes";
+import { collectTables, isComplete, tableQuery } from "./offline/tablework";
 import { estimateTokens, keywords, normalizeWhitespace, splitSentences, STOPWORDS, tokenize, truncate } from "./text";
 import type { LlmContent, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall } from "./types";
 
@@ -242,6 +243,11 @@ export const offlineProvider: LlmProvider = {
 
     const knowledge = snippetsFrom(events, "knowledge_search");
     const memories = snippetsFrom(events, "memory_recall");
+    // A table came back in pieces ("rows 1–7 of 8"): fetch the rest before working on it (each block repeats the header).
+    if (has("knowledge_search") && events.filter((e) => e.name === "knowledge_search").length === 1) {
+      const partial = collectTables(knowledge).find((t) => !isComplete(t));
+      if (partial) return makeResponse(req, `Reading the rest of ${partial.title}.`, [{ name: "knowledge_search", input: { query: tableQuery(partial), limit: 10 } }]);
+    }
 
     // 2. Act on explicit requests in the brief.
     const toRemember = brief.kind === "message" ? rememberRequest(brief.body) : null;
