@@ -584,6 +584,43 @@ export async function agentRuns(orgId: string, agentId: string, limit = 30) {
   return runs.map((r) => ({ ...r.run, workflowName: r.workflowName, steps: steps.filter((st) => st.runId === r.run.id) }));
 }
 
+/** A deliverable the agent finished early and is holding until its release time (the first overnight deliverable). */
+export type HeldDeliverable = { runId: string; releaseAt: Date; id: string; title: string; kind: string; preview: string | null; body: string };
+
+/** Held deliverables for these runs: the draft lives in the queued `deliverable.release` job until it is handed over. */
+export async function heldDeliverables(orgId: string, runIds: string[]): Promise<HeldDeliverable[]> {
+  const ids = runIds.filter((x) => /^[0-9a-f-]{36}$/i.test(x));
+  if (!ids.length) return [];
+  const rows = await db()
+    .select({ payload: s.jobs.payload, runAt: s.jobs.runAt })
+    .from(s.jobs)
+    .where(
+      and(
+        eq(s.jobs.orgId, orgId),
+        eq(s.jobs.type, "deliverable.release"),
+        inArray(s.jobs.status, ["queued", "running"]),
+        sql`${s.jobs.payload}->>'runId' in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`,
+      ),
+    )
+    .limit(50);
+  const out: HeldDeliverable[] = [];
+  for (const r of rows) {
+    const d = (r.payload.deliverable ?? {}) as Record<string, unknown>;
+    const runId = r.payload.runId;
+    if (typeof runId !== "string" || typeof d.id !== "string" || typeof d.title !== "string") continue;
+    out.push({
+      runId,
+      releaseAt: r.runAt,
+      id: d.id,
+      title: d.title,
+      kind: typeof d.kind === "string" ? d.kind : "document",
+      preview: typeof d.preview === "string" ? d.preview : null,
+      body: typeof d.body === "string" ? d.body : "",
+    });
+  }
+  return out;
+}
+
 export async function agentMemories(orgId: string, agentId: string) {
   return db()
     .select({ id: s.memories.id, kind: s.memories.kind, content: s.memories.content, importance: s.memories.importance, source: s.memories.source, createdAt: s.memories.createdAt })
@@ -729,6 +766,8 @@ export async function agentApprovals(orgId: string, agentId: string) {
     .limit(5);
 }
 
+const AGENCY_ONLY_QUESTION = /no AI model|offline extractor|drafted (?:by the )?offline|review every workflow/i;
+
 /** What the hire promised: the discovery's proposal, the queued first deliverable, and the client's timezone. */
 export async function agentSetup(orgId: string, agentId: string) {
   const [disc, first, org] = await Promise.all([
@@ -755,9 +794,11 @@ export async function agentSetup(orgId: string, agentId: string) {
   const input = (run?.input ?? {}) as { title?: string; description?: string; releaseAt?: string };
   return {
     knowledgeNeeds: p?.knowledgeNeeds ?? [],
-    openQuestions: p?.openQuestions ?? [],
+    // The offline drafting notice lives in spec.draftNote now; drop any legacy copy that landed in the client questions.
+    openQuestions: (p?.openQuestions ?? []).filter((q) => !AGENCY_ONLY_QUESTION.test(q)),
     firstRun: run
       ? {
+          id: run.id,
           status: run.status,
           title: input.title ?? p?.firstDeliverable?.title ?? "First deliverable",
           description: input.description ?? p?.firstDeliverable?.description ?? "",

@@ -322,7 +322,7 @@ function WorkflowCard({ w, onChange, canDisable, repeatProblem }: { w: DraftWork
           {w.problem && !repeatProblem ? <p className="mt-1 text-[13.5px] leading-relaxed text-ink-3">{w.problem}</p> : null}
 
           <div className="mt-3.5 flex flex-wrap items-center gap-2">
-            <SchedulePicker w={w} onChange={onChange} icon={<TriggerIcon className="size-3.5" aria-hidden />} />
+            <SchedulePicker trigger={w.trigger} onChange={(trigger) => onChange({ trigger })} icon={<TriggerIcon className="size-3.5" aria-hidden />} />
             <label className="relative">
               <span className="sr-only">Output</span>
               <select
@@ -403,9 +403,10 @@ function WorkflowCard({ w, onChange, canDisable, repeatProblem }: { w: DraftWork
   );
 }
 
-function SchedulePicker({ w, onChange, icon }: { w: DraftWorkflow; onChange: (p: Partial<DraftWorkflow>) => void; icon: React.ReactNode }) {
-  const label = describeTrigger(w.trigger);
-  if (w.trigger.type !== "schedule") {
+/** Schedule chip with a cadence popover (weekdays / daily / weekly / monthly / hourly). Non-schedule triggers render as a plain chip. */
+export function SchedulePicker({ trigger, onChange, icon }: { trigger: WorkflowSpec["trigger"]; onChange: (t: WorkflowSpec["trigger"]) => void; icon: React.ReactNode }) {
+  const label = describeTrigger(trigger);
+  if (trigger.type !== "schedule") {
     return (
       <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-surface-2/60 px-2.5 text-[12.5px] font-medium text-ink-2">
         <span className="text-ink-4">{icon}</span>
@@ -413,11 +414,11 @@ function SchedulePicker({ w, onChange, icon }: { w: DraftWorkflow; onChange: (p:
       </span>
     );
   }
-  const cron = w.trigger.cron;
+  const cron = trigger.cron;
   const parsed = parseCadence(cron);
   const update = (cadence: Cadence, time: string, day: number) => {
     if (cadence === "custom") return;
-    onChange({ trigger: { type: "schedule", cron: buildCron(cadence, time, day) } });
+    onChange({ type: "schedule", cron: buildCron(cadence, time, day) });
   };
   return (
     <P.Root>

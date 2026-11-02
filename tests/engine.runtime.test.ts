@@ -341,17 +341,25 @@ describe("runtime (offline model)", () => {
 
   it("resellAgent clones into a child customer org without memories or the private transcript", async () => {
     const { client, agency, user, agentId, spec } = await hireFromTranscript();
-    await db().insert(schema.knowledgeSources).values({ orgId: client.id, agentId, title: "Catalog", kind: "text", status: "ready", chunkCount: 1 }).returning().then(async ([s]) => {
-      await db().insert(schema.knowledgeChunks).values({ orgId: client.id, sourceId: s!.id, agentId, seq: 0, content: "Port Authority tote bag, $4.20 at 250 units" });
-    });
+    const [catalog] = await db().insert(schema.knowledgeSources).values({ orgId: client.id, agentId, title: "Catalog", kind: "text", status: "ready", chunkCount: 1 }).returning();
+    await db().insert(schema.knowledgeChunks).values({ orgId: client.id, sourceId: catalog!.id, agentId, seq: 0, content: "Port Authority tote bag, $4.20 at 250 units" });
+    const [ar] = await db().insert(schema.knowledgeSources).values({ orgId: client.id, agentId, title: "Receivables.csv", kind: "file", status: "ready", chunkCount: 1 }).returning();
+    await db().insert(schema.knowledgeChunks).values({ orgId: client.id, sourceId: ar!.id, agentId, seq: 0, content: "Client,Email,Owed\nBayside,lorna@bayside.example,$4100" });
     const customer = await makeCustomer(client.id, agency.id);
-    const { agentId: cloneId } = await resellAgent({ orgId: client.id, agentId, customerOrgId: customer.id, actor: { type: "user", userId: user.id } });
+    // Nothing is shared by default.
+    const { agentId: bare } = await resellAgent({ orgId: client.id, agentId, customerOrgId: customer.id, actor: { type: "user", userId: user.id } });
+    expect(await db().$count(schema.knowledgeSources, eq(schema.knowledgeSources.agentId, bare))).toBe(0);
+    // A source from another org can't be shared.
+    const other = await makeOrgs();
+    const [foreign] = await db().insert(schema.knowledgeSources).values({ orgId: other.client.id, title: "Theirs", kind: "text", status: "ready" }).returning();
+    await expect(resellAgent({ orgId: client.id, agentId, customerOrgId: customer.id, shareKnowledgeSourceIds: [foreign!.id], actor: { type: "system" } })).rejects.toBeInstanceOf(EngineNotFoundError);
+    const { agentId: cloneId } = await resellAgent({ orgId: client.id, agentId, customerOrgId: customer.id, shareKnowledgeSourceIds: [catalog!.id], actor: { type: "user", userId: user.id } });
     const [clone] = await db().select().from(schema.agents).where(eq(schema.agents.id, cloneId));
     expect(clone).toMatchObject({ orgId: customer.id, sourceAgentId: agentId, status: "active", role: spec.role });
     expect(await db().$count(schema.workflows, eq(schema.workflows.agentId, cloneId))).toBe(spec.workflows.length);
     expect(await db().$count(schema.memories, eq(schema.memories.agentId, cloneId))).toBe(0);
     const srcs = await db().select().from(schema.knowledgeSources).where(eq(schema.knowledgeSources.agentId, cloneId));
-    expect(srcs.map((s) => s.kind)).toEqual(["text"]);
+    expect(srcs.map((s) => s.title)).toEqual(["Catalog"]); // only what was ticked: not the receivables
     expect((await searchKnowledge(db(), { orgId: customer.id, agentId: cloneId, query: "tote bag" }))[0]?.content).toMatch(/tote/);
     // Not a child of this client → not found.
     const stranger = await makeOrgs();

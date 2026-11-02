@@ -90,8 +90,8 @@ describe("scheduler drain", () => {
       );
     const r = await schedulerDrain(db(), { batch: 5 });
     expect(r).toMatchObject({ due: 23, enqueued: 23, batches: 5, more: false });
-    const [{ n }] = (await db().execute(sql`select count(*)::int as n from jobs where type = 'agent.run'`)).rows as Array<{ n: number }>;
-    expect(n).toBe(23);
+    const [row] = (await db().execute(sql`select count(*)::int as n from jobs where type = 'agent.run'`)).rows as Array<{ n: number }>;
+    expect(row?.n).toBe(23);
   });
 });
 
@@ -124,5 +124,18 @@ describe("maintenance.prune", () => {
     expect(nextHourSlot(now).toISOString()).toBe("2026-11-02T07:00:00.000Z");
     expect(await ensureMaintenanceScheduled(db(), now)).toBeTruthy();
     expect(await ensureMaintenanceScheduled(db(), new Date("2026-11-02T06:59:59Z"))).toBeNull();
+  });
+});
+
+describe("queue stats", () => {
+  beforeEach(resetDb);
+  it("reports the ready backlog and its lag", async () => {
+    const { queueStats } = await import("@/server/jobs/queue");
+    await enqueue(db(), "knowledge.index", {}, { runAt: new Date(Date.now() - 120_000), queue: "stats" });
+    await enqueue(db(), "knowledge.index", {}, { runAt: new Date(Date.now() + 120_000), queue: "stats" });
+    const s = await queueStats(db(), "stats");
+    expect(s.ready).toBe(1);
+    expect(s.lagSeconds).toBeGreaterThanOrEqual(119);
+    expect(s.running).toBe(0);
   });
 });

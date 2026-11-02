@@ -1,5 +1,9 @@
 # Local production-like stack: Postgres (pgvector) + migrations + web + 2 workers.
+#   cp .env.example .env
+#   # fill the two required secrets (see README "Docker compose"):
+#   #   ENCRYPTION_KEY=$(openssl rand -base64 32)   AUTH_SECRET=$(openssl rand -base64 48)
 #   docker compose up --build
+# Without them web and worker refuse to start and say which variable is missing.
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -16,14 +20,18 @@ services:
 
   migrate:
     build: { context: ., target: worker }
-    command: ["npm", "run", "db:migrate"]
+    command: ["node", "--conditions=react-server", "dist/migrate.mjs"]
+    init: true
     env_file: [.env]
     environment:
       DATABASE_URL: postgres://roster:roster@db:5432/roster
+    healthcheck: { disable: true }
     depends_on: { db: { condition: service_healthy } }
 
   web:
     build: { context: ., target: web }
+    init: true
+    stop_grace_period: 30s
     env_file: [.env]
     environment:
       DATABASE_URL: postgres://roster:roster@db:5432/roster
@@ -32,6 +40,9 @@ services:
 
   worker:
     build: { context: ., target: worker }
+    # tini as PID 1 forwards SIGTERM to node; the worker drains in-flight jobs for up to 30s, so give it 60s.
+    init: true
+    stop_grace_period: 60s
     env_file: [.env]
     environment:
       DATABASE_URL: postgres://roster:roster@db:5432/roster

@@ -96,7 +96,9 @@ export function InviteOwner({ agency, clientId, clientName }: { agency: string; 
           start(async () => {
             const r = await inviteClientOwner(agency, clientId, email);
             if (!r.ok) return void toast.error(r.error);
-            toast.success(`Invitation created for ${email}`);
+            toast.success(r.emailed ? `Invitation emailed to ${email}` : `Invitation created for ${email}`, {
+              description: r.emailed ? undefined : r.link ? "Email isn't configured here, so copy the link below." : undefined,
+            });
             setLink(r.link);
             setEmail("");
           });

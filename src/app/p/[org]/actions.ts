@@ -9,6 +9,7 @@ import { clientIp } from "@/server/auth/session";
 import { db, schema } from "@/server/db/client";
 import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
+import { emailInvite } from "@/server/auth/invite-email";
 import { audit } from "@/server/security/audit";
 import { randomToken, sha256 } from "@/server/security/crypto";
 import * as engine from "@/server/services/engine";
@@ -303,33 +304,6 @@ async function issueInvite(
   return url;
 }
 
-/**
- * Email the invite to the invitee (when an email provider is configured), in the inviting org's brand.
- * The copyable link the inviter also sees is harmless on its own: accepting needs a verified account.
- */
-async function emailInvite(orgId: string, to: string, url: string) {
-  const e = env();
-  if (!e.RESEND_API_KEY) return;
-  const [{ orgChain }, { resolveBrand }, { formatFrom, sendEmail }] =
-    await Promise.all([
-      import("@/server/auth/access"),
-      import("@/server/queries/portal"),
-      import("@/server/channels/email"),
-    ]);
-  const chain = await orgChain(orgId);
-  const org = chain[0];
-  if (!org) return;
-  const brand = resolveBrand(chain);
-  await sendEmail({
-    from: formatFrom(brand.name, `team@${e.EMAIL_DOMAIN}`),
-    to: [to],
-    subject: `You're invited to ${org.name}`,
-    text: `You've been invited to join ${org.name} on ${brand.name}.\n\nAccept the invitation:\n${url}\n\nThe link works once and expires in 14 days. If you weren't expecting this, you can ignore it.`,
-    messageId: `<invite-${randomToken(12)}@${e.EMAIL_DOMAIN}>`,
-    idempotencyKey: `invite:${sha256(url)}`,
-  });
-}
-
 const customerInput = z.object({
   slug: slugSchema,
   name: z.string().trim().min(2, "Add the business name").max(120),
@@ -393,6 +367,11 @@ const offerInput = z.object({
   agentId: z.uuid("Pick a teammate"),
   customerId: z.uuid("Pick a customer"),
   planId: z.uuid().optional(),
+  /** Knowledge sources the reseller ticked to share. Empty = share nothing. The engine enforces ownership. */
+  shareKnowledgeSourceIds: z
+    .array(z.uuid())
+    .max(100, "Share up to 100 files")
+    .optional(),
 });
 
 export async function offerAgentAction(
@@ -403,7 +382,12 @@ export async function offerAgentAction(
     return fail(parsed.error.issues[0]?.message ?? "Check the details");
   const access = await requireReseller(parsed.data.slug);
   if (!access) return fail("Only client workspaces can resell");
-  const { agentId, customerId, planId } = parsed.data;
+  const {
+    agentId,
+    customerId,
+    planId,
+    shareKnowledgeSourceIds = [],
+  } = parsed.data;
   const [customer] = await db()
     .select({ id: schema.organizations.id })
     .from(schema.organizations)
@@ -428,11 +412,13 @@ export async function offerAgentAction(
     if (!plan) return fail("That price plan isn't yours");
   }
   try {
+    // Copies the role, workflows and voice. Knowledge only when ticked; the engine checks each source is ours.
     await engine.resellAgent({
       orgId: access.org.id,
       agentId,
       customerOrgId: customerId,
       actor: { type: "user", userId: access.user.id },
+      shareKnowledgeSourceIds: [...new Set(shareKnowledgeSourceIds)],
     });
   } catch (err) {
     return engineError(err, "Couldn't set that up. Try again.");

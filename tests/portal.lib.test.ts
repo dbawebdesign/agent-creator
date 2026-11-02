@@ -12,7 +12,7 @@ import {
   contrast,
   readableOn,
 } from "@/components/portal/brand-color";
-import { resolveBrand } from "@/server/queries/portal";
+import { clientSafeText, resolveBrand } from "@/server/queries/portal";
 import type { Org } from "@/server/auth/access";
 
 describe("portal: plain-English schedules", () => {
@@ -166,5 +166,13 @@ describe("brand colours", () => {
     expect(brandVars("#e11d48")).toMatch(
       /^:root\{--brand:#e11d48;--brand-ink:#[0-9a-f]{6};--brand-text:#[0-9a-f]{6};--brand-text-dark:#[0-9a-f]{6}\}$/,
     );
+  });
+});
+
+describe("clientSafeText", () => {
+  it("drops the Architect's agency-only drafting notice", () => {
+    expect(clientSafeText("Turns briefs into social packs. Drafted offline from the transcript (no AI model was used) — review every workflow before hiring.")).toBe("Turns briefs into social packs.");
+    expect(clientSafeText("Answers the phones.")).toBe("Answers the phones.");
+    expect(clientSafeText(null)).toBeNull();
   });
 });

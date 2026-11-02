@@ -240,6 +240,8 @@ export const runs = pgTable(
     index("runs_org_created_idx").on(t.orgId, t.createdAt),
     index("runs_conversation_idx").on(t.conversationId),
     index("runs_workflow_idx").on(t.workflowId).where(sql`${t.workflowId} is not null`),
+    // Studio Home "failed runs, last 3 days": tiny partial index walked backward by created_at.
+    index("runs_failed_created_idx").on(t.createdAt).where(sql`${t.status} = 'failed'`),
   ],
 );
 

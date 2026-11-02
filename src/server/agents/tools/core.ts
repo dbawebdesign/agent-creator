@@ -12,6 +12,7 @@ import { normalizeWhitespace, splitSentences, truncate } from "@/server/llm/text
 import { recallMemories, searchKnowledge } from "@/server/knowledge";
 import { sha256 } from "@/server/security/crypto";
 import { normalizePhone, type Participant } from "../trust";
+import { quotesInternalNotes, recipientProblem } from "./recipients";
 import { defineTool, ok, toolError, type ToolContext } from "./types";
 
 const DELIVERABLE_KINDS = ["report", "document", "table", "email_draft", "message"] as const;
@@ -129,13 +130,28 @@ export const createDeliverable = defineTool({
     }
     const kind = input.kind ?? (ctx.workflow?.outputKind && (DELIVERABLE_KINDS as readonly string[]).includes(ctx.workflow.outputKind) ? (ctx.workflow.outputKind as (typeof DELIVERABLE_KINDS)[number]) : "report");
     const hoursSaved = hoursCreditFor(run, ctx.workflow, ctx.state.deliverableIds.length);
+    // A change request produces a new version linked to the original (never an email).
+    let data = input.data ?? null;
+    if (run.input?.kind === "revision" && typeof run.input.deliverableId === "string") {
+      const orig = (
+        await db
+          .select({ id: schema.deliverables.id, data: schema.deliverables.data })
+          .from(schema.deliverables)
+          .where(and(eq(schema.deliverables.id, run.input.deliverableId), eq(schema.deliverables.orgId, run.orgId)))
+          .limit(1)
+      )[0];
+      if (orig) {
+        const root = typeof orig.data?.revisionOf === "string" ? orig.data.revisionOf : orig.id;
+        data = { ...(data ?? {}), revisionOf: root, previousVersionId: orig.id, version: (Number(orig.data?.version) || 1) + 1 };
+      }
+    }
     const draft: DeliverableDraft = {
       id,
       title,
       kind,
       preview: cleanPreview(input.preview, input.body, title, request),
       body: input.body,
-      data: input.data ?? null,
+      data,
       // Work requested by an unverified sender is never presented as the agent's own finished output.
       needsReview: kind === "email_draft" || run.trigger === "setup" || !ctx.trust.trusted,
       hoursSaved: Number.isFinite(hoursSaved) ? hoursSaved : 0,
@@ -371,6 +387,18 @@ export const sendMessage = defineTool({
     if (ctx.run.conversationId) return action;
     if (input.channel === "email" && (await isInternalRecipient(ctx, input.to))) return null;
     return action;
+  },
+  /** Refused before any approval card: sends from a change request, ungrounded recipients, quoted internal notes. */
+  async precheck(input, ctx) {
+    if (ctx.run.input?.kind === "revision") return "A change request only revises the deliverable — nothing is sent. Deliver the new version with create_deliverable.";
+    if (input.channel === "portal") return null;
+    if (await quotesInternalNotes(ctx, `${input.subject ?? ""}\n${input.text}`)) {
+      return "This message quotes an internal rule or a private note from the client. Rewrite it without them (or draft it for the team instead).";
+    }
+    const p = ctx.trust.participant;
+    if (!input.to || (p && isConversationTarget(input, p))) return null;
+    if (input.channel === "slack") return null; // Slack targets are channels in the client's own workspace
+    return recipientProblem(ctx, input.channel, input.to);
   },
   describe: (i) => `Send ${i.channel}${i.to ? ` to ${i.to}` : ""}${i.subject ? `: “${truncate(i.subject, 80)}”` : ""} — ${truncate(i.text, 160)}`,
   async run(input, ctx) {

@@ -7,7 +7,10 @@ import { complete as completeJob, fail as failJob } from "@/server/jobs/queue";
 import { logger } from "@/server/lib/logger";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { agentSpec, APPROVAL_ACTIONS, channelKind, type AgentSpec } from "@/server/agents/spec";
+import { agentSpec, APPROVAL_ACTIONS, channelKind, workflowSpec, type AgentSpec } from "@/server/agents/spec";
+import { isValidCron, nextRunForTrigger } from "@/server/jobs/scheduler";
+import { audit } from "@/server/security/audit";
+import type { WorkflowTrigger } from "@/server/db/schema";
 import { db, schema } from "@/server/db/client";
 import {
   addKnowledge,
@@ -260,6 +263,55 @@ export async function updateWorkflow(slug: string, agentId: string, workflowId: 
       .where(and(eq(schema.workflows.id, wf.id), eq(schema.workflows.orgId, ctx.agent.orgId)));
     revalidatePath(`/a/${slug}/agents/${agentId}`, "layout");
     return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const newWorkflowInput = z.object({
+  name: z.string().trim().min(2, "Give it a short name").max(80),
+  instructions: z.string().trim().min(10, "Describe the steps in a sentence or two").max(6000),
+  trigger: workflowSpec.shape.trigger,
+  outputKind: workflowSpec.shape.outputKind.unwrap(),
+  deliverTo: z.array(channelKind).min(1, "Pick at least one delivery channel").max(6),
+  hoursSavedPerRun: z.number().min(0).max(200),
+});
+const MAX_WORKFLOWS = 20;
+
+/** Add a workflow to a hired agent (same shape the Architect proposes; schedules run in the client's time zone). */
+export async function createWorkflow(slug: string, agentId: string, raw: z.input<typeof newWorkflowInput>): Promise<Result<{ id: string }>> {
+  const parsed = newWorkflowInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the form" };
+  try {
+    const ctx = await studioAgent(slug, agentId, "member");
+    if (ctx.agent.status === "archived") return { ok: false, error: "This agent is archived" };
+    const [count] = await db()
+      .select({ n: sql<number>`count(*)`.mapWith(Number) })
+      .from(schema.workflows)
+      .where(and(eq(schema.workflows.orgId, ctx.agent.orgId), eq(schema.workflows.agentId, ctx.agent.id)));
+    if ((count?.n ?? 0) >= MAX_WORKFLOWS) return { ok: false, error: `An agent can have up to ${MAX_WORKFLOWS} workflows` };
+    const t = parsed.data.trigger;
+    const tz = ctx.org.timezone;
+    if (t.type === "schedule" && !isValidCron(t.cron)) return { ok: false, error: "That schedule isn’t valid" };
+    const trigger: WorkflowTrigger = t.type === "schedule" ? { type: "schedule", cron: t.cron, timezone: tz } : t.type === "event" ? { type: "event", event: t.event } : { type: "manual" };
+    const [row] = await db()
+      .insert(schema.workflows)
+      .values({
+        orgId: ctx.agent.orgId,
+        agentId: ctx.agent.id,
+        name: parsed.data.name,
+        instructions: parsed.data.instructions,
+        trigger,
+        outputKind: parsed.data.outputKind,
+        deliverTo: parsed.data.deliverTo,
+        hoursSavedPerRun: parsed.data.hoursSavedPerRun,
+        enabled: true,
+        nextRunAt: nextRunForTrigger(trigger, tz),
+      })
+      .returning({ id: schema.workflows.id });
+    await audit({ orgId: ctx.agent.orgId, actorType: "user", actorId: ctx.access.user.id, action: "workflow.created", targetType: "workflow", targetId: row!.id, metadata: { agentId: ctx.agent.id, trigger: trigger.type } });
+    revalidatePath(`/a/${slug}/agents/${agentId}`, "layout");
+    return { ok: true, id: row!.id };
   } catch (err) {
     return fail(err);
   }

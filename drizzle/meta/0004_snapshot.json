@@ -3097,6 +3097,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "runs_failed_created_idx": {
+          "name": "runs_failed_created_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"runs\".\"status\" = 'failed'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {

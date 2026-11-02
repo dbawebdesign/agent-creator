@@ -18,6 +18,7 @@ import { db, pool } from "@/server/db/client";
 import { env, isOfflineModel } from "@/server/env";
 import { HANDLERS } from "@/server/jobs/handlers";
 import { ensureMaintenanceScheduled } from "@/server/jobs/maintenance";
+import { queueStats } from "@/server/jobs/queue";
 import { startWorker } from "@/server/jobs/worker";
 import { logger } from "@/server/lib/logger";
 import { HEARTBEAT_FILE, HEARTBEAT_STALE_MS } from "./heartbeat";
@@ -51,14 +52,24 @@ async function beat() {
   await writeFile(HEARTBEAT_FILE, String(Date.now())).catch((err) => logger.warn({ err: (err as Error).message }, "heartbeat write failed"));
 }
 void beat();
+// Schedule the first hourly prune right away (ticks keep it scheduled afterwards).
+void ensureMaintenanceScheduled(db()).catch((err) => logger.warn({ err: (err as Error).message }, "could not schedule maintenance"));
 const heartbeat = setInterval(() => void beat(), 10_000);
 heartbeat.unref();
+// Queue depth / lag metric as a log line (one query on jobs_claim_idx); alert when lagSeconds keeps growing.
+const stats = setInterval(() => {
+  queueStats(db())
+    .then((s) => logger.info({ metric: "queue", ...s, inflight: worker.running }, "queue stats"))
+    .catch((err) => logger.warn({ err: (err as Error).message }, "queue stats failed"));
+}, 60_000);
+stats.unref();
 
 let shuttingDown = false;
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(heartbeat);
+  clearInterval(stats);
   logger.info({ signal, inflight: worker.running }, "worker draining");
   await worker.stop();
   await pool().end().catch(() => undefined);

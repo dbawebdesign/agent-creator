@@ -1,7 +1,7 @@
 /**
  * Retention (`maintenance.prune`, enqueued hourly by every worker; the idempotency key makes it one job per hour).
  *
- * Deletes in batches of `batch` rows (`delete … where id in (select … limit n)`), each its own statement, so no long
+ * Deletes in batches of `batch` rows (`delete … where id = any(array(select … limit n))`), each its own statement, so no long
  * locks and replication/vacuum keep up. Bounded by a time budget; whatever is left goes in the next hour's run.
  *
  *   jobs            succeeded > 7 days, failed/dead > 30 days after finishing (jobs_finished_idx)
@@ -50,7 +50,9 @@ export async function pruneOnce(database: Pick<DB, "execute">, opts: { batch?: n
     const key = t.table === "rate_limits" ? sql.raw("key") : sql.raw("id");
     const table = sql.raw(t.table);
     for (;;) {
-      const res = await database.execute(sql`delete from ${table} where ${key} in (select ${key} from ${table} where ${t.where} limit ${batch})`);
+      // `= any(array(…))` (not `in (select …)`): the planner then deletes through the primary key instead of
+      // hash-joining a full scan of the table (33ms vs 138ms per 5k-row batch on 500k jobs).
+      const res = await database.execute(sql`delete from ${table} where ${key} = any(array(select ${key} from ${table} where ${t.where} limit ${batch}))`);
       const n = res.rowCount ?? 0;
       deleted[t.table] = (deleted[t.table] ?? 0) + n;
       if (n < batch || Date.now() > deadline) break;

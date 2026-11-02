@@ -128,3 +128,13 @@ export async function fail(database: DB, job: { id: string; attempts: number; ma
     where id = ${job.id}`);
   return dead;
 }
+
+/** Ready backlog and how late its oldest job is (the worker logs this every minute: alert on lagSeconds). */
+export async function queueStats(database: Pick<DB, "execute">, queue = "default"): Promise<{ ready: number; lagSeconds: number; running: number }> {
+  const res = await database.execute(sql`
+    select
+      (select count(*)::int from jobs where queue = ${queue} and status = 'queued' and run_at <= now()) as ready,
+      coalesce((select extract(epoch from now() - min(run_at))::int from jobs where queue = ${queue} and status = 'queued' and run_at <= now()), 0) as "lagSeconds",
+      (select count(*)::int from jobs where queue = ${queue} and status = 'running') as running`);
+  return res.rows[0] as { ready: number; lagSeconds: number; running: number };
+}

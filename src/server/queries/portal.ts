@@ -62,6 +62,17 @@ function firstOf<T>(
   return null;
 }
 
+/**
+ * Agency-only drafting notes (the Architect's offline notice lives in spec.draftNote and must stay in Studio).
+ * Defence in depth: if one ever lands in client-visible text, drop that sentence.
+ */
+const AGENCY_ONLY_NOTE = /[^.!?\n]*(no AI model was used|offline extractor|drafted (?:by the )?offline|review every workflow)[^.!?\n]*[.!?]?\s*/gi;
+export function clientSafeText(text: string | null): string | null {
+  if (!text) return text;
+  const out = text.replace(AGENCY_ONLY_NOTE, "").trim();
+  return out || null;
+}
+
 /** Branding cascade: self → parent → grandparent, field by field. */
 export function resolveBrand(chain: Org[]): PortalBrand {
   const org = chain[0]!;
@@ -495,7 +506,7 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
       role: a.role,
       seed: a.seed,
       status: a.status,
-      summary: a.summary,
+      summary: clientSafeText(a.summary),
       email: agentEmail(a.emailHandle),
       phone: a.phone,
       workflows: wfs.filter((w) => w.agentId === a.id),
@@ -752,7 +763,7 @@ export async function getConnect(orgId: string) {
 /* ----------------------------------------------------------------- Resell */
 
 export async function getResell(orgId: string) {
-  const [customers, plans, agents] = await Promise.all([
+  const [customers, plans, agents, knowledge] = await Promise.all([
     db()
       .select({
         id: schema.organizations.id,
@@ -776,6 +787,26 @@ export async function getResell(orgId: string) {
       .where(and(eq(schema.plans.orgId, orgId), eq(schema.plans.active, true)))
       .orderBy(asc(schema.plans.priceCents)),
     listAgentsLite(orgId),
+    // What a reseller MAY choose to share with a customer's copy (nothing is shared unless ticked).
+    // Discovery-call transcripts are never offered: they're about the reseller's own business.
+    db()
+      .select({
+        id: schema.knowledgeSources.id,
+        title: schema.knowledgeSources.title,
+        kind: schema.knowledgeSources.kind,
+        agentId: schema.knowledgeSources.agentId,
+        chunkCount: schema.knowledgeSources.chunkCount,
+      })
+      .from(schema.knowledgeSources)
+      .where(
+        and(
+          eq(schema.knowledgeSources.orgId, orgId),
+          eq(schema.knowledgeSources.status, "ready"),
+          ne(schema.knowledgeSources.kind, "transcript"),
+        ),
+      )
+      .orderBy(asc(schema.knowledgeSources.title))
+      .limit(200),
   ]);
   const customerIds = customers.map((c) => c.id);
   const [subs, theirAgents] = customerIds.length
@@ -839,7 +870,7 @@ export async function getResell(orgId: string) {
     };
   });
   const monthlyCents = rows.reduce((n, r) => n + r.monthlyCents, 0);
-  return { customers: rows, plans, agents, monthlyCents };
+  return { customers: rows, plans, agents, monthlyCents, knowledge };
 }
 
 /* --------------------------------------------------------------- Settings */

@@ -7,6 +7,7 @@
  * composing its output from the task instructions and the tool results it actually received.
  */
 import { compose, emailFromInstruction, whoAmI } from "./offline/compose";
+import { withoutQuotedContext } from "./offline/quotes";
 import { estimateTokens, keywords, normalizeWhitespace, splitSentences, STOPWORDS, tokenize, truncate } from "./text";
 import type { LlmContent, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall } from "./types";
 
@@ -248,9 +249,10 @@ export const offlineProvider: LlmProvider = {
       const kind = /prefer|always|never|don't|do not|like/i.test(toRemember) ? "preference" : "fact";
       return makeResponse(req, "Noted — saving that.", [{ name: "memory_save", input: { content: toRemember, kind, importance: 4 } }]);
     }
-    // Only the owner's own words count as a send instruction; event data (an inbound email etc.) is untrusted.
-    const ownWords = brief.body.split(/\n\s*\nTriggered by /)[0] ?? brief.body;
-    const email = EMAIL_RE.exec(ownWords)?.[0];
+    // Only the owner's own words count as a send instruction: never event data (an inbound email etc.), never the
+    // call quotes and rules pasted into a procedure, and never a change request (it only revises the deliverable).
+    const ownWords = withoutQuotedContext(brief.body.split(/\n\s*\nTriggered by /)[0] ?? brief.body);
+    const email = brief.kind === "revision" ? undefined : EMAIL_RE.exec(ownWords)?.[0];
     if (email && /\b(send|email|forward|reply)\b/i.test(ownWords) && has("send_message") && !called("send_message")) {
       return makeResponse(req, `Sending this to ${email}.`, [
         {

@@ -137,7 +137,9 @@ export function InviteForm({ agency }: { agency: string }) {
           start(async () => {
             const r = await inviteMember(agency, { email, role });
             if (!r.ok) return void toast.error(r.error);
-            toast.success(`Invited ${email}`);
+            toast.success(r.emailed ? `Invitation emailed to ${email}` : `Invited ${email}`, {
+              description: r.emailed ? undefined : r.link ? "Email isn't configured here, so copy the link below." : undefined,
+            });
             setLink(r.link);
             setEmail("");
           });

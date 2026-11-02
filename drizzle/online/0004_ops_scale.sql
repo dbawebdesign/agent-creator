@@ -25,6 +25,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_workflow_idx" ON "delivera
 --> statement-breakpoint
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "runs_workflow_idx" ON "runs" USING btree ("workflow_id") WHERE "runs"."workflow_id" is not null;
 --> statement-breakpoint
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "runs_failed_created_idx" ON "runs" USING btree ("created_at") WHERE "runs"."status" = 'failed';
+--> statement-breakpoint
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "webhook_events_created_idx" ON "webhook_events" USING btree ("created_at");
 --> statement-breakpoint
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "jobs_claim_idx" ON "jobs" USING btree ("queue","priority" DESC NULLS FIRST,"run_at") WHERE "jobs"."status" = 'queued';

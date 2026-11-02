@@ -8,7 +8,28 @@
  * systems, rules) attach to that topic until the next one starts. A word that only appears in passing ("my front
  * desk lead, Rosa", "we have a report in Dentrix") never starts a topic.
  */
-import { normalizeWhitespace, splitSentences, truncate } from "../text";
+import { normalizeWhitespace, splitSentences as baseSplit, truncate } from "../text";
+
+const DOT = "\u2024";
+/**
+ * Sentence split that knows abbreviations: "St. Luke's", "Dr. Patel", "Acme Inc., our biggest", "e.g. the trash",
+ * "7 a.m. shift" stay inside their sentence. A dot that ends an abbreviation still ends the sentence when a capital
+ * follows and the abbreviation is not a title ("at 7 a.m. Then I…").
+ */
+export function splitSentences(text: string): string[] {
+  const guarded = text
+    // Titles and place words are always followed by a name: never a sentence end.
+    .replace(/\b(St|Dr|Mr|Mrs|Ms|Mt|Jr|Sr|Prof|Rev|Capt|Sgt|Lt|Ft|Hon|Gov|Gen|Messrs)\.(?=\s+[A-Z0-9])/g, `$1${DOT}`)
+    // Company and street words, and "etc."/"vs."/"approx.", when the sentence clearly goes on.
+    .replace(/\b(Inc|Co|Corp|Ltd|LLC|Bros|Ave|Blvd|Rd|Ste|Bldg|Dept|Mfg|etc|vs|approx|est|incl|ext)\.(?=\s*[a-z0-9,;:)]|\s+&)/g, `$1${DOT}`)
+    .replace(/\bNo\.(?=\s?\d)/g, `No${DOT}`)
+    // Dotted short forms: e.g. i.e. a.m. p.m. U.S. — inner dots always, the last one when the sentence goes on.
+    .replace(/\b((?:[A-Za-z]\.){1,3}[A-Za-z])\.(?=\s*[a-z0-9,;:)])/g, (_m, a: string) => `${a.replace(/\./g, DOT)}${DOT}`)
+    .replace(/\b((?:[A-Za-z]\.){1,3}[A-Za-z])\.(?=\s|$)/g, (_m, a: string) => `${a.replace(/\./g, DOT)}.`)
+    // Initials before a surname: "J. Smith".
+    .replace(/(^|\s)([A-Z])\.(?=\s+[A-Z][a-z])/g, `$1$2${DOT}`);
+  return baseSplit(guarded).map((x) => x.replace(/\u2024/g, "."));
+}
 
 // ───────────────────────────────────────────── shapes ─────────────────────────────────────────────
 
@@ -24,13 +45,24 @@ export type Action =
   | "quote"
   | "entry"
   | "schedule"
+  | "coverage"
   | "reviews"
   | "sync"
   | "invoice"
   | "inbox"
   | "manual";
 
-export type Sentence = { text: string; turn: number; idx: number; speaker: string | null; afterItch: boolean; question?: string | null; asked?: boolean };
+export type Sentence = {
+  text: string;
+  turn: number;
+  idx: number;
+  speaker: string | null;
+  afterItch: boolean;
+  question?: string | null;
+  asked?: boolean;
+  /** The owner's explicit ask: the answer to "if you woke up tomorrow and one thing was done…", or "what I really want is…". */
+  ask?: boolean;
+};
 
 export type Cadence =
   | { kind: "daily"; days: "1-5" | "1-6" | "*" }
@@ -80,6 +112,12 @@ export type Discovery = {
   preferences: string[];
   resale: string | null;
   vertical: string | null;
+  /** Topics the owner explicitly asked for first, in the order asked. */
+  askTopics: Topic[];
+  /** Hours a week the owner described across every pain (the sum of what they said). */
+  statedHours: number;
+  /** How the owner wants the agent to sound ("Warm but short. No fluff."), when asked. */
+  tone: string | null;
 };
 
 // ───────────────────────────────────────────── segmentation ─────────────────────────────────────────────
@@ -156,34 +194,87 @@ const toNum = (s: string): number | null => {
   return WORD_NUM[k] ?? null;
 };
 
-const RE_HOURS_PER = new RegExp(String.raw`\b${NUM}\s*(?:(?:-|to)\s*\d+\s*)?(?:hours?|hrs?)\b(?:\s+and a half)?\s+(?:a|per|each|every)\s+(week|day|month)`, "i");
-const RE_HOURS_DAILY = new RegExp(String.raw`\b${NUM}\s+(and a half\s+)?hours?(\s+and a half)?\b[^.]{0,40}?\b(?:every|each) (?:single )?(?:morning|day|night|evening|afternoon|weekday)`, "i");
-const RE_DAILY_HOURS_REV = new RegExp(String.raw`\b(?:every|each) (?:single )?(?:morning|day|night|evening|afternoon)\b[^.]{0,40}?\b${NUM}\s+(and a half\s+)?hours?(\s+and a half)?`, "i");
+/** "two or three" / "three, four" / "3-4" → 2.5 / 3.5 / 3.5. A comma pair only counts when it reads as a range. */
+const RANGE = String.raw`${NUM}(?:\s*(?:-|–|to|or|,)\s*${NUM})?`;
+const rangeOf = (a: string | undefined, b: string | undefined): number | null => {
+  const x = toNum(a ?? "");
+  if (x == null) return null;
+  const y = b ? toNum(b) : null;
+  // "38, two hours" is not a range: the number next to "hours" counts.
+  return y == null ? x : y > x && y <= x * 2 + 2 ? (x + y) / 2 : y;
+};
+const DOWS = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
+const RE_HOURS_PER = new RegExp(
+  String.raw`\b${RANGE}\s*(?:hours?|hrs?)\b(?:\s+and a half)?(?:,?\s+(?:easy|tops|or so|at least|minimum|probably|maybe|total))?\s+(?:a|per|each|every|on)\s+(week|weekday|day|month|morning|night|evening|afternoon|(?:${DOWS})s?)\b`,
+  "i",
+);
+const RE_HOURS_DAILY = new RegExp(String.raw`\b${RANGE}\s+(and a half\s+)?hours?(\s+and a half)?\b[^.]{0,40}?\b(?:every|each) (?:single )?(morning|day|night|evening|afternoon|weekday|${DOWS})`, "i");
+const RE_DAILY_HOURS_REV = new RegExp(String.raw`\b(?:every|each) (?:single )?(morning|day|night|evening|afternoon|${DOWS})\b[^.]{0,40}?\b${RANGE}\s+(and a half\s+)?hours?(\s+and a half)?`, "i");
 const RE_DAYS_PER = new RegExp(String.raw`\b${NUM}\s+(?:full\s+|whole\s+)?(?:work\s*)?days?\b[^.]{0,30}?\b(?:a|per|each|every)\s+(week|month|quarter)`, "i");
+/** "That's three, four hours when I do it." — a time cost with no period; the task's cadence supplies it. */
+const RE_HOURS_BARE = new RegExp(String.raw`\b(?:that'?s|it'?s|takes?|took|spend\w*|eats?|costs?|about|maybe|probably|easily|like)\s+(?:me\s+|us\s+|her\s+|him\s+)?(?:\w+\s+){0,2}?${RANGE}\s+(?:hours?|hrs?)\b(?!\s+(?:a|per|each|every|ago|later|before|after|notice|away|out)\b)`, "i");
 
-/** Hours per week of human time stated in a sentence, or null. */
-export function hoursPerWeekIn(s: string): number | null {
-  const d = RE_HOURS_DAILY.exec(s) ?? RE_DAILY_HOURS_REV.exec(s);
+type HoursKind = "week" | "dow" | "day" | "month" | "days";
+/** A time cost stated in a sentence, per week, with what kind of statement it was (so restatements aren't summed). */
+function hoursStatement(s: string): { hours: number; kind: HoursKind } | null {
+  const perDay = (unit: string) => (new RegExp(`^(?:${DOWS})s?$`, "i").test(unit) ? 1 : 5);
+  const d = RE_HOURS_DAILY.exec(s);
   if (d) {
-    const n = toNum(d[1] ?? "") ?? 1;
-    return (n + (d[2] || d[3] ? 0.5 : 0)) * 5;
+    const n = rangeOf(d[1], d[2]) ?? 1;
+    const unit = d[5] ?? "day";
+    return { hours: round1((n + (d[3] || d[4] ? 0.5 : 0)) * perDay(unit)), kind: perDay(unit) === 1 ? "dow" : "day" };
+  }
+  const r = RE_DAILY_HOURS_REV.exec(s);
+  if (r) {
+    const n = rangeOf(r[2], r[3]) ?? 1;
+    const unit = r[1] ?? "day";
+    return { hours: round1((n + (r[4] || r[5] ? 0.5 : 0)) * perDay(unit)), kind: perDay(unit) === 1 ? "dow" : "day" };
   }
   const h = RE_HOURS_PER.exec(s);
-  if (h?.[1] && h[2]) {
-    const n = toNum(h[1]);
+  if (h?.[1] && h[3]) {
+    const n = rangeOf(h[1], h[2]);
     if (n == null) return null;
     const half = /and a half/i.test(h[0]) ? 0.5 : 0;
-    const unit = h[2].toLowerCase();
-    return round1((n + half) * (unit === "day" ? 5 : unit === "month" ? 1 / 4.33 : 1));
+    const unit = h[3].toLowerCase();
+    if (unit === "week") return { hours: round1(n + half), kind: "week" };
+    if (unit === "month") return { hours: round1((n + half) / 4.33), kind: "month" };
+    if (new RegExp(`^(?:${DOWS})s?$`).test(unit)) return { hours: round1(n + half), kind: "dow" };
+    return { hours: round1((n + half) * 5), kind: "day" };
   }
   const dd = RE_DAYS_PER.exec(s);
   if (dd?.[1] && dd[2]) {
     const n = toNum(dd[1]);
     if (n == null) return null;
     const unit = dd[2].toLowerCase();
-    return round1(n * 8 * (unit === "week" ? 1 : unit === "month" ? 1 / 4.33 : 1 / 13));
+    return { hours: round1(n * 8 * (unit === "week" ? 1 : unit === "month" ? 1 / 4.33 : 1 / 13)), kind: "days" };
   }
   return null;
+}
+
+/** Hours per week of human time stated in a sentence, or null. */
+export function hoursPerWeekIn(s: string): number | null {
+  return hoursStatement(s)?.hours ?? null;
+}
+
+/** Hours with no period ("three, four hours when I do it"), or null. */
+export function bareHoursIn(s: string): number | null {
+  if (hoursStatement(s)) return null;
+  const m = RE_HOURS_BARE.exec(s);
+  return m ? rangeOf(m[1], m[2]) : null;
+}
+
+/**
+ * One task's weekly hours from everything the owner said about it: the largest statement of each kind, summed across
+ * kinds ("two hours every Monday" + "an hour a day" = 7), but a weekly figure that restates a daily one is not added.
+ */
+function combineHours(xs: Array<{ hours: number; kind: HoursKind }>): number | null {
+  if (!xs.length) return null;
+  const best = new Map<HoursKind, number>();
+  for (const x of xs) best.set(x.kind, Math.max(best.get(x.kind) ?? 0, x.hours));
+  const week = best.get("week");
+  const day = best.get("day");
+  if (week != null && day != null && Math.abs(week - day) <= Math.max(week, day) * 0.25) best.delete(week >= day ? "day" : "week");
+  return round1([...best.values()].reduce((a, b) => a + b, 0));
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -228,14 +319,18 @@ const CONCEPTS: Concept[] = [
   { action: "packet", re: /\b(insurance|warranty|permit)\s+(claims? (?:paperwork|packets?|files?|documentation|submissions?)|claims? and supplements?|paperwork)\b|\b()(supplements?|(?:claim |insurance )?packets?|paperwork|permit applications?|submittals?)\b/i },
   {
     action: "triage",
-    re: /\b(maintenance|service|repair|support|warranty|work)\s+(requests?|tickets?|orders?)\b|\b()(dispatch(?:es|ing|ed)? (?:a |the )?vendors?|vendors? (?:gets? )?dispatched|(?:preferred )?vendor list|pick the vendor)\b/i,
+    re: /\b(maintenance|service|repair|support|warranty|work)\s+(requests?|tickets?|orders?)\b|\b()(dispatch(?:es|ing|ed)? (?:a |the )?vendors?|vendors? (?:gets? )?dispatched|(?:preferred )?vendor list|pick the vendor)\b|\b(client|customer|tenant|site)?\s?(complaints?)\b|\b()(log (?:it|them|each one)|tell the (?:crew|shift|team|site) (?:lead|supervisor)|sends? (?:me|us) ["“])/i,
   },
-  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))|\b(weekly|monthly|daily)\s+(?:text |email |status )?(updates?)\b/i },
-  { action: "quote", re: /\b(?:put(?:ting)? together|build(?:ing)?|writ(?:e|ing)|creat(?:e|ing)|do(?:ing)?)\s+()(quotes?|proposals?|bids?|estimates?)\b|\b(quote|proposal|bid)\s+(requests?|building|prep)\b/i },
+  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))|\b(weekly|monthly|daily)\s+(?:text |email |status )?(updates?)\b|\b(monday|weekly|monthly|friday)\s+(?:property[- ]manager|[a-z]+-[a-z]+)\s+(reports?|updates?|summar(?:y|ies))\b|\bsend (?:each|every|all|our|the|my) (?:[a-z-]+ ){1,3}(?:a |an |the )?(?:little |short |quick |brief )?()(reports?|updates?|summar(?:y|ies)|recaps?)\b/i },
+  {
+    action: "quote",
+    re: /\b(?:put(?:ting)? together|build(?:ing)?|writ(?:e|ing)|creat(?:e|ing)|do(?:ing)?|draft(?:ing)?)\s+(?:the |a |an |our |my |each |every |all the )?()(quotes?|proposals?|bids?|estimates?)\b|\b(quote|proposal|bid)\s+(requests?|building|prep|writing)\b|^()(bids?|proposals?|quotes?|estimates?)[.!]?$|\b(?:copy(?:ing)?|reus(?:e|ing)) (?:the |my |our )?(?:last|old|previous) ()(proposals?|quotes?|bids?|estimates?)\b/i,
+  },
   {
     action: "entry",
     re: /\b()(data entry|re-?typ(?:e|ing)|re-?key(?:ing)?|re-?enter(?:ing)?|copy(?:ing)? and past(?:e|ing)|migrat(?:e|ing|ion)|switch(?:ing)? over from|bring (?:all )?(?:of )?(?:this|the|their) data|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields|typ(?:e|es|ing) (?:the |it |them |every |each |all )?(?:[a-z]+ )?into)\b/i,
   },
+  { action: "coverage", re: /\b()(call[- ]outs?|call(?:s|ed)? (?:me )?out\b|no[- ]shows?|can'?t make (?:it|their shift|the shift)|cover (?:the |a |their |his |her )?shifts?|shift coverage|find (?:a |someone to )?(?:replacement|cover|sub(?:stitute)?))/i },
   { action: "schedule", re: /\b()((?:build(?:ing)?|mak(?:e|ing)|do(?:ing)?|reshuffl\w*) (?:the |our |a )?(?:technician |crew |tech |staff |driver |install )?schedules?|dispatch board|dispatch(?:ing)?(?! (?:a |the )?vendors?)(?=[\s.,]))/i },
   { action: "reviews", re: /\b(google|online|yelp|five[- ]star|5[- ]star|our|more|new|bad)\s+(reviews)\b|\b()(ask(?:ing)? (?:for|people for) (?:a )?reviews?|reputation)\b/i },
   { action: "sync", re: /\b()(scrap(?:e|es|ing)(?! agent)\b|catalogs?|price lists?|product (?:data|feeds?))\b/i },
@@ -267,10 +362,17 @@ export function conceptHits(s: string): Hit[] {
       object = qualifier;
       qualifier = "";
     }
+    // "log it, tell the crew lead" / "they send me “the trash wasn't emptied”": the task is handling client requests.
+    if (c.action === "triage" && /^(?:log |tell |sends? )/i.test(object)) {
+      qualifier = "client";
+      object = "requests";
+    }
     const phrase = normalizeWhitespace(`${qualifier} ${object}`).toLowerCase() || m[0].toLowerCase();
     if (hits.some((h) => h.action === c.action)) continue;
     hits.push({ action: c.action, qualifier: qualifier.toLowerCase(), object: object.toLowerCase(), phrase, index: m.index });
   }
+  // Chasing overdue invoices is one job, not a chasing job and an invoicing job.
+  if (hits.some((h) => h.action === "chase" && /invoice|balance|payment|receivable/.test(h.object))) return hits.filter((h) => h.action !== "invoice").sort((a, b) => a.index - b.index);
   // A follow-up of quotes/estimates is chasing; drop the quoting hit then.
   if (hits.some((h) => h.action === "chase")) return hits.filter((h) => h.action !== "quote" || !/follow|chas/i.test(s));
   return hits.sort((a, b) => a.index - b.index);
@@ -309,11 +411,30 @@ const CAP_STOP = new Set(
   "I We She He They It The A An And Or But So Then Also Every Each Our My Their His Her This That These Those If When What Who How Why Anything Nothing Tenants Owners Patients Clients Customers Email Text Texts Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March April May June July August September October November December Honestly Maybe Yeah Okay Oh Last Dr Mr Mrs Ms Hi Hey HVAC PM AM".split(" "),
 );
 
+/** Product names that are also everyday words ("square footage", "my teams", "a toast"): named only as software. */
+const COMMON_WORD_SYSTEMS = new Set(["Square", "Toast", "Teams", "Notion", "Canopy", "Weave", "Podium", "Stripe", "Zoom", "Excel", "Slack", "Outlook", "Clio", "Trello", "Asana", "Gusto", "Dext", "Karbon", "Procore", "Calendly"]);
+const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** "we use Square", "in Square", "the Square app" — yes; "Square footage, frequency…" — no. */
+function namedAsSoftware(s: string, name: string): boolean {
+  for (const m of s.matchAll(new RegExp(`(^|[^A-Za-z])(${esc(name)})(?![A-Za-z])`, "g"))) {
+    const at = (m.index ?? 0) + m[1]!.length;
+    const before = s.slice(Math.max(0, at - 32), at).toLowerCase();
+    const after = s.slice(at + name.length, at + name.length + 28);
+    if (/^\s*(?:footage|feet|foot|meters?|miles?|yards?|inch(?:es)?|deal|meal|root|dance|one|ones|off|up|away|corner|peg|knot)\b/i.test(after)) continue;
+    if (/\b(?:in|on|into|from|through|via|using|use|uses|used|with|our|my|their|the|to|switched to|moved to|run on|runs on|log into|logged into|microsoft|google)\s*$/.test(before)) return true;
+    if (/^\s*(?:app|pos|account|dashboard|software|system|terminal|reader|payments?|integration|export|reports?|data|invoices?|for)\b/i.test(after)) return true;
+  }
+  return false;
+}
+
 function systemsIn(s: string): string[] {
   const out: string[] = [];
   for (const t of KNOWN_SYSTEMS) {
-    const re = new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, t === "ESP" || t === "SAGE" ? "" : "i");
-    if (re.test(s) && !out.some((o) => o.toLowerCase().startsWith(t.toLowerCase()))) out.push(t);
+    const common = COMMON_WORD_SYSTEMS.has(t);
+    const re = new RegExp(`\\b${esc(t)}\\b`, t === "ESP" || t === "SAGE" || common ? "" : "i");
+    if (!re.test(s) || (common && !namedAsSoftware(s, t))) continue;
+    if (!out.some((o) => o.toLowerCase().startsWith(t.toLowerCase()))) out.push(t);
   }
   // "the Delta Dental portal, MetLife, Cigna, Guardian" — portals/sites the owner logs into.
   if (/\b(?:log(?:s|ging)? in(?:to)?|portals?|websites?|carrier sites?)\b/i.test(s)) {
@@ -330,7 +451,7 @@ function systemsIn(s: string): string[] {
 }
 
 const ROLE_WORDS =
-  "office manager|front desk lead|front desk|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|ops manager|controller|accountant|coordinator|project manager|production manager|estimator|admin|administrator|senior accountant|staff accountant|associate|paralegal|manager|lead|supervisor|foreman|office admin|claims coordinator|leasing agent|property manager";
+  "ops lead|operations lead|crew lead|shift lead|lead cleaner|site supervisor|office manager|front desk lead|front desk|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|ops manager|controller|accountant|coordinator|project manager|production manager|estimator|admin|administrator|senior accountant|staff accountant|associate|paralegal|manager|lead|supervisor|foreman|office admin|claims coordinator|leasing agent|property manager";
 
 function peopleIn(sentences: string[]): Person[] {
   const out: Person[] = [];
@@ -588,7 +709,11 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   for (const sp of speakerCounts.keys()) if (!people.some((p) => p.name === sp)) people.push({ name: sp, role: null });
   if (owner && !people.some((p) => p.name === owner)) people.unshift({ name: owner, role: "owner" });
   else if (owner) people.find((p) => p.name === owner)!.role ??= "owner";
-  const systems = [...new Set(sentences.flatMap((s) => systemsIn(s.text)))];
+  const systems0 = [...new Set(sentences.flatMap((s) => systemsIn(s.text)))];
+  // "QuickBooks" said once and "QuickBooks Online" said once are one system.
+  const fuller = (x: string) => systems0.find((y) => y !== x && y.toLowerCase().startsWith(x.toLowerCase())) ?? x;
+  const systems = [...new Set(systems0.map(fuller))];
+  for (const t of topics) t.systems = [...new Set(t.systems.map(fuller))];
   const rules = [...new Set(sentences.filter((s) => APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d[\d,]*\b[^.]*\bapprov/i.test(s.text)).map((s) => s.text))];
 
   const joined = allText.join(" ");

@@ -39,6 +39,11 @@ export type ToolDef<S extends z.ZodType = z.ZodType> = {
    * When the id is in agent.config.requireApprovalFor the runtime pauses the run for a human instead of running it.
    */
   approvalAction?: (input: z.infer<S>, ctx: ToolContext) => Promise<string | null> | string | null;
+  /**
+   * Refuse a call outright, before any approval is requested (e.g. a recipient the task never named). Returns the
+   * reason given back to the model, or null to continue.
+   */
+  precheck?: (input: z.infer<S>, ctx: ToolContext) => Promise<string | null> | string | null;
   /** Human-readable description shown on the approval card. */
   describe?: (input: z.infer<S>) => string;
   run(input: z.infer<S>, ctx: ToolContext): Promise<ToolOutput>;

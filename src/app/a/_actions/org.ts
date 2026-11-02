@@ -7,6 +7,8 @@ import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { env } from "@/server/env";
 import { clientIp } from "@/server/auth/session";
+import { emailInvite } from "@/server/auth/invite-email";
+import { logger } from "@/server/lib/logger";
 import { audit } from "@/server/security/audit";
 import { randomToken, sha256 } from "@/server/security/crypto";
 import { API_SCOPES, apiScope, createApiKey, revokeApiKey } from "@/server/api/keys";
@@ -99,7 +101,7 @@ async function createInvite(orgId: string, email: string, role: "owner" | "admin
 
 const inviteInput = z.object({ email: z.email("Enter a valid email").max(254), role: z.enum(["owner", "admin", "member", "viewer"]).default("member") });
 
-export async function inviteClientOwner(slug: string, clientId: string, email: string): Promise<Result<{ link: string | null }>> {
+export async function inviteClientOwner(slug: string, clientId: string, email: string): Promise<Result<{ link: string | null; emailed: boolean }>> {
   const parsed = inviteInput.safeParse({ email, role: "owner" });
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a valid email" };
   try {
@@ -109,8 +111,17 @@ export async function inviteClientOwner(slug: string, clientId: string, email: s
     const role = ctx.access.role === "owner" ? "owner" : "admin";
     const link = await createInvite(ctx.client.id, parsed.data.email, role, ctx.access.user.id);
     await audit({ orgId: ctx.client.id, actorType: "user", actorId: ctx.access.user.id, action: "invitation.created", metadata: { email: parsed.data.email, role }, ip: clientIp(await headers()) });
+    // The invite goes by email in the client's brand. The copyable link is a dev/test convenience only.
+    let emailed = false;
+    try {
+      emailed = (await emailInvite(ctx.client.id, parsed.data.email, link, { expiresInDays: INVITE_TTL / 86_400_000 })).sent;
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err), clientId: ctx.client.id }, "client invite email failed");
+    }
     revalidatePath(`/a/${slug}/clients`, "layout");
-    return { ok: true, link: env().NODE_ENV === "production" ? null : link };
+    const devLink = env().NODE_ENV === "production" ? null : link;
+    if (!emailed && !devLink) return { ok: false, error: "The invitation was saved but the email didn't send. Try again in a minute." };
+    return { ok: true, link: devLink, emailed };
   } catch (err) {
     return fail(err);
   }
@@ -118,7 +129,7 @@ export async function inviteClientOwner(slug: string, clientId: string, email: s
 
 // ── Team ───────────────────────────────────────────────────────────────────
 
-export async function inviteMember(slug: string, raw: z.input<typeof inviteInput>): Promise<Result<{ link: string | null }>> {
+export async function inviteMember(slug: string, raw: z.input<typeof inviteInput>): Promise<Result<{ link: string | null; emailed: boolean }>> {
   const parsed = inviteInput.safeParse(raw);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Enter a valid email" };
   try {
@@ -127,8 +138,16 @@ export async function inviteMember(slug: string, raw: z.input<typeof inviteInput
     if (parsed.data.role === "owner" && ctx.access.role !== "owner") return { ok: false, error: "Only owners can invite owners" };
     const link = await createInvite(ctx.agency.id, parsed.data.email, parsed.data.role, ctx.access.user.id);
     await audit({ orgId: ctx.agency.id, actorType: "user", actorId: ctx.access.user.id, action: "invitation.created", metadata: { email: parsed.data.email, role: parsed.data.role } });
+    let emailed = false;
+    try {
+      emailed = (await emailInvite(ctx.agency.id, parsed.data.email, link, { expiresInDays: INVITE_TTL / 86_400_000 })).sent;
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "team invite email failed");
+    }
     revalidatePath(`/a/${slug}/settings`);
-    return { ok: true, link: env().NODE_ENV === "production" ? null : link };
+    const devLink = env().NODE_ENV === "production" ? null : link;
+    if (!emailed && !devLink) return { ok: false, error: "The invitation was saved but the email didn't send. Try again in a minute." };
+    return { ok: true, link: devLink, emailed };
   } catch (err) {
     return fail(err);
   }

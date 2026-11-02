@@ -188,6 +188,7 @@ export default async function ResellPage({
               agents={agentsLite}
               customers={customersLite}
               plans={plansLite}
+              sources={r.knowledge}
               trigger={
                 <Button variant="secondary" size="sm">
                   <Plus aria-hidden /> Offer a teammate
@@ -271,6 +272,7 @@ export default async function ResellPage({
                       agents={agentsLite}
                       customers={customersLite}
                       plans={plansLite}
+                      sources={r.knowledge}
                       defaultCustomerId={c.id}
                       trigger={
                         <Button variant="accent" size="sm">

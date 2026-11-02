@@ -490,6 +490,16 @@ async function executeLeased(database: DB, runId: string, owner: string, opts: {
             result = { type: "tool_result", tool_use_id: call.id, content: JSON.stringify({ error: `Invalid input: ${parsed.error.message.slice(0, 800)}` }), is_error: true };
           } else {
             const ctx = ctxFor(call.id);
+            // Refused outright (no approval card): e.g. a recipient that came from memory instead of the task.
+            const refusal = await def.precheck?.(parsed.data, ctx);
+            if (refusal) {
+              const content = JSON.stringify({ error: refusal });
+              result = { type: "tool_result", tool_use_id: call.id, content, is_error: true };
+              await steps.write("tool_result", call.name, resultData(call.id, content, true, { refused: true }));
+              cp.results.push(result);
+              cp.pending.shift();
+              continue;
+            }
             const action = def.name === "request_approval" ? "request_approval" : await def.approvalAction?.(parsed.data, ctx);
             const gated = def.name === "request_approval" || (action != null && requiresApproval(action, requireApproval));
             if (gated && cp.approvalId) {
@@ -678,8 +688,12 @@ async function executeLeased(database: DB, runId: string, owner: string, opts: {
 const UNTRUSTED_TOOLS = new Set(["knowledge_search", "create_deliverable"]);
 const EXTERNAL_EVENTS = new Set(["email.received", "sms.received", "slack.message", "webhook"]);
 
+/** A change request only rewrites the deliverable: it can look things up and deliver the new version, never send. */
+const REVISION_TOOLS = new Set(["knowledge_search", "memory_recall", "create_deliverable"]);
+
 export function restrictTools(tools: ToolDef[], run: RunRow, trust: RunTrust): ToolDef[] {
   if (!trust.trusted) return tools.filter((t) => UNTRUSTED_TOOLS.has(t.name));
+  if (run.input?.kind === "revision") return tools.filter((t) => REVISION_TOOLS.has(t.name));
   // Event payloads (an inbound email, a webhook body) are outside content too: they must not be able to plant memories.
   if (typeof run.input?.event === "string" && EXTERNAL_EVENTS.has(run.input.event)) return tools.filter((t) => t.name !== "memory_save");
   return tools;

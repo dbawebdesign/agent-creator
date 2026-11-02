@@ -1,24 +1,12 @@
 /**
  * Fixed-window rate limiter backed by Postgres (shared across instances).
- * Uses an UNLOGGED table for speed; swap for Redis at very high volume.
+ * Uses an UNLOGGED table for speed (created by migration 0004_ops_scale; expired windows are deleted by the hourly
+ * maintenance.prune job); swap for Redis at very high volume.
  */
 import { sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 
-let ensured = false;
-async function ensureTable() {
-  if (ensured) return;
-  await db().execute(sql`
-    create unlogged table if not exists rate_limits (
-      key text primary key,
-      count integer not null,
-      reset_at timestamptz not null
-    )`);
-  ensured = true;
-}
-
 export async function rateLimit(key: string, limit: number, windowSec: number): Promise<{ ok: boolean; remaining: number; resetAt: Date }> {
-  await ensureTable();
   const res = await db().execute(sql`
     insert into rate_limits (key, count, reset_at) values (${key}, 1, now() + (${windowSec} || ' seconds')::interval)
     on conflict (key) do update set
