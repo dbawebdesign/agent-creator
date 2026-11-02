@@ -144,7 +144,7 @@ export function AskComposer({
         <button
           type="submit"
           disabled={!text.trim() || pending}
-          aria-label={`Send to ${agent.name}`}
+          aria-label={`Send message to ${agent.name}`}
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-lg transition-[background,color,opacity] duration-150",
             text.trim() ? "bg-accent text-accent-ink hover:brightness-110" : "bg-surface-2 text-ink-4",

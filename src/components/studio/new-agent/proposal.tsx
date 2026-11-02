@@ -69,7 +69,7 @@ export function ProposalReview({
   const firstName = draft.name || "your agent";
 
   return (
-    <div className="grid gap-10 animate-fade-in lg:grid-cols-[minmax(0,1fr)_300px]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-10 animate-fade-in lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0">
         {/* Identity */}
         <div className="flex items-start gap-4">
@@ -77,20 +77,27 @@ export function ProposalReview({
           <div className="min-w-0 flex-1">
             <p className="text-[12.5px] font-medium text-accent">Proposed for {clientName}</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
-              <input
-                aria-label="Agent name"
-                value={draft.name}
-                maxLength={40}
-                onChange={(e) => set("name", e.target.value)}
-                className="w-[8ch] min-w-0 rounded-md bg-transparent text-[26px] font-semibold tracking-[-0.025em] text-ink [field-sizing:content] hover:bg-surface-2/60 focus:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-              />
-              <span className="text-[26px] font-light text-ink-4">·</span>
+              <span className="relative -ml-1 inline-grid max-w-full">
+                <span aria-hidden className="invisible col-start-1 row-start-1 px-1 text-[26px] font-semibold tracking-[-0.025em] whitespace-pre">
+                  {draft.name || "Name"}
+                </span>
+                <input
+                  aria-label="Agent name"
+                  size={1}
+                  value={draft.name}
+                  maxLength={40}
+                  placeholder="Name"
+                  onChange={(e) => set("name", e.target.value)}
+                  className="col-start-1 row-start-1 w-full min-w-0 rounded-md bg-transparent px-1 text-[26px] font-semibold tracking-[-0.025em] text-ink hover:bg-surface-2/60 focus:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                />
+              </span>
+              <span className="text-[26px] font-light text-ink-4 max-sm:hidden">·</span>
               <input
                 aria-label="Role"
                 value={draft.role}
                 maxLength={80}
                 onChange={(e) => set("role", e.target.value)}
-                className="min-w-0 flex-1 rounded-md bg-transparent text-[20px] font-medium tracking-[-0.015em] text-ink-2 hover:bg-surface-2/60 focus:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                className="min-w-0 flex-1 rounded-md bg-transparent text-[20px] font-medium max-sm:basis-full tracking-[-0.015em] text-ink-2 hover:bg-surface-2/60 focus:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
               />
             </div>
             <textarea
@@ -110,7 +117,7 @@ export function ProposalReview({
             <h2 id="wf-h" className="text-[14px] font-semibold text-ink">
               What {firstName} will do <span className="ml-1 font-normal text-ink-4 tabular">{onCount} of {draft.workflows.length}</span>
             </h2>
-            <span className="text-[12.5px] text-ink-4">Switch off anything you don’t want yet</span>
+            <span className="text-[12.5px] text-ink-4 max-sm:hidden">Switch off anything you don’t want yet</span>
           </div>
           <div className="space-y-3">
             {draft.workflows.map((w) => (
@@ -235,15 +242,27 @@ export function ProposalReview({
           </div>
         </details>
 
-        <div className="mt-8 pb-4">
+        <div className="mt-8 pb-4 max-lg:pb-24">
           <button type="button" onClick={onStartOver} className="text-[13px] text-ink-3 underline-offset-2 hover:text-ink hover:underline">
             Start over with a different call
           </button>
         </div>
       </div>
 
+      {/* Mobile hire bar */}
+      <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-line bg-canvas/90 px-4 py-3 backdrop-blur-md lg:hidden">
+        <div className="min-w-0 flex-1">
+          <p className="tabular text-[15px] font-semibold text-ink">{weekly} h / week</p>
+          <p className="truncate text-[12px] text-ink-3">{onCount} workflow{onCount === 1 ? "" : "s"} · {priceLabel ?? "flat rate"}</p>
+        </div>
+        <Button variant="primary" size="lg" onClick={onHire} disabled={hiring || !draft.name.trim()}>
+          {hiring ? <Loader2 className="animate-spin" /> : null}
+          Hire {draft.name || "agent"}
+        </Button>
+      </div>
+
       {/* Summary rail */}
-      <aside className="lg:sticky lg:top-8 lg:self-start">
+      <aside className="max-lg:hidden lg:sticky lg:top-8 lg:self-start">
         <div className="rounded-xl border border-line bg-surface p-5 shadow-sm">
           <div className="text-[12.5px] text-ink-3">Saves about</div>
           <div className="tabular mt-0.5 text-[34px] font-semibold leading-none tracking-[-0.03em] text-ink">

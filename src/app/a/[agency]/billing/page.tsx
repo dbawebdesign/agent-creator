@@ -16,7 +16,8 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
   const admin = hasRole(access, "admin");
   const cost = margin.reduce((s, m) => s + m.costCents, 0);
   const revenue = margin.reduce((s, m) => s + m.priceCents, 0);
-  const pct = revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 10 : 0;
+  const pctRaw = revenue ? ((revenue - cost) / revenue) * 100 : 0;
+  const pct = pctRaw >= 99 && pctRaw < 100 ? pctRaw.toFixed(2) : pctRaw.toFixed(1);
   const activeSubs = subs.filter((s) => s.sub.status !== "canceled");
 
   return (
@@ -105,7 +106,7 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
                       </td>
                       <td className="px-3 py-3 text-right text-ink-2">{m.priceCents ? money(m.priceCents) : <span className="text-ink-4">—</span>}</td>
                       <td className="px-3 py-3 text-right text-ink-2" title={Object.entries(m.byKind).map(([k, v]) => `${k}: $${(v / 1e6).toFixed(2)}`).join(" · ")}>{money(m.costCents)}</td>
-                      <td className={cn("px-3 py-3 text-right font-medium", mg === null ? "text-ink-4" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>{mg === null ? "—" : `${mg.toFixed(1)}%`}</td>
+                      <td className={cn("px-3 py-3 text-right font-medium", mg === null ? "text-ink-4" : mg >= 80 ? "text-good" : mg >= 50 ? "text-ink-2" : "text-warn")}>{mg === null ? "—" : `${mg >= 99 && mg < 100 ? mg.toFixed(2) : mg.toFixed(1)}%`}</td>
                       <td className="px-5 py-3">
                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2" aria-hidden>
                           <div className="h-full rounded-full bg-ink-4" style={{ width: `${Math.max(share, m.costCents ? 2 : 0)}%` }} />

@@ -11,6 +11,7 @@ import { env } from "@/server/env";
 import { audit } from "@/server/security/audit";
 import { mcpConfigSnippet, type McpSnippets } from "@/server/api/mcp-config";
 import { normalizeE164 } from "./sms";
+import { slackBotToken, slackRevokeToken } from "./slack";
 
 export { mcpConfigSnippet, type McpSnippets };
 
@@ -205,6 +206,10 @@ export async function disconnectChannel(orgId: string, connectionId: string, act
     .where(and(eq(schema.channelConnections.id, connectionId), eq(schema.channelConnections.orgId, orgId)))
     .limit(1);
   if (!conn) throw new ChannelError("not_found", "Connection not found.");
+  if (conn.kind === "slack" && conn.secretId) {
+    const token = await slackBotToken(orgId, conn.secretId);
+    if (token) await slackRevokeToken(token);
+  }
   await database.transaction(async (tx) => {
     if (conn.secretId) {
       await tx.delete(schema.secrets).where(and(eq(schema.secrets.id, conn.secretId), eq(schema.secrets.orgId, orgId)));

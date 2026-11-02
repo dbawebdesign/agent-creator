@@ -243,8 +243,21 @@ export async function slackPostMessage(input: {
   return { providerId: data.ts ?? null, simulated: false };
 }
 
+/** Best-effort token revocation when a workspace is disconnected. */
+export async function slackRevokeToken(token: string): Promise<void> {
+  try {
+    await fetch("https://slack.com/api/auth.revoke", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded" },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    logger.warn("slack: token revoke failed (continuing)");
+  }
+}
+
 /** Strip the bot mention ("<@U123> do X" → "do X"). */
 export function stripMention(text: string, botUserId?: string | null): string {
-  const t = botUserId ? text.replace(new RegExp(`<@${botUserId}>`, "g"), "") : text.replace(/^\s*<@[A-Z0-9]+>/, "");
+  const t = botUserId && /^[A-Z0-9]+$/.test(botUserId) ? text.replace(new RegExp(`<@${botUserId}>`, "g"), "") : text.replace(/^\s*<@[A-Z0-9]+>/, "");
   return t.trim();
 }

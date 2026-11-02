@@ -55,3 +55,10 @@
 
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { scrollbar-width: none; }
+
+.portal-reading.prose-roster > .overflow-x-auto:first-child { margin-top: 0; }
+.portal-reading.prose-roster > .overflow-x-auto:last-child { margin-bottom: 0; }
+@media (max-width: 640px) {
+  .portal-reading.prose-roster td { white-space: nowrap; }
+  .portal-reading.prose-roster { font-size: 15px; }
+}

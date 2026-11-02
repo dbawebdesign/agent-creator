@@ -13,6 +13,18 @@ import * as engine from "@/server/services/engine";
 import { ApiError, decodeCursor, encodeCursor, listQuery, parseWith } from "./http";
 import type { ApiPrincipal } from "./keys";
 
+/** Translate engine errors (matched by name so a mocked engine works too) into public API errors. */
+async function engineCall<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const name = err instanceof Error ? err.name : "";
+    if (name === "EngineNotFoundError") throw new ApiError("not_found", "Not found.");
+    if (name === "EngineInputError") throw new ApiError("invalid_request", (err as Error).message.slice(0, 300));
+    throw err;
+  }
+}
+
 const VISIBLE_AGENT_STATUSES = ["provisioning", "active", "paused"] as const;
 
 type AgentRow = typeof schema.agents.$inferSelect;
@@ -215,7 +227,7 @@ export async function sendMessage(
       .limit(1);
     if (!conv) throw new ApiError("not_found", "Conversation not found.");
   }
-  const res = await engine.messageAgent({
+  const res = await engineCall(() => engine.messageAgent({
     orgId: p.orgId,
     agentId: agent.id,
     text: input.text,
@@ -223,7 +235,7 @@ export async function sendMessage(
     channel,
     actor: { type: "api_key", keyId: p.keyId },
     wait: input.wait,
-  });
+  }));
   const done = input.wait && typeof res.reply === "string";
   return {
     status: done ? 200 : 202,
@@ -279,6 +291,6 @@ export async function runWorkflow(p: ApiPrincipal, workflowId: string): Promise<
   if (!agent) throw new ApiError("not_found", "Workflow not found.");
   if (agent.status !== "active") throw new ApiError("conflict", `Agent is ${agent.status}; workflows can't run right now.`);
   if (!w.enabled) throw new ApiError("conflict", "Workflow is disabled.");
-  const { runId } = await engine.runWorkflowNow({ orgId: p.orgId, workflowId: w.id, actor: { type: "api_key", keyId: p.keyId } });
+  const { runId } = await engineCall(() => engine.runWorkflowNow({ orgId: p.orgId, workflowId: w.id, actor: { type: "api_key", keyId: p.keyId } }));
   return { runId, workflowId: w.id, status: "queued" };
 }

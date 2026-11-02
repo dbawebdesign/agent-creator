@@ -29,7 +29,7 @@ function notFound() {
 
 /** Where to land after install when no return path was given. UI owners: change here if routes differ. */
 export function defaultChannelsPath(org: { kind: string; slug: string }): string {
-  return org.kind === "agency" ? `/a/${org.slug}/settings/channels` : `/p/${org.slug}/settings/channels`;
+  return org.kind === "agency" ? `/a/${org.slug}/settings` : `/p/${org.slug}/connect`;
 }
 
 function back(path: string, result: string): NextResponse {

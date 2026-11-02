@@ -7,6 +7,13 @@ import { AgentOrb } from "@/components/ui/agent-orb";
 import { AgentStatus } from "@/components/studio/bits";
 import { AgentMenu, AgentTabs, CopyInline } from "@/components/studio/agent-header";
 
+export async function generateMetadata({ params }: { params: Promise<{ agency: string; agentId: string }> }) {
+  const { agency, agentId } = await params;
+  const { org } = await requireOrg(agency, "viewer");
+  const found = await getAgent(org.id, agentId);
+  return { title: found ? `${found.agent.name} · ${found.org.name}` : "Agent" };
+}
+
 export default async function AgentLayout({ children, params }: { children: React.ReactNode; params: Promise<{ agency: string; agentId: string }> }) {
   const { agency: slug, agentId } = await params;
   const { org: agency } = await requireOrg(slug, "viewer");

@@ -8,6 +8,7 @@
 import "server-only";
 import { z } from "zod";
 import { logger } from "@/server/lib/logger";
+import { readTextCapped } from "./body";
 import { ApiError, authenticate, bearerToken, errorResponse } from "./http";
 import { hasScope, type ApiPrincipal, type ApiScope } from "./keys";
 import { getDeliverable, listAgents, listDeliverables, runWorkflow, sendMessage, workflowsFor } from "./v1";
@@ -326,8 +327,8 @@ export async function handleMcpPost(req: Request, appUrl: string): Promise<Respo
     return errorResponse("internal_error", "Something went wrong.");
   }
 
-  const raw = await req.text();
-  if (raw.length > 512 * 1024) {
+  const raw = await readTextCapped(req, 512 * 1024);
+  if (raw === null) {
     return Response.json(rpcError(null, INVALID_REQUEST, "Request too large"), { status: 413, headers: JSON_HEADERS });
   }
   let body: unknown;

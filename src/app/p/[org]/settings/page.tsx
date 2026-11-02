@@ -9,7 +9,7 @@ const ROLE: Record<string, string> = { owner: "Owner", admin: "Admin", member: "
 
 function Section({ id, title, body, children }: { id: string; title: string; body?: string; children: React.ReactNode }) {
   return (
-    <section aria-labelledby={id} className="grid gap-4 border-t border-line py-8 first:border-t-0 first:pt-0 md:grid-cols-[220px_minmax(0,1fr)] md:gap-10">
+    <section aria-labelledby={id} className="grid gap-4 border-t border-line py-8 first-of-type:border-t-0 first-of-type:pt-0 md:grid-cols-[220px_minmax(0,1fr)] md:gap-10">
       <div>
         <h2 id={id} className="text-[14.5px] font-semibold tracking-[-0.01em] text-ink">
           {title}

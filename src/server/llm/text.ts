@@ -37,7 +37,7 @@ export function keywords(text: string, max = 8): string[] {
 export function splitSentences(text: string): string[] {
   return text
     .replace(/\r/g, "")
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9"“])|\n{2,}/)
+    .split(/(?<=[.!?]["”')]?)\s+(?=[A-Z0-9"“])|\n{2,}/)
     .map((s) => normalizeWhitespace(s))
     .filter((s) => s.length > 0);
 }

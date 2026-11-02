@@ -1,12 +1,12 @@
 /**
  * Minimal, calm HTML + text email for deliverables and agent replies.
  *
- * Markdown is rendered with react-markdown (raw HTML in the source is NOT rendered; URLs are filtered to
- * http/https/mailto by its default urlTransform) into static markup, then styled inline for mail clients.
- * Every interpolated string is HTML-escaped.
+ * Markdown is parsed with remark (GFM) → hast, then serialized by a strict allowlist serializer below: raw HTML
+ * in the source is dropped, links must be absolute http/https/mailto, images are dropped (no tracking pixels),
+ * and every text node / interpolated string is HTML-escaped. No React: this runs in the worker under the
+ * react-server condition, where react-dom/server is unavailable.
  */
 import "server-only";
-import { createElement, type ReactNode } from "react";
 import { markdownToText } from "./text";
 
 export { markdownToText };
@@ -32,51 +32,83 @@ const STYLE = {
   hr: "border:0;border-top:1px solid #e5e7eb;margin:20px 0;",
 };
 
-/** Render markdown to inline-styled, sanitized HTML. */
+type HNode = { type: string; tagName?: string; properties?: Record<string, unknown>; children?: HNode[]; value?: string };
+
+const BLOCK_STYLE: Record<string, string> = {
+  p: STYLE.p,
+  h1: `${STYLE.h}font-size:20px;`,
+  h2: `${STYLE.h}font-size:17px;`,
+  h3: `${STYLE.h}font-size:15px;`,
+  h4: `${STYLE.h}font-size:14px;`,
+  h5: `${STYLE.h}font-size:14px;`,
+  h6: `${STYLE.h}font-size:14px;`,
+  ul: STYLE.list,
+  ol: STYLE.list,
+  li: STYLE.li,
+  table: STYLE.table,
+  th: `${STYLE.cell}background:#f9fafb;font-weight:600;`,
+  td: STYLE.cell,
+  pre: STYLE.pre,
+  blockquote: STYLE.quote,
+  hr: STYLE.hr,
+};
+const PLAIN = new Set(["strong", "em", "del", "thead", "tbody", "tr", "br", "code"]);
+const VOID = new Set(["hr", "br"]);
+const DROP = new Set(["img", "input", "script", "style", "iframe", "object", "embed", "svg", "math"]);
+
+function safeHref(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  try {
+    const u = new URL(v);
+    return u.protocol === "http:" || u.protocol === "https:" || u.protocol === "mailto:" ? u.toString() : null;
+  } catch {
+    return null; // relative links mean nothing in an inbox
+  }
+}
+
+/** Serialize a (remark-rehype) hast tree with a strict tag/attribute allowlist and inline styles. */
+function serialize(node: HNode, accent: string, inPre = false): string {
+  if (node.type === "text") return escapeHtml(node.value ?? "");
+  if (node.type === "root") return (node.children ?? []).map((c) => serialize(c, accent, inPre)).join("");
+  if (node.type !== "element" || !node.tagName) return ""; // raw HTML, comments, doctype: dropped
+  const tag = node.tagName.toLowerCase();
+  if (DROP.has(tag)) return "";
+  const inner = () => (node.children ?? []).map((c) => serialize(c, accent, inPre || tag === "pre")).join("");
+  if (tag === "a") {
+    const href = safeHref(node.properties?.href);
+    return href
+      ? `<a href="${escapeHtml(href)}" style="color:${accent};text-decoration:underline;" rel="noopener noreferrer">${inner()}</a>`
+      : inner();
+  }
+  if (tag === "code" && !inPre) return `<code style="${STYLE.code}">${inner()}</code>`;
+  if (tag === "h1" || tag === "h2" || tag === "h3") {
+    const out = { h1: "h2", h2: "h3", h3: "h4" }[tag];
+    return `<${out} style="${BLOCK_STYLE[tag]}">${inner()}</${out}>`;
+  }
+  const style = BLOCK_STYLE[tag];
+  if (style !== undefined || PLAIN.has(tag)) {
+    const align = node.properties?.align;
+    const extra = (tag === "th" || tag === "td") && (align === "left" || align === "right" || align === "center") ? `text-align:${align};` : "";
+    const attr = style !== undefined ? ` style="${style}${extra}"` : "";
+    if (VOID.has(tag)) return `<${tag}${attr}>`;
+    return `<${tag}${attr}>${inner()}</${tag}>`;
+  }
+  return inner(); // unknown wrappers (sections, sup, div): keep the text, drop the element
+}
+
+/** Render markdown (GFM) to inline-styled, sanitized HTML for email. Raw HTML in the source is never rendered. */
 export async function markdownToEmailHtml(markdown: string, accent: string): Promise<string> {
   try {
-    const [{ default: Markdown }, { default: remarkGfm }, { renderToStaticMarkup }] = await Promise.all([
-      import("react-markdown"),
+    const [{ unified }, { default: remarkParse }, { default: remarkGfm }, { default: remarkRehype }] = await Promise.all([
+      import("unified"),
+      import("remark-parse"),
       import("remark-gfm"),
-      import("react-dom/server"),
+      import("remark-rehype"),
     ]);
-    const s = (style: string) => ({ style: Object.fromEntries(style.split(";").filter(Boolean).map((d) => {
-      const [k, ...v] = d.split(":");
-      return [k!.trim().replace(/-([a-z])/g, (_, c: string) => c.toUpperCase()), v.join(":").trim()];
-    })) });
-    type P = { children?: ReactNode; href?: string };
-    const el = (tag: string, style: string) => (props: P) => createElement(tag, s(style), props.children);
-    const tree = createElement(
-      Markdown,
-      {
-        remarkPlugins: [remarkGfm],
-        skipHtml: true,
-        components: {
-          p: el("p", STYLE.p),
-          h1: el("h2", `${STYLE.h}font-size:20px;`),
-          h2: el("h3", `${STYLE.h}font-size:17px;`),
-          h3: el("h4", `${STYLE.h}font-size:15px;`),
-          h4: el("h4", `${STYLE.h}font-size:14px;`),
-          ul: el("ul", STYLE.list),
-          ol: el("ol", STYLE.list),
-          li: el("li", STYLE.li),
-          table: el("table", STYLE.table),
-          th: el("th", `${STYLE.cell}background:#f9fafb;font-weight:600;`),
-          td: el("td", STYLE.cell),
-          code: el("code", STYLE.code),
-          pre: el("pre", STYLE.pre),
-          blockquote: el("blockquote", STYLE.quote),
-          hr: () => createElement("hr", s(STYLE.hr)),
-          img: () => null,
-          a: (props: P) =>
-            createElement("a", { href: props.href, ...s(`color:${accent};text-decoration:underline;`), rel: "noopener noreferrer" }, props.children),
-        },
-      },
-      markdown,
-    );
-    return renderToStaticMarkup(tree);
+    const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: false });
+    const tree = await processor.run(processor.parse(markdown));
+    return serialize(tree as unknown as HNode, accent);
   } catch {
-    // Fallback (e.g. a bundler that can't load react-dom/server): escaped paragraphs.
     return markdown
       .split(/\n{2,}/)
       .map((para) => `<p style="${STYLE.p}">${escapeHtml(para).replace(/\n/g, "<br>")}</p>`)

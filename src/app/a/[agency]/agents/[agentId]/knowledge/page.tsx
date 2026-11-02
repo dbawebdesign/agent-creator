@@ -19,7 +19,7 @@ export default async function KnowledgePage({ params }: { params: Promise<{ agen
   if (!found) notFound();
   const sources = await agentKnowledge(found.agent.orgId, found.agent.id);
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_360px]">
       <section className="min-w-0">
         <SectionHeading title="Sources" count={sources.length} />
         {sources.length ? (

@@ -40,17 +40,29 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
         {canManage ? <AddCustomerDialog slug={slug} /> : null}
       </header>
 
-      <section aria-label="Revenue" className="rounded-2xl border border-line bg-surface p-5 shadow-sm md:p-7">
-        <p className="text-[13px] font-medium text-ink-3">Monthly revenue from your customers</p>
-        <p className="mt-1 text-[40px] leading-none font-semibold tracking-[-0.03em] text-ink tabular md:text-[48px]">
-          {formatMoney(r.monthlyCents)}
-          <span className="ml-1 text-[18px] font-medium tracking-normal text-ink-4">/mo</span>
-        </p>
-        <p className="mt-3 text-[13.5px] text-ink-3">
-          {r.monthlyCents > 0
-            ? `${paying} paying ${paying === 1 ? "customer" : "customers"} · ${formatMoney(yearly)} a year, from work your team already does.`
-            : "Your first customer turns your team into a revenue line."}
-        </p>
+      <section aria-label="Revenue" className="flex flex-col gap-6 rounded-2xl border border-line bg-surface p-5 shadow-sm md:flex-row md:items-end md:justify-between md:p-7">
+        <div>
+          <p className="text-[13px] font-medium text-ink-3">Monthly revenue from your customers</p>
+          <p className="mt-1 text-[40px] leading-none font-semibold tracking-[-0.03em] text-ink tabular md:text-[48px]">
+            {formatMoney(r.monthlyCents)}
+            <span className="ml-1 text-[18px] font-medium tracking-normal text-ink-4">/mo</span>
+          </p>
+          <p className="mt-3 text-[13.5px] text-ink-3">
+            {r.monthlyCents > 0
+              ? `${formatMoney(yearly)} a year, from work your team already does.`
+              : "Your first customer turns your team into a revenue line."}
+          </p>
+        </div>
+        <dl className="grid grid-cols-2 gap-6 border-t border-line pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
+          <div>
+            <dt className="text-[12px] text-ink-4">Paying customers</dt>
+            <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">{paying}</dd>
+          </div>
+          <div>
+            <dt className="text-[12px] text-ink-4">Teammates resold</dt>
+            <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">{r.customers.reduce((n, c) => n + c.agents.length, 0)}</dd>
+          </div>
+        </dl>
       </section>
 
       {!setupDone && canManage ? (
@@ -110,7 +122,6 @@ export default async function ResellPage({ params }: { params: Promise<{ org: st
                     ) : (
                       <span className="text-ink-4">No teammates yet</span>
                     )}
-                    {c.plans.length ? <span className="text-ink-4">· {c.plans.map((x) => x.name).join(", ")}</span> : null}
                   </div>
                 </div>
                 <div className="flex items-center gap-3 sm:justify-end">

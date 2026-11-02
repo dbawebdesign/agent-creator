@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { and, asc, eq } from "drizzle-orm";
-import { redirect } from "next/navigation";
 import type { AgentSpec } from "@/server/agents/spec";
 import { agentSpec } from "@/server/agents/spec";
 import { requireOrg } from "@/server/auth/access";
@@ -26,7 +25,6 @@ export default async function NewAgentPage({
   let resume: { discoveryId: string; clientId: string; clientName: string; transcript: string } | null = null;
   if (sp.d) {
     const row = await getDiscovery(agency.id, sp.d);
-    if (row?.d.status === "hired" && row.d.agentId) redirect(`/a/${slug}/agents/${row.d.agentId}`);
     if (row) resume = { discoveryId: row.d.id, clientId: row.d.orgId, clientName: row.orgName, transcript: row.d.transcript };
   }
 

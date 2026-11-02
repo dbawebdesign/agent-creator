@@ -56,10 +56,10 @@ export default async function AgentOverview({ params, searchParams }: { params: 
         <Stat className="sm:px-6" label="Hours saved" value={hours(value.hours)} sub="all time" />
         <Stat className="sm:px-6" label="Deliverables" value={value.delivered} sub={value.approved ? `${value.approved} approved` : "to date"} />
         <Stat className="sm:px-6" label="Capacity" value={`${Math.round(weekly)} h`} sub="per week, scheduled" />
-        <Stat className="sm:px-6" label="AI cost" value={microsToDollars(value.costMicros)} sub={`${value.runs} runs · agency only`} />
+        <Stat className="sm:px-6" label="AI cost" value={microsToDollars(value.costMicros)} sub={`${value.runs} run${value.runs === 1 ? "" : "s"} · agency only`} />
       </section>
 
-      <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-[minmax(0,1fr)_320px]">
         <section className="min-w-0">
           <SectionHeading title="Recent deliverables" count={value.delivered} />
           <DeliverableList

@@ -1,13 +1,17 @@
 "use server";
 
 import { CronExpressionParser } from "cron-parser";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { after } from "next/server";
+import { complete as completeJob, fail as failJob } from "@/server/jobs/queue";
+import { logger } from "@/server/lib/logger";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { agentSpec, channelKind, type AgentSpec } from "@/server/agents/spec";
 import { db, schema } from "@/server/db/client";
 import {
   addKnowledge,
+  analyzeDiscovery,
   createDiscovery,
   hireAgent,
   runWorkflowNow,
@@ -56,10 +60,33 @@ export async function startDiscovery(raw: z.input<typeof startInput>): Promise<R
   }
 }
 
+/**
+ * Fallback for when no worker is running: if the Architect job is still unclaimed a few seconds after
+ * creation, claim it atomically (so a worker can't double-process it) and run the Architect after the response.
+ */
+async function analyzeInlineIfIdle(discoveryId: string) {
+  const [job] = await db()
+    .update(schema.jobs)
+    .set({ status: "running", lockedBy: "web-inline", lockedUntil: new Date(Date.now() + 5 * 60_000), attempts: sql`${schema.jobs.attempts} + 1` })
+    .where(and(eq(schema.jobs.idempotencyKey, `discovery:${discoveryId}`), eq(schema.jobs.status, "queued")))
+    .returning({ id: schema.jobs.id, attempts: schema.jobs.attempts, maxAttempts: schema.jobs.maxAttempts });
+  if (!job) return;
+  after(async () => {
+    try {
+      await analyzeDiscovery(discoveryId);
+      await completeJob(db(), job.id);
+    } catch (err) {
+      logger.error({ err, discoveryId }, "inline architect failed");
+      await failJob(db(), job, err);
+    }
+  });
+}
+
 export async function pollDiscovery(slug: string, discoveryId: string) {
   const ctx = await studio(slug, "member");
   const row = await getDiscovery(ctx.agency.id, discoveryId);
   if (!row) return { status: "missing" as const };
+  if (row.d.status === "pending" && Date.now() - row.d.createdAt.getTime() > 4000) await analyzeInlineIfIdle(row.d.id);
   return {
     status: row.d.status,
     error: row.d.error,

@@ -4,16 +4,18 @@ import { and, asc, eq } from "drizzle-orm";
 import { ArrowUpRight, Bot, ChevronRight, Plus } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
 import { db, schema } from "@/server/db/client";
-import { getClient } from "@/server/queries/studio";
+import { agencyOrgs, getClient } from "@/server/queries/studio";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { buttonClass } from "@/components/ui/button";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { InviteOwner, PlanSelect } from "@/components/studio/client-dialogs";
 import { AgentStatus, ClientStatus, hours, money, OrgMark, OUTPUT_LABEL, SectionHeading } from "@/components/studio/bits";
 
-export async function generateMetadata({ params }: { params: Promise<{ clientSlug: string }> }) {
-  const { clientSlug } = await params;
-  return { title: clientSlug };
+export async function generateMetadata({ params }: { params: Promise<{ agency: string; clientSlug: string }> }) {
+  const { agency, clientSlug } = await params;
+  const { org } = await requireOrg(agency, "viewer");
+  const client = (await agencyOrgs(org.id)).find((o) => o.slug === clientSlug);
+  return { title: client?.name ?? "Client" };
 }
 
 export default async function ClientPage({ params }: { params: Promise<{ agency: string; clientSlug: string }> }) {
@@ -41,7 +43,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
             <ClientStatus status={org.status} />
           </div>
           <p className="mt-0.5 text-[14px] text-ink-3">
-            {[org.industry, org.website, customers.length ? `${customers.length} resale customer${customers.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Client"}
+            {[org.industry, org.website?.replace(/^https?:\/\//, "").replace(/\/$/, ""), customers.length ? `${customers.length} resale customer${customers.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Client"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -54,7 +56,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
         </div>
       </header>
 
-      <div className="mt-10 grid gap-12 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="mt-10 grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-12">
           <section>
             <SectionHeading title="AI employees" count={agents.length} />

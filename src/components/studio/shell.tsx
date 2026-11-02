@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
@@ -48,7 +48,7 @@ export function StudioShell(props: ShellProps) {
   const base = `/a/${props.agency.slug}`;
   const items = useMemo<PaletteItem[]>(
     () => [
-      { id: "new-agent", group: "Actions", label: "New agent from a discovery call", href: `${base}/agents/new`, icon: <Plus />, keywords: ["hire", "create", "transcript", "architect"] },
+      { id: "new-agent", group: "Actions", label: "New agent from a discovery call", href: `${base}/agents/new`, icon: <Plus />, keywords: ["hire", "create", "transcript", "architect"], shortcut: "C" },
       { id: "new-client", group: "Actions", label: "Add a client", href: `${base}/clients?new=1`, icon: <Building2 />, keywords: ["create", "customer"] },
       { id: "invite", group: "Actions", label: "Invite a teammate", href: `${base}/settings#team`, icon: <UserPlus /> },
       { id: "new-plan", group: "Actions", label: "Create a plan", href: `${base}/billing?new=1`, icon: <CreditCard />, keywords: ["price", "pricing"] },
@@ -77,6 +77,19 @@ export function StudioShell(props: ShellProps) {
 function ShellFrame({ base, children, ...props }: ShellProps & { base: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
+  // "C" anywhere (outside a field) starts a new agent — the hero action is one key away.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "c" || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest("[role=dialog]"))) return;
+      e.preventDefault();
+      router.push(`${base}/agents/new`);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [base, router]);
   useEffect(() => setMobileOpen(false), [pathname]);
   useEffect(() => {
     document.body.style.overflow = mobileOpen ? "hidden" : "";
@@ -143,6 +156,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
           >
             <Plus className="size-4" aria-hidden />
             New agent
+            <kbd className="ml-auto rounded border border-canvas/20 px-1 font-sans text-[10.5px] text-canvas/60" aria-label="Shortcut C">C</kbd>
           </Link>
           <SearchButton />
         </div>

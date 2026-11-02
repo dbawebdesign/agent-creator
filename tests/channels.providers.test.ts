@@ -17,7 +17,7 @@ vi.hoisted(() => {
 import { db, schema } from "@/server/db/client";
 import { encrypt } from "@/server/security/crypto";
 import { channelDeliver } from "@/server/channels/jobs";
-import { processResendEvent } from "@/server/channels/inbound";
+import { processResendEvent, processTwilioEvent } from "@/server/channels/inbound";
 
 type Call = { url: string; init: RequestInit };
 const calls: Call[] = [];
@@ -136,6 +136,12 @@ describe("sms via Twilio", () => {
     expect(form.get("Body")!.endsWith(`(1/${calls.length})`)).toBe(true);
     const [msg] = await db().select().from(schema.messages).where(eq(schema.messages.id, out.id));
     expect(msg!.meta).toMatchObject({ parts: calls.length, to: "+14155550111" });
+    expect(form.get("StatusCallback")).toBe("https://app.roster.test/api/webhooks/twilio");
+
+    // Twilio delivery status callback for the first segment.
+    await processTwilioEvent(db(), { MessageSid: String(msg!.externalId).slice(4), MessageStatus: "delivered", From: agent.phoneNumber!, To: "+14155550111" });
+    const [after] = await db().select().from(schema.messages).where(eq(schema.messages.id, out.id));
+    expect(after!.deliveryStatus).toBe("delivered");
   });
 });
 
@@ -151,5 +157,17 @@ describe("slack", () => {
     const body = JSON.parse(String(calls[0]!.init.body));
     expect(body).toMatchObject({ channel: "CGEN", thread_ts: "1730500000.000100", mrkdwn: true });
     expect(body.text).toBe("*Quote:* $2,450 for 500 tumblers.");
+  });
+
+  it("posts DM replies straight into the DM (no thread)", async () => {
+    const { org, agent, out } = await setup("slack", "DDANA");
+    const [secret] = await db().insert(schema.secrets).values({ orgId: org.id, name: `slack:bot:T${rid(3)}`, ciphertext: encrypt("xoxb-test-token") }).returning();
+    await db().insert(schema.channelConnections).values({ orgId: org.id, kind: "slack", externalId: `T${rid(4).toUpperCase()}`, status: "connected", secretId: secret!.id, config: {} });
+    await channelDeliver({ orgId: org.id, agentId: agent.id, channel: "slack", messageId: out.id }, { db: db(), jobId: "dm" });
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body.channel).toBe("DDANA");
+    expect(body.thread_ts).toBeUndefined();
+    const [conv] = await db().select().from(schema.conversations).where(eq(schema.conversations.orgId, org.id));
+    expect(conv!.externalThreadId).toBe("DDANA");
   });
 });

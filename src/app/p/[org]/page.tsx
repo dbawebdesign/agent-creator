@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { CalendarClock } from "lucide-react";
+import { AgentOrb } from "@/components/ui/agent-orb";
 import { AskComposer } from "@/components/portal/composer";
 import { DeliverableCardView, whenLabel } from "@/components/portal/deliverable-card";
 import { greeting, longDate, feedBucket, hoursPhrase, numberWord, dayWord, clockTime } from "@/components/portal/lib";
@@ -53,7 +54,16 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
   return (
     <div className="mx-auto w-full max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="animate-rise">
-        <p className="text-[13px] font-medium text-ink-4">{longDate(tz)}</p>
+        <div className="flex items-center gap-2.5">
+          {t.agents.length ? (
+            <span className="flex -space-x-1.5" aria-label={`Your team: ${t.agents.map((a) => a.name).join(", ")}`}>
+              {t.agents.slice(0, 5).map((a) => (
+                <AgentOrb key={a.id} seed={a.seed} size={20} className="ring-2 ring-canvas" />
+              ))}
+            </span>
+          ) : null}
+          <p className="text-[13px] font-medium text-ink-4">{longDate(tz)}</p>
+        </div>
         <h1 className="mt-1.5 text-[28px] font-semibold tracking-[-0.025em] text-ink md:text-[32px]">
           {greeting(tz)}, {p.user.firstName}
         </h1>
@@ -75,7 +85,7 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
           ) : t.feed.length || needs.length ? (
             <>Quiet night. Your team is caught up{nextRun ? <> — next delivery {nextRun}.</> : "."}</>
           ) : nextRun ? (
-            <>Your team is getting set up. Your first delivery arrives {nextRun}.</>
+            <>Your team is all set up and starts working soon.</>
           ) : (
             <>Your team is getting set up. Their first work will show up here.</>
           )}

@@ -137,7 +137,7 @@ const VERTICALS: Vertical[] = [
   { id: "dental", label: "Dental & medical practice", re: /dental|dentists?|hygienists?|patients?|clinic|med ?spa/gi, noun: "appointments", customers: "patients" },
   { id: "home", label: "Home services (HVAC, plumbing, electrical)", re: /hvac|plumb\w*|furnaces?|air condition\w*|technicians?|\btechs?\b|dispatch\w*|service calls?|work orders?|heating/gi, noun: "jobs", customers: "homeowners" },
   { id: "realestate", label: "Real estate & property management", re: /real estate|listings?|realtors?|brokerage|showings?|tenants?|property manage\w*/gi, noun: "listings", customers: "owners and tenants" },
-  { id: "accounting", label: "Accounting & bookkeeping", re: /bookkeep\w*|accounting|\bcpa\b|reconcil\w*|month[- ]end|receipts|quickbooks|\bxero\b|cash (?:report|flow)/gi, noun: "client books", customers: "small-business clients" },
+  { id: "accounting", label: "Accounting & bookkeeping", re: /bookkeep\w*|accounting firm|\bcpa\b|reconcil\w*|month[- ]end close|tax returns?/gi, noun: "client books", customers: "small-business clients" },
   { id: "ecommerce", label: "E-commerce", re: /shopify|e-?commerce|online store|\bskus?\b|inventory/gi, noun: "orders", customers: "shoppers" },
   { id: "restaurant", label: "Restaurants & hospitality", re: /restaurants?|menus?|reservations?|catering/gi, noun: "orders", customers: "guests" },
   { id: "marketing", label: "Marketing agency", re: /marketing agency|\bseo\b|ad campaigns?|social media management/gi, noun: "campaigns", customers: "brands" },
@@ -148,6 +148,8 @@ const VERTICALS: Vertical[] = [
 type Archetype = {
   id: string;
   re: RegExp;
+  /** A sentence matching this is about something else (e.g. "follow up on estimates" is not quoting). */
+  exclude?: RegExp;
   role: string;
   workflowName: (v: Vertical | null) => string;
   /** Default hours/week of human time when the call gives no number. */
@@ -162,7 +164,7 @@ type Archetype = {
   questions: (v: Vertical | null, ctx: Ctx) => string[];
   overnight: (v: Vertical | null, ctx: Ctx) => { title: string; description: string; instructions: string };
   resale: (v: Vertical | null, ctx: Ctx) => string;
-  summaryVerb: string;
+  summaryVerb: string | ((v: Vertical | null) => string);
 };
 
 type Ctx = { orgName: string; tools: string[]; people: string[]; primaryHours: number | null };
@@ -173,6 +175,7 @@ const ARCHETYPES: Archetype[] = [
   {
     id: "quoting",
     re: /\bquot(?:e|es|ing)\b|proposals?|\bbids?\b|\bestimates\b|presentations?/gi,
+    exclude: /follow(?:s|ing)?[- ]?up|chas(?:e|ing)|go(?:es)? cold/i,
     role: "Quoting Specialist",
     workflowName: (v) => (v?.id === "promo" ? "Quote & product presentation builder" : "Quote builder"),
     defaultHoursPerWeek: 8,
@@ -219,7 +222,7 @@ const ARCHETYPES: Archetype[] = [
   },
   {
     id: "migration",
-    re: /migrat\w*|switch(?:ing)? over|bring (?:all )?(?:of )?(?:this|the|their) data|data entry|typ(?:e|ing) (?:them|it|records) into|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields|re-?key\w*|copy(?:ing)? and past\w*|scrap(?:e|ing) agent/gi,
+    re: /migrat\w*|switch(?:ing)? over|bring (?:all )?(?:of )?(?:this|the|their) data|data entry|typ(?:e|ing) (?:them|it|records) into|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields|re-?key\w*|scrap(?:e|ing) agent/gi,
     role: "Data Migration Specialist",
     workflowName: (v) => (v?.id === "insurance" ? "Overnight policy & insured data migration" : "Overnight data migration"),
     defaultHoursPerWeek: 10,
@@ -265,6 +268,7 @@ const ARCHETYPES: Archetype[] = [
   {
     id: "catalog",
     re: /scrap(?:e|es|ing)\b|catalogs?|product (?:data|feeds?|categories)|price lists?|supplier (?:sites?|portals?)|categories/gi,
+    exclude: /scraping agent|click(?:s|ing)? into|fields/i,
     role: "Catalog & Pricing Analyst",
     workflowName: () => "Nightly catalog & pricing sync",
     defaultHoursPerWeek: 5,
@@ -353,56 +357,99 @@ const ARCHETYPES: Archetype[] = [
     id: "followup",
     re: /follow(?:ing)?[- ]?ups?\b|follow up on|leads?\b|prospects?|outreach|unsigned estimates|chas(?:e|ing) (?:clients|customers|people)/gi,
     role: "Customer Follow-up Specialist",
-    workflowName: () => "Lead & estimate follow-up",
+    workflowName: (v) => (v?.id === "accounting" ? "Missing receipts & documents follow-up" : v?.id === "home" ? "Estimate follow-up" : "Lead & estimate follow-up"),
     defaultHoursPerWeek: 4,
     trigger: { type: "schedule", cron: "0 8 * * 1-5", label: "Weekdays at 8:00 AM" },
     outputKind: "email_draft",
     deliverTo: ["portal", "email"],
     tools: ["knowledge_search", "memory_recall", "create_deliverable", "send_message", "request_approval", "schedule_followup"],
     approvals: ["send_external_email"],
-    procedure: () => [
+    procedure: (v) =>
+      v?.id === "accounting"
+        ? [
+            "For each client, list uncategorized transactions and missing receipts/documents for the current period.",
+            "Draft ONE email per client with a GFM table (date, payee, amount, what we need) — never one email per item.",
+            "Prioritize clients closest to their month-end deadline; schedule a reminder 3 business days later for anything still missing.",
+            "Deliver the drafts as one document for review; request approval before anything goes to a client.",
+            "When a client replies with receipts, save what was resolved to memory.",
+          ]
+        : [
       "List open leads, quotes and estimates with no reply in 3+ days (from memory and the knowledge base).",
       "For each, draft a short, personal follow-up that references what they asked for.",
       "Prioritize by value and how warm the lead is; schedule a second follow-up for 4 days later.",
       "Deliver the drafts as one document with a GFM table (contact, value, last touch, next step).",
       "Request approval before sending anything externally.",
+          ],
+    knowledge: (v) => [
+      v?.id === "accounting"
+        ? { title: "Client list with contacts and month-end deadlines", why: "Each reminder goes to the right person on time." }
+        : { title: "List of open quotes / estimates / leads", why: "The follow-ups are drafted from it." },
     ],
-    knowledge: () => [{ title: "List of open quotes / estimates / leads", why: "The follow-ups are drafted from it." }],
     questions: () => ["How many follow-ups should a lead get before we stop, and from whose email should they go?"],
-    overnight: (_v, ctx) => ({
-      title: "Follow-up queue with drafted emails",
-      description: `Every open lead ${ctx.orgName} mentioned, with a drafted follow-up ready to approve.`,
-      instructions: "Build the follow-up queue as a GFM table and draft one email per lead from the call details.",
-    }),
+    overnight: (v, ctx) =>
+      v?.id === "accounting"
+        ? {
+            title: "Missing receipts & documents chase list, with reminders drafted",
+            description: `Every client ${ctx.orgName} still needs receipts or documents from, with a reminder ready to approve.`,
+            instructions:
+              "1. List every client and the receipts, charges or documents still missing, as a GFM table (client, what's missing, deadline).\n" +
+              "2. Draft one short, friendly reminder email per client that names the exact charge or document.\n" +
+              "3. Put everything in one morning document; request approval before any email goes out.",
+          }
+        : {
+            title: "Follow-up queue with drafted emails",
+            description: `Every open lead ${ctx.orgName} mentioned, with a drafted follow-up ready to approve.`,
+            instructions: "Build the follow-up queue as a GFM table and draft one email per lead from the call details.",
+          },
     resale: (_v, ctx) => `Offer ${ctx.orgName}'s customers a done-for-you follow-up assistant as an add-on.`,
-    summaryVerb: "follows up on every open lead and estimate",
+    summaryVerb: (v) => (v?.id === "accounting" ? "chases clients for missing receipts" : v?.id === "home" ? "follows up on every open estimate" : "follows up on every open lead and estimate"),
   },
   {
     id: "reporting",
     re: /\breports?\b|dashboards?|metrics|\bkpis?\b|weekly update|cash report|numbers/gi,
     role: "Operations Analyst",
-    workflowName: () => "Monday performance report",
+    workflowName: (v) => (v?.id === "accounting" ? "Monday client cash reports" : "Monday performance report"),
     defaultHoursPerWeek: 2,
     trigger: { type: "schedule", cron: "0 6 * * 1", label: "Mondays at 6:00 AM" },
     outputKind: "report",
     deliverTo: ["portal", "email"],
     tools: ["knowledge_search", "memory_recall", "create_deliverable"],
     approvals: [],
-    procedure: () => [
+    procedure: (v) =>
+      v?.id === "accounting"
+        ? [
+            "For each client, pull last week's figures: cash on hand, money in, money out, and bills due in the next 14 days.",
+            "Compare with the prior week; flag anything unusual (cash down >15%, a bill larger than usual, a missing deposit).",
+            "Write one short report per client: headline, a GFM table of the figures with week-over-week change, and the 1–3 things they should do.",
+            "Deliver all reports to the portal for review; email each client their report after approval.",
+          ]
+        : [
       "Gather last week's numbers from the knowledge base and memory (volume, revenue, open items).",
       "Compare with the prior week and the same week last month; flag changes over 10%.",
       "Write a one-page report: headline, a GFM table of key metrics with week-over-week change, three things to act on.",
       "Deliver to the portal and email the owner.",
-    ],
+          ],
     knowledge: () => [{ title: "Where your weekly numbers live (exports, spreadsheet, system access)", why: "The report is built from it." }],
     questions: () => ["Which 5 numbers do you look at every week?"],
-    overnight: (_v, ctx) => ({
+    overnight: (v, ctx) =>
+      v?.id === "accounting"
+        ? {
+            title: "Your Monday cash report, drafted",
+            description: `${ctx.orgName} wakes up to a finished Monday cash report template and a worked example in your format — the report your team builds by hand every week.`,
+            instructions: [
+              "From the discovery call and knowledge base:",
+              "1. Draft the Monday cash report template: headline, GFM table (cash on hand, money in, money out, bills due next 14 days, week-over-week change), and 'what to do this week'.",
+              "2. Fill a worked example for a typical client described on the call, with placeholder figures clearly marked.",
+              "3. List exactly what access (Xero exports, bank feeds) you need to produce real reports for every client next Monday.",
+            ].join("\n"),
+          }
+        : {
       title: "Baseline operations report",
       description: `A first one-page baseline of ${ctx.orgName}'s operations from what we learned on the call.`,
       instructions: "Write a one-page baseline report with a GFM table of the metrics mentioned on the call and what to track weekly.",
-    }),
+          },
     resale: (_v, ctx) => `Offer ${ctx.orgName}'s customers a branded weekly report as a retention perk.`,
-    summaryVerb: "writes the weekly performance report",
+    summaryVerb: (v) => (v?.id === "accounting" ? "drafts every client's Monday cash report" : "writes the weekly performance report"),
   },
   {
     id: "inbox",
@@ -492,11 +539,21 @@ function cleanTranscript(raw: string): string {
     .replace(/\*\*\d{1,2}:\d{2}(?::\d{2})?\*\*\s*·?/g, "\n")
     .replace(/^\s*(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?)\s*/gm, "")
     .replace(/^#+\s.*$/gm, "")
+    .replace(/(^|\n)\s*(?:[A-Z][A-Za-z.'-]{1,20}(?: [A-Z][A-Za-z.'-]{1,20})?):\s+/g, "$1")
     .replace(/\b(?:uh|um|you know),?\s+/gi, "")
     .replace(/\b(\w+) \1\b/gi, "$1");
 }
 
+const DAILY_RE = /(\d+(?:\.\d+)?|an?|one|two|three|half an?)\s+(and a half\s+)?hours?(\s+and a half)?\b[^.]*?\b(?:every|each) (?:single )?(?:morning|day|night|evening|afternoon)|(?:every|each) (?:single )?(?:morning|day|night|evening)[^.]*?\b(\d+(?:\.\d+)?|an?|one|two|three)\s+(and a half\s+)?hours?(\s+and a half)?/i;
+
 function hoursPerWeekIn(s: string): number | null {
+  const d = DAILY_RE.exec(s);
+  if (d) {
+    const numRaw = (d[1] ?? d[4] ?? "").toLowerCase();
+    const half = Boolean(d[2] || d[3] || d[5] || d[6]);
+    const base = numRaw.startsWith("half") ? 0.5 : Number.isFinite(Number(numRaw)) ? Number(numRaw) : (WORD_NUM[numRaw] ?? 1);
+    return (base + (half ? 0.5 : 0)) * 5;
+  }
   const m = HOURS_RE.exec(s);
   if (!m?.[1] || !m[2]) return null;
   const n = Number.isFinite(Number(m[1])) ? Number(m[1]) : (WORD_NUM[m[1].toLowerCase()] ?? null);
@@ -510,7 +567,7 @@ function countMatches(re: RegExp, s: string): number {
   return (s.match(re) ?? []).length;
 }
 
-type Itch = { arch: Archetype; score: number; hoursPerWeek: number | null; evidence: string[]; verticals: Map<string, number> };
+type Itch = { arch: Archetype; score: number; hoursPerWeek: number | null; backHours: number | null; evidence: string[]; verticals: Map<string, number> };
 
 export function runsPerWeek(trigger: WorkflowSpec["trigger"]): number {
   if (trigger.type === "manual") return 1;
@@ -555,12 +612,27 @@ function extractTools(text: string): string[] {
   return [...new Set(out)];
 }
 
+const NON_PEOPLE = /^(?:Agency|Host|Interviewer|Me|Speaker|Q|A|Note|Client|Owner|Operator|Unknown)$/;
+
+/** Speaker labels ("Mike: ...") from the raw transcript; the most frequent non-agency speaker is the owner. */
+function extractSpeakers(raw: string): string[] {
+  const counts = new Map<string, number>();
+  const re = /(?:^|\n|·)\s*([A-Z][a-z]{1,20})(?: [A-Z][a-z]{1,20})?:\s/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw))) {
+    const n = m[1]!;
+    if (NON_PEOPLE.test(n)) continue;
+    counts.set(n, (counts.get(n) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n);
+}
+
 function extractPeople(sentences: string[]): string[] {
   const people: string[] = [];
   const res = [
     /\b(?:his|her|my) name is ([A-Z][a-z]+(?: [A-Z][a-z]+)?)/g,
     /\b(?:this is|I'm|I am) ([A-Z][a-z]+)(?:,| from| and| here)/g,
-    /\b(?:my|our) (office manager|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|controller|accountant),? ([A-Z][a-z]+)/g,
+    /\b(?:[Mm]y|[Oo]ur) (office manager|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|controller|accountant),? ([A-Z][a-z]+)/g,
     /\b([A-Z][a-z]+),? (?:my|our) (office manager|bookkeeper|assistant|partner|dispatcher|operations manager|controller|accountant)/g,
   ];
   for (const s of sentences) {
@@ -611,26 +683,41 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   };
   const topicalSentences = sentences.filter((_, i) => onTopic(i));
   const tools = extractTools(topicalSentences.join(" "));
-  const people = extractPeople(topicalSentences);
+  const speakers = extractSpeakers(input.transcript);
+  const mentioned = extractPeople(topicalSentences);
+  const people = [
+    ...(speakers[0] ? [`${speakers[0]} (owner, on the call)`] : []),
+    ...mentioned.filter((p) => !speakers[0] || !p.startsWith(`${speakers[0]} `)),
+  ].slice(0, 8);
   const companies = extractCompanies(topicalSentences, orgName);
   const ctx: Ctx = { orgName, tools, people, primaryHours: null };
 
   // Score every sentence for "itch" signal and attribute it to task archetypes (with a ±1 sentence window).
   const itches = new Map<string, Itch>();
+  const offTopic = new Map<string, number>();
   sentences.forEach((s, i) => {
     const window = [sentences[i - 1] ?? "", s, sentences[i + 1] ?? ""].join(" ");
     const windowVerticals = detectVerticals(window);
-    // A sentence about a different kind of business (another example on the call) is not this client's itch.
-    if (vertical && windowVerticals.size > 0 && !windowVerticals.has(vertical.id)) return;
+    // A sentence about a different kind of business (another example on the call) is not this client's itch —
+    // and an archetype that only shows up in such sentences belongs to that other business.
+    if (vertical && windowVerticals.size > 0 && !windowVerticals.has(vertical.id)) {
+      for (const arch of ARCHETYPES) if (countMatches(arch.re, s) && !arch.exclude?.test(s)) offTopic.set(arch.id, (offTopic.get(arch.id) ?? 0) + 1);
+      return;
+    }
     const pain = countMatches(PAIN_RE, s);
-    const hours = hoursPerWeekIn(s) ?? hoursPerWeekIn(window);
+    // Attribute a time cost to the sentence itself or the one right after it ("…That's another 5 hours a week").
+    const hours = hoursPerWeekIn(s) ?? hoursPerWeekIn(sentences[i + 1] ?? "");
+    const backHours = hoursPerWeekIn(sentences[i - 1] ?? "");
+    const afterItchQuestion = /\bitch\b|what(?:'s| is) (?:the|your) (?:biggest )?(?:pain|problem|headache)/i.test(sentences[i - 1] ?? "");
     for (const arch of ARCHETYPES) {
       const hits = countMatches(arch.re, s);
       if (!hits) continue;
-      const score = hits + pain * 1.5 + (hours ? 3 : 0);
-      const it: Itch = itches.get(arch.id) ?? { arch, score: 0, hoursPerWeek: null, evidence: [], verticals: new Map() };
+      if (arch.exclude?.test(s)) continue;
+      const score = hits + pain * 1.5 + (hours ? 3 : 0) + (afterItchQuestion ? 6 : 0);
+      const it: Itch = itches.get(arch.id) ?? { arch, score: 0, hoursPerWeek: null, backHours: null, evidence: [], verticals: new Map() };
       it.score += score;
       if (hours && (it.hoursPerWeek == null || hours > it.hoursPerWeek)) it.hoursPerWeek = hours;
+      if (backHours && (it.backHours == null || backHours > it.backHours)) it.backHours = backHours;
       if (pain > 0 || hours) it.evidence.push(s);
       for (const [vid, n] of windowVerticals) it.verticals.set(vid, (it.verticals.get(vid) ?? 0) + n);
       itches.set(arch.id, it);
@@ -641,17 +728,22 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   const ranked = [...itches.values()]
     .filter((it) => it.score >= 2.5 && it.evidence.length > 0)
     .filter((it) => {
+      if (vertical && (offTopic.get(it.arch.id) ?? 0) > 0 && !it.verticals.has(vertical.id)) return false;
       if (!vertical || it.verticals.size === 0) return true;
       if (it.verticals.has(vertical.id)) return true;
       // Mentioned only alongside other verticals → probably someone else's problem.
       return false;
     })
+    .map((it) => ({ ...it, hoursPerWeek: it.hoursPerWeek ?? it.backHours }))
     .map((it) => ({ ...it, score: it.score + (vertical && it.verticals.has(vertical.id) ? 6 : 0) + (it.hoursPerWeek ? it.hoursPerWeek / 2 : 0) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
   if (ranked.length === 0) {
     const fallback = ARCHETYPES.find((a) => a.id === "reporting");
-    if (fallback) ranked.push({ arch: fallback, score: 1, hoursPerWeek: null, evidence: [], verticals: new Map() });
+    if (fallback) ranked.push({ arch: fallback, score: 1, hoursPerWeek: null, backHours: null, evidence: [], verticals: new Map() });
+  }
+  for (const it of ranked) {
+    it.evidence = [...new Set(it.evidence)].sort((a, b) => Number(/\d/.test(b)) - Number(/\d/.test(a)) || b.length - a.length);
   }
   const primary = ranked[0]!;
   ctx.primaryHours = primary.hoursPerWeek;
@@ -686,7 +778,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   if (/\bslack\b/i.test(text)) channels.push("slack");
   if (/\btext(?:s|ing)? (?:me|it|us|in)|\bsms\b|group chat|text message/i.test(text)) channels.push("sms");
 
-  const verbs = ranked.map((r) => r.arch.summaryVerb);
+  const verbs = ranked.map((r) => (typeof r.arch.summaryVerb === "function" ? r.arch.summaryVerb(vertical) : r.arch.summaryVerb));
   const verbList = verbs.length > 1 ? `${verbs.slice(0, -1).join(", ")} and ${verbs[verbs.length - 1]}` : (verbs[0] ?? "handles recurring work");
   const summary = truncate(`${name} ${verbList} for ${orgName} — about ${Math.round(weeklyHoursSaved)} hours a week back.`, 280);
 
@@ -733,7 +825,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   const role = primary.arch.role;
   const first = primary.arch.overnight(vertical, ctx);
   const resaleEvidence =
-    topicalSentences.find((s) => /package (?:this|it) up|sell (?:this|it) to (?:your|their) (?:own )?customers|resell/i.test(s)) ??
+    topicalSentences.find((s) => /package (?:this|it) up|\bsell (?:this|it|that|the [\w\s-]{2,40}?) to (?:my |our |your |their )?(?:own )?(?:customers|clients)|resell/i.test(s)) ??
     topicalSentences.find((s) => s.length > 40 && /revenue stream|b ?to ?b ?to ?b|b2b2b/i.test(s));
   const resaleIdea = truncate(
     `${primary.arch.resale(vertical, ctx)}${resaleEvidence ? ` (The call points this way: “${evidenceClean(resaleEvidence)}”)` : ""}`,

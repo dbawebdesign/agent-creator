@@ -37,16 +37,20 @@ export default async function AgentPage({ params }: { params: Promise<{ org: str
         <ArrowLeft className="size-4" aria-hidden /> Team
       </Link>
 
-      <header className="mt-5 flex flex-col gap-5 animate-rise sm:flex-row sm:items-start">
-        <AgentOrb seed={agent.seed} size={64} live={agent.status === "active"} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">{agent.name}</h1>
-            {st ? <Badge tone={st.tone}>{st.label}</Badge> : null}
+      <header className="mt-5 animate-rise">
+        <div className="flex items-center gap-4">
+          <AgentOrb seed={agent.seed} size={56} live={agent.status === "active"} />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-[26px] leading-tight font-semibold tracking-[-0.025em] text-ink md:text-[28px]">{agent.name}</h1>
+              {st ? <Badge tone={st.tone}>{st.label}</Badge> : null}
+            </div>
+            <p className="text-[14px] text-ink-3">{agent.role}</p>
           </div>
-          <p className="text-[14px] text-ink-3">{agent.role}</p>
-          {agent.summary ? <p className="mt-3 max-w-[62ch] text-[14.5px] leading-relaxed text-ink-2 text-pretty">{agent.summary}</p> : null}
-          <div className="mt-4 flex flex-wrap gap-2">
+        </div>
+        <div className="sm:pl-[72px]">
+          {agent.summary ? <p className="mt-4 max-w-[62ch] text-[14.5px] leading-relaxed text-ink-2 text-pretty">{agent.summary}</p> : null}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             {agent.email ? (
               <span className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface pr-1 pl-3 text-[13px] text-ink-2">
                 <Mail className="size-3.5 shrink-0 text-ink-4" aria-hidden />
@@ -61,7 +65,7 @@ export default async function AgentPage({ params }: { params: Promise<{ org: str
                 <CopyButton value={agent.phone} label={`Copy ${agent.name}'s number`} toastLabel="Number copied" className="size-6 rounded-full [&_svg]:size-3.5" />
               </span>
             ) : null}
-            <Link href={`/p/${slug}/connect`} className="inline-flex h-8 items-center rounded-full px-3 text-[13px] font-medium text-accent hover:bg-accent-soft">
+            <Link href={`/p/${slug}/connect`} className="inline-flex h-8 items-center rounded-full px-2 text-[13px] font-medium text-accent hover:bg-accent-soft">
               More ways to reach {agent.name}
             </Link>
           </div>

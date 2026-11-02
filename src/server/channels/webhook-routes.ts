@@ -4,6 +4,7 @@
  * idempotently (webhook_events unique provider+external id) and queue inbound.process → respond fast.
  */
 import "server-only";
+import { readTextCapped } from "@/server/api/body";
 import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
 import { isActionableSlackEvent } from "./inbound";
@@ -17,11 +18,8 @@ function reject(status: number, message: string) {
   return Response.json({ error: { code: status === 413 ? "invalid_request" : "unauthorized", message } }, { status });
 }
 
-async function rawBody(req: Request): Promise<string | null> {
-  const len = Number(req.headers.get("content-length") ?? 0);
-  if (len > MAX_BODY) return null;
-  const text = await req.text();
-  return text.length > MAX_BODY ? null : text;
+function rawBody(req: Request): Promise<string | null> {
+  return readTextCapped(req, MAX_BODY);
 }
 
 function asObject(v: unknown): Record<string, unknown> | null {
@@ -79,8 +77,11 @@ export async function handleTwilioWebhook(req: Request): Promise<Response> {
   const accountSid = env().TWILIO_ACCOUNT_SID;
   if (accountSid && form.get("AccountSid") !== accountSid) return reject(403, "Unknown account");
   const sid = form.get("MessageSid") ?? form.get("SmsSid");
-  if (!sid || !/^[A-Za-z0-9]{10,64}$/.test(sid)) return twiml(); // status callbacks etc.: acknowledge, ignore
-  await recordWebhookEvent("twilio", sid, Object.fromEntries(params));
+  if (!sid || !/^[A-Za-z0-9]{10,64}$/.test(sid)) return twiml();
+  // Delivery status callbacks share this URL; one event per (sid, status).
+  const status = form.get("MessageStatus");
+  const externalId = status ? `${sid}:${status.replace(/[^a-z_]/g, "").slice(0, 20)}` : sid;
+  await recordWebhookEvent("twilio", externalId, Object.fromEntries(params));
   return twiml();
 }
 

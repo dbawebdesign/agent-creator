@@ -427,7 +427,12 @@ async function getMessages(orgId: string, conversationId: string, limit = 200): 
     body: m.body,
     createdAt: m.createdAt,
     deliveryStatus: m.deliveryStatus,
-    authorName: typeof m.meta?.authorName === "string" ? m.meta.authorName : null,
+    authorName:
+      typeof m.meta?.authorName === "string"
+        ? m.meta.authorName
+        : m.author === "contact" && typeof m.meta?.from === "string"
+          ? m.meta.from
+          : null,
   }));
 }
 
@@ -451,7 +456,7 @@ export async function listRequests(orgId: string): Promise<RequestRow[]> {
       subject: schema.conversations.subject,
       lastMessageAt: schema.conversations.lastMessageAt,
       agent: agentLite,
-      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone})`,
+      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone}, (select m.meta->>'from' from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${schema.conversations.orgId} and m.author = 'contact' order by m.created_at limit 1))`,
       lastBody: sql<string | null>`(select m.body from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
       lastAuthor: sql<string | null>`(select m.author from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
       count: sql<number>`(select count(*)::int from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId})`,
@@ -460,7 +465,13 @@ export async function listRequests(orgId: string): Promise<RequestRow[]> {
     .innerJoin(schema.agents, eq(schema.agents.id, schema.conversations.agentId))
     .leftJoin(schema.users, eq(schema.users.id, schema.conversations.userId))
     .leftJoin(schema.contacts, eq(schema.contacts.id, schema.conversations.contactId))
-    .where(and(eq(schema.conversations.orgId, orgId), inArray(schema.conversations.channel, ["portal", "email", "sms", "slack", "api", "mcp"])))
+    .where(
+      and(
+        eq(schema.conversations.orgId, orgId),
+        // Delivery notifications (the team emailing you finished work) aren't requests.
+        sql`coalesce(${schema.conversations.externalThreadId}, '') not like 'deliverable:%'`,
+      ),
+    )
     .orderBy(desc(schema.conversations.lastMessageAt))
     .limit(100);
   return rows.filter((r) => r.count > 0) as RequestRow[];
@@ -475,7 +486,7 @@ export async function getRequest(orgId: string, id: string) {
       subject: schema.conversations.subject,
       lastMessageAt: schema.conversations.lastMessageAt,
       agent: agentLite,
-      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone})`,
+      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone}, (select m.meta->>'from' from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${schema.conversations.orgId} and m.author = 'contact' order by m.created_at limit 1))`,
     })
     .from(schema.conversations)
     .innerJoin(schema.agents, eq(schema.agents.id, schema.conversations.agentId))

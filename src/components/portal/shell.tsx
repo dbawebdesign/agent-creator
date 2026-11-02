@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Cable, Inbox, LogOut, MessagesSquare, Settings, Store, Sun, Users } from "lucide-react";
+import { Cable, LogOut, MessagesSquare, Settings, Store, Sun, Users } from "lucide-react";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { Avatar } from "@/components/ui/agent-orb";
 import { cn } from "@/lib/utils";
@@ -63,7 +63,7 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
             </span>
             {viewingAs.href ? (
               <Link href={viewingAs.href} className="shrink-0 font-medium text-ink-2 hover:text-ink">
-                Back to Studio
+                {viewingAs.href.startsWith("/a/") ? "Back to Studio" : `Back to ${viewingAs.name}`}
               </Link>
             ) : null}
           </div>
@@ -121,11 +121,6 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
                     <Settings /> Settings
                   </Link>
                 </MenuItem>
-                <MenuItem asChild>
-                  <Link href={`${base}/requests`}>
-                    <Inbox /> Requests
-                  </Link>
-                </MenuItem>
                 <MenuSeparator />
                 <form action="/logout" method="post">
                   <MenuItem asChild>
@@ -150,7 +145,7 @@ export function PortalShell({ slug, brand, orgName, isCustomer, canResell, needs
       </main>
 
       <nav
-        aria-label="Portal"
+        aria-label="Portal tabs"
         className="portal-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-line bg-canvas/90 backdrop-blur-md md:hidden"
       >
         <ul className="mx-auto flex max-w-md items-stretch justify-around px-2">

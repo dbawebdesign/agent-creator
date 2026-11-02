@@ -1,15 +1,9 @@
-import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { StudioShell } from "@/components/studio/shell";
 import { Toaster } from "@/components/shared/toaster";
 import { requireOrg, userOrgs } from "@/server/auth/access";
 import { getShellData } from "@/server/queries/studio";
 import { signOut } from "@/app/(auth)/actions";
-
-export async function generateMetadata({ params }: { params: Promise<{ agency: string }> }): Promise<Metadata> {
-  const { agency } = await params;
-  return { title: { default: "Studio", template: `%s · ${agency}` } };
-}
 
 export default async function StudioLayout({ children, params }: { children: React.ReactNode; params: Promise<{ agency: string }> }) {
   const { agency: slug } = await params;

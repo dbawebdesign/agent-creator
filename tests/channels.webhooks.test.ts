@@ -64,8 +64,12 @@ async function processAllInbound() {
   return jobs.length;
 }
 
+/** Reply runs started for an org (engine.startConversationRun), checked against their queued agent.run jobs. */
 async function agentRunJobs(orgId: string) {
-  return db().select().from(schema.jobs).where(and(eq(schema.jobs.type, "agent.run"), eq(schema.jobs.orgId, orgId)));
+  const runs = await db().select().from(schema.runs).where(eq(schema.runs.orgId, orgId));
+  const jobs = await db().select().from(schema.jobs).where(and(eq(schema.jobs.type, "agent.run"), eq(schema.jobs.orgId, orgId)));
+  expect(jobs.map((j) => j.payload.runId).sort()).toEqual(runs.map((r) => r.id).sort());
+  return runs;
 }
 
 beforeEach(async () => {
@@ -142,7 +146,7 @@ describe("Resend (Svix) webhook", () => {
     expect(msgs[0]!.direction).toBe("inbound");
     const runs = await agentRunJobs(org.id);
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.payload).toMatchObject({ orgId: org.id, agentId: agent.id, messageId: msgs[0]!.id, trigger: "message" });
+    expect(runs[0]).toMatchObject({ orgId: org.id, agentId: agent.id, conversationId: msgs[0]!.conversationId, trigger: "message", input: { messageId: msgs[0]!.id } });
     const [contact] = await db().select().from(schema.contacts).where(eq(schema.contacts.orgId, org.id));
     expect(contact).toMatchObject({ email: "dana@brandlord.co", name: "Dana Brand" });
   });
@@ -182,16 +186,66 @@ describe("Resend (Svix) webhook", () => {
     expect(inConv).toHaveLength(4);
   });
 
-  it("does not wake the agent for auto-replies, and ignores unknown recipients", async () => {
+  it("never threads into another tenant's conversation, even with a known Message-ID", async () => {
+    const orgA = await makeOrg();
+    const orgB = await makeOrg();
+    const agentA = await makeAgent(orgA.id);
+    const agentB = await makeAgent(orgB.id);
+    const [convB] = await db().insert(schema.conversations).values({ orgId: orgB.id, agentId: agentB.id, channel: "email", externalThreadId: "<root-b@x.test>" }).returning();
+    await db().insert(schema.messages).values({ orgId: orgB.id, conversationId: convB!.id, direction: "outbound", author: "agent", body: "secret", meta: { emailMessageId: "<known-b@x.test>" }, deliveryStatus: "sent" });
+    const ev = receivedEvent(`${agentA.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`, { headers: { "In-Reply-To": "<known-b@x.test>", References: "<root-b@x.test> <known-b@x.test>" } });
+    await handleResendWebhook(resendRequest(ev));
+    await processAllInbound();
+    const inB = await db().select().from(schema.messages).where(eq(schema.messages.conversationId, convB!.id));
+    expect(inB).toHaveLength(1);
+    const inA = await db().select().from(schema.messages).where(eq(schema.messages.orgId, orgA.id));
+    expect(inA).toHaveLength(1);
+    expect(inA[0]!.conversationId).not.toBe(convB!.id);
+  });
+
+  it("recovers if the worker died after storing the message but before starting the run", async () => {
+    const org = await makeOrg();
+    const agent = await makeAgent(org.id);
+    const ev = receivedEvent(`${agent.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`);
+    await handleResendWebhook(resendRequest(ev));
+    const [row] = await db().select().from(schema.webhookEvents);
+    // Simulate the crash: message stored, no run.
+    const { ingestInbound } = await import("@/server/channels/inbound");
+    await ingestInbound(db(), {
+      orgId: org.id,
+      agentId: agent.id,
+      channel: "email",
+      threadKey: ev.data.message_id,
+      subject: ev.data.subject,
+      contact: { email: "dana@brandlord.co" },
+      body: "Can you quote 500 tumblers with our logo?",
+      externalId: `email:${ev.data.email_id}`,
+      meta: {},
+      triggerAgent: true,
+    });
+    expect(await agentRunJobs(org.id)).toHaveLength(0);
+    await inboundProcess({ provider: "resend", webhookEventId: row!.id }, { db: db(), jobId: "retry" });
+    expect(await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id))).toHaveLength(1);
+    expect(await agentRunJobs(org.id)).toHaveLength(1);
+  });
+
+  it("does not wake the agent for auto-replies or spoofed senders, and ignores unknown recipients", async () => {
     const org = await makeOrg();
     const agent = await makeAgent(org.id);
     await handleResendWebhook(
       resendRequest(receivedEvent(`${agent.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`, { headers: { "Auto-Submitted": "auto-replied" } })),
     );
+    await handleResendWebhook(
+      resendRequest(
+        receivedEvent(`${agent.emailHandle}@${TEST_ENV.EMAIL_DOMAIN}`, {
+          headers: { "Authentication-Results": "mx.resend.com; spf=fail smtp.mailfrom=brandlord.co; dkim=none; dmarc=fail header.from=brandlord.co" },
+        }),
+      ),
+    );
     await handleResendWebhook(resendRequest(receivedEvent(`nobody-${rid()}@${TEST_ENV.EMAIL_DOMAIN}`)));
     await handleResendWebhook(resendRequest(receivedEvent(`${agent.emailHandle}@evil.example`)));
     await processAllInbound();
-    expect(await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id))).toHaveLength(1);
+    expect(await db().select().from(schema.messages).where(eq(schema.messages.orgId, org.id))).toHaveLength(2);
     expect(await agentRunJobs(org.id)).toHaveLength(0);
   });
 });
@@ -237,7 +291,7 @@ describe("Twilio webhook", () => {
     expect(msgs).toHaveLength(1);
     const runs = await agentRunJobs(org.id);
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.payload).toMatchObject({ agentId: agent.id });
+    expect(runs[0]).toMatchObject({ agentId: agent.id, input: { messageId: msgs[0]!.id } });
     const [conv] = await db().select().from(schema.conversations).where(eq(schema.conversations.orgId, org.id));
     expect(conv).toMatchObject({ channel: "sms", externalThreadId: "+14155550111" });
   });
@@ -340,6 +394,22 @@ describe("Slack events webhook", () => {
     expect(convs).toHaveLength(1);
     expect(convs[0]).toMatchObject({ channel: "slack", externalThreadId: "CGEN:1730500000.000100", agentId: agent.id });
     expect(await agentRunJobs(org.id)).toHaveLength(2);
+  });
+
+  it("keys direct messages by DM channel so a DM is one running conversation", async () => {
+    const org = await makeOrg();
+    await makeAgent(org.id);
+    const teamId = `T${rid(4).toUpperCase()}`;
+    await db().insert(schema.channelConnections).values({ orgId: org.id, kind: "slack", externalId: teamId, status: "connected", config: { botUserId: "UBOT" } });
+    for (const ts of ["1730500010.000100", "1730500020.000100"]) {
+      await handleSlackWebhook(
+        slackRequest({ type: "event_callback", team_id: teamId, event_id: `Ev${rid(4)}`, event: { type: "message", channel_type: "im", user: "UDANA", text: `dm ${ts}`, channel: "DDANA", ts } }),
+      );
+    }
+    await processAllInbound();
+    const convs = await db().select().from(schema.conversations).where(eq(schema.conversations.orgId, org.id));
+    expect(convs).toHaveLength(1);
+    expect(convs[0]!.externalThreadId).toBe("DDANA");
   });
 
   it("ignores events for Slack teams that are not connected", async () => {

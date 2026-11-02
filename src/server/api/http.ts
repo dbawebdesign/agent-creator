@@ -5,6 +5,7 @@
 import "server-only";
 import { z } from "zod";
 import { logger } from "@/server/lib/logger";
+import { readTextCapped } from "./body";
 import { rateLimit } from "@/server/security/rate-limit";
 import { authenticateApiKey, hasScope, type ApiPrincipal, type ApiScope } from "./keys";
 
@@ -122,10 +123,8 @@ export function apiRoute<Ctx>(
 }
 
 export async function readJson(req: Request, maxBytes = 256 * 1024): Promise<unknown> {
-  const len = Number(req.headers.get("content-length") ?? 0);
-  if (len > maxBytes) throw new ApiError("invalid_request", "Request body too large.");
-  const text = await req.text();
-  if (text.length > maxBytes) throw new ApiError("invalid_request", "Request body too large.");
+  const text = await readTextCapped(req, maxBytes);
+  if (text === null) throw new ApiError("invalid_request", "Request body too large.");
   if (!text.trim()) return {};
   try {
     return JSON.parse(text);

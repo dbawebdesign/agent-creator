@@ -143,7 +143,8 @@ export async function sendEmail(msg: OutboundEmail): Promise<SendResult> {
 
   const key = env().RESEND_API_KEY;
   if (!key) {
-    logger.info({ to: to.length, subject: headerSafe(msg.subject, 80) }, "email: simulated send (RESEND_API_KEY not set)");
+    const log = env().NODE_ENV === "production" ? logger.warn.bind(logger) : logger.info.bind(logger);
+    log({ recipients: to.length }, "email: simulated send (RESEND_API_KEY not set)");
     return { providerId: null, simulated: true };
   }
   const res = await fetch("https://api.resend.com/emails", {

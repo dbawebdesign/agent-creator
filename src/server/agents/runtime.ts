@@ -10,7 +10,8 @@
  *   the approved call is executed (or a rejection is reported to the model) and the loop continues.
  * - Metering: tokens + cost (micro-dollars) per model call into runs and usage_events (agency-only data).
  */
-import { and, eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { DB } from "@/server/db/client";
 import { schema } from "@/server/db/client";
 import { enqueue } from "@/server/jobs/queue";
@@ -199,7 +200,7 @@ class StepWriter {
     private seq: number,
   ) {}
   static async open(database: DB, runId: string) {
-    const r = await database.execute(sql`select coalesce(max(seq), 0)::int as m from run_steps where run_id = ${runId}`);
+    const r = await database.execute(sql`select greatest(coalesce(max(seq), 0), 0)::int as m from run_steps where run_id = ${runId}`);
     return new StepWriter(database, runId, Number((r.rows[0] as { m: number } | undefined)?.m ?? 0));
   }
   async write(kind: "thought" | "tool_call" | "tool_result" | "message" | "error", name: string | null, data: Record<string, unknown>) {
@@ -209,6 +210,28 @@ class StepWriter {
 }
 
 const CHECKPOINT_SEQ = 0;
+/** run_steps rows with seq <= 0 are internal: 0 = checkpoint, -1 = executor lease. */
+const LEASE_SEQ = -1;
+const RUN_LEASE_MS = 5 * 60_000;
+
+/**
+ * Per-run executor lease (atomic upsert-if-expired). Guarantees a single executor per run across processes, even
+ * when an inline call, a safety-net job and a retry overlap. Expires on its own if the executor dies.
+ */
+async function acquireRunLease(database: DB, runId: string, owner: string): Promise<boolean> {
+  const r = await database.execute(sql`
+    insert into run_steps (run_id, seq, kind, name, data)
+    values (${runId}, ${LEASE_SEQ}, 'thought', 'lease',
+      jsonb_build_object('owner', ${owner}::text, 'until', to_char((now() + (${RUN_LEASE_MS} || ' milliseconds')::interval) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+    on conflict (run_id, seq) do update set data = excluded.data
+    where (run_steps.data->>'until')::timestamptz < now() or run_steps.data->>'owner' = ${owner}
+    returning id`);
+  return r.rows.length > 0;
+}
+
+async function releaseRunLease(database: DB, runId: string, owner: string) {
+  await database.execute(sql`delete from run_steps where run_id = ${runId} and seq = ${LEASE_SEQ} and data->>'owner' = ${owner}`);
+}
 
 async function saveCheckpoint(database: DB, runId: string, cp: Checkpoint) {
   await database.execute(sql`
@@ -232,6 +255,24 @@ async function loadCheckpoint(database: DB, runId: string): Promise<Checkpoint |
  * their approval is decided, and progress is checkpointed after every turn.
  */
 export async function executeRun(database: DB, runId: string, opts: { orgId?: string; limits?: Partial<RunLimits> } = {}): Promise<RunOutcome> {
+  const owner = randomUUID();
+  const exists = (
+    await database
+      .select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(opts.orgId ? and(eq(schema.runs.id, runId), eq(schema.runs.orgId, opts.orgId)) : eq(schema.runs.id, runId))
+      .limit(1)
+  )[0];
+  if (!exists) throw new Error("Run not found");
+  if (!(await acquireRunLease(database, runId, owner))) return { status: "noop", deliverableIds: [] }; // someone else is executing it
+  try {
+    return await executeLeased(database, runId, owner, opts);
+  } finally {
+    await releaseRunLease(database, runId, owner).catch(() => undefined);
+  }
+}
+
+async function executeLeased(database: DB, runId: string, owner: string, opts: { orgId?: string; limits?: Partial<RunLimits> }): Promise<RunOutcome> {
   const limits = { ...DEFAULT_LIMITS, ...opts.limits };
   const deadline = Date.now() + limits.deadlineMs;
   const existing = (
@@ -263,7 +304,7 @@ export async function executeRun(database: DB, runId: string, opts: { orgId?: st
   const run = claimed;
 
   const agent = (await database.select().from(schema.agents).where(and(eq(schema.agents.id, run.agentId), eq(schema.agents.orgId, run.orgId))).limit(1))[0];
-  const org = (await database.select().from(schema.organizations).where(eq(schema.organizations.id, run.orgId)).limit(1))[0];
+  const org = (await database.select().from(schema.organizations).where(and(eq(schema.organizations.id, run.orgId), isNull(schema.organizations.deletedAt))).limit(1))[0];
   if (!agent || !org) return finish(database, run, "failed", { error: "Agent or organization not found" });
   if (agent.status !== "active") return finish(database, run, "canceled", { error: `Agent is ${agent.status}` });
   const workflow = run.workflowId
@@ -404,6 +445,7 @@ export async function executeRun(database: DB, runId: string, opts: { orgId?: st
         return { status: "deferred", deliverableIds: cp.state.deliverableIds };
       }
       await assertBudget(database, agent);
+      if (!(await acquireRunLease(database, run.id, owner))) throw new Error("Lost the run lease to another executor");
 
       const res = await llm().chat({
         tier: agent.config.modelTier ?? "smart",

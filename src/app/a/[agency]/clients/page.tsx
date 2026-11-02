@@ -56,7 +56,7 @@ export default async function ClientsPage({ params }: { params: Promise<{ agency
                     <OrgMark name={c.name} size={30} />
                     <span className="min-w-0">
                       <span className="block truncate text-[13.5px] font-medium text-ink">{c.name}</span>
-                      <span className="block truncate text-[12px] text-ink-4">{c.industry ?? c.website ?? c.slug}</span>
+                      <span className="block truncate text-[12px] text-ink-4">{c.industry ?? c.website?.replace(/^https?:\/\//, "") ?? c.slug}</span>
                     </span>
                   </span>
                   <span className="hidden min-w-0 md:block">

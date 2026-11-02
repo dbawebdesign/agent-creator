@@ -5,7 +5,7 @@
 import { sql } from "drizzle-orm";
 import type { DB } from "@/server/db/client";
 import { logger } from "@/server/lib/logger";
-import { complete, fail, type JobType } from "./queue";
+import { backoffMs, type JobType } from "./queue";
 import { schedulerTick } from "./scheduler";
 
 export type ClaimedRow = { id: string; type: string; payload: Record<string, unknown>; orgId: string | null; attempts: number; maxAttempts: number };
@@ -56,11 +56,26 @@ export async function processJob(database: DB, job: ClaimedRow, handlers: Record
       where id = ${job.id} and locked_by = ${workerId}`);
     logger.info({ jobId: job.id, type: job.type, ms: Date.now() - started }, "job succeeded");
   } catch (err) {
-    const dead = await fail(database, job, err);
+    const dead = await failOwned(database, job, workerId, err);
     logger.warn({ jobId: job.id, type: job.type, attempts: job.attempts, dead, err: err instanceof Error ? err.message : String(err) }, "job failed");
   } finally {
     clearInterval(timer);
   }
+}
+
+/** Like queue.fail, but only if this worker still holds the lease (a reclaimed job is someone else's now). */
+async function failOwned(database: DB, job: ClaimedRow, workerId: string, error: unknown): Promise<boolean> {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const dead = job.attempts >= job.maxAttempts;
+  await database.execute(sql`
+    update jobs set
+      status = ${dead ? "dead" : "queued"},
+      last_error = ${message.slice(0, 4000)},
+      run_at = now() + (${backoffMs(job.attempts)} || ' milliseconds')::interval,
+      locked_by = null, locked_until = null,
+      finished_at = ${dead ? sql`now()` : sql`null`}
+    where id = ${job.id} and locked_by = ${workerId}`);
+  return dead;
 }
 
 export type WorkerHandle = { stop(): Promise<void>; readonly running: number };
@@ -128,5 +143,3 @@ export function startWorker(opts: {
     },
   };
 }
-
-export { complete };

@@ -55,7 +55,8 @@ export async function sendSms(input: { to: string; body: string; from?: string |
   if (!E164_RE.test(input.to)) throw new ProviderError("invalid destination number", false);
   const { TWILIO_ACCOUNT_SID: sid, TWILIO_AUTH_TOKEN: token, TWILIO_MESSAGING_SERVICE_SID: mss } = env();
   if (!sid || !token || (!mss && !input.from)) {
-    logger.info({ parts: 1, chars: input.body.length }, "sms: simulated send (Twilio not configured)");
+    const log = env().NODE_ENV === "production" ? logger.warn.bind(logger) : logger.info.bind(logger);
+    log({ chars: input.body.length }, "sms: simulated send (Twilio not configured)");
     return { providerId: null, simulated: true };
   }
   const form = new URLSearchParams({ To: input.to, Body: input.body.slice(0, 1600) });
@@ -63,6 +64,8 @@ export async function sendSms(input: { to: string; body: string; from?: string |
   // agent's own number so the conversation stays on one thread on the customer's phone.
   if (mss) form.set("MessagingServiceSid", mss);
   if (input.from && E164_RE.test(input.from)) form.set("From", input.from);
+  const app = env().APP_URL;
+  if (app.startsWith("https://")) form.set("StatusCallback", `${app.replace(/\/+$/, "")}/api/webhooks/twilio`);
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`, {
     method: "POST",
     headers: {

@@ -76,7 +76,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
         <Stat className="sm:px-6" label="Delivered" value={home.numbers.deliveredWeek} sub="last 7 days" />
       </section>
 
-      <div className="mt-12 grid gap-12 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section aria-labelledby="delivered-h" className="min-w-0">
           <SectionHeading title="Delivered overnight" count={home.delivered.length} className="[&_h2]:text-[14px]" />
           {home.delivered.length ? (

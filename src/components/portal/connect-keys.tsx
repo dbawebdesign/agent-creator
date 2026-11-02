@@ -71,7 +71,7 @@ export function ConnectKeys({ slug, appUrl, keys, isAdmin, providerName }: { slu
           ))}
         </div>
         <div className="relative mt-2 rounded-lg border border-line bg-surface-2/60">
-          <pre className="overflow-x-auto px-4 py-3.5 pr-12 font-mono text-[12px] leading-relaxed text-ink-2">
+          <pre className="overflow-x-auto px-4 py-3.5 pr-12 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-all text-ink-2">
             <code>{snippet}</code>
           </pre>
           <CopyButton value={snippet} label="Copy setup snippet" toastLabel="Copied" className="absolute top-2 right-2" />

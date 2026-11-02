@@ -454,9 +454,11 @@ export async function getBilling(agencyId: string) {
   const since30 = new Date(Date.now() - 30 * DAY);
   const [plans, subs, usage, mrr] = await Promise.all([
     db()
-      .select({ plan: s.plans, subs: sql<number>`(select count(*) from ${s.subscriptions} where ${s.subscriptions.planId} = ${s.plans.id} and ${s.subscriptions.status} <> 'canceled')`.mapWith(Number) })
+      .select({ plan: s.plans, subs: sql<number>`count(${s.subscriptions.id})`.mapWith(Number) })
       .from(s.plans)
+      .leftJoin(s.subscriptions, and(eq(s.subscriptions.planId, s.plans.id), ne(s.subscriptions.status, "canceled")))
       .where(eq(s.plans.orgId, agencyId))
+      .groupBy(s.plans.id)
       .orderBy(desc(s.plans.active), asc(s.plans.priceCents)),
     ids.length
       ? db()

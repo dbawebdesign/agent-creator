@@ -142,7 +142,7 @@ export async function verifyMagicLink(_prev: AuthState, formData: FormData): Pro
   }
   await createSession(user.id);
   await audit({ actorType: "user", actorId: user.id, action: "auth.magic_link", ip: clientIp(await headers()) });
-  redirect(isNew ? "/onboarding" : (safeNext(formData.get("next")) ?? (await homePathFor(user.id))));
+  redirect(safeNext(formData.get("next")) ?? (isNew ? "/onboarding" : await homePathFor(user.id)));
 }
 
 export async function signOut(): Promise<void> {

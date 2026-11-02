@@ -1,5 +1,4 @@
 import { Code2, FileText, Globe, Hash, Mail, MessageSquare, PenLine, Sparkles, Table2, Zap, type LucideIcon } from "lucide-react";
-import { Tooltip } from "@/components/ui/tooltip";
 import type { ChannelKind } from "@/server/db/schema/agents";
 import { CHANNEL_LABEL, KIND_LABEL } from "./lib";
 import { cn } from "@/lib/utils";
@@ -32,20 +31,18 @@ export function ChannelIcon({ channel, className }: { channel: ChannelKind; clas
   return <Icon aria-hidden className={cn("size-3.5", className)} />;
 }
 
-/** Row of small "delivered via" icons with tooltips (portal is implied, so it's omitted when others exist). */
+/** "Sent to Slack & Email" — where else this delivery went (the portal is implied). */
 export function DeliveredVia({ via, className }: { via: ChannelKind[]; className?: string }) {
-  const shown = via.length > 1 ? via.filter((v) => v !== "portal") : via;
+  const shown = via.filter((v) => v !== "portal");
   if (!shown.length) return null;
-  const label = `Delivered via ${shown.map((v) => CHANNEL_LABEL[v] ?? v).join(", ")}`;
+  const words = shown.map((v) => CHANNEL_LABEL[v] ?? v);
+  const text = words.length > 2 ? `${words.slice(0, -1).join(", ")} & ${words.at(-1)}` : words.join(" & ");
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-ink-4", className)} aria-label={label}>
+    <span className={cn("inline-flex min-w-0 items-center gap-1.5 text-ink-4", className)} title={`Also sent to your ${text}`}>
       {shown.map((v) => (
-        <Tooltip key={v} content={`Sent to your ${CHANNEL_LABEL[v] ?? v}`}>
-          <span className="inline-flex" tabIndex={-1}>
-            <ChannelIcon channel={v} />
-          </span>
-        </Tooltip>
+        <ChannelIcon key={v} channel={v} />
       ))}
+      <span className="truncate">{text}</span>
     </span>
   );
 }

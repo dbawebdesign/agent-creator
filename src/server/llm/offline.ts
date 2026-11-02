@@ -6,7 +6,7 @@
  * knowledge_search → memory_recall → (memory_save) → (send_message) → create_deliverable → final summary —
  * composing its output from the task instructions and the tool results it actually received.
  */
-import { cell, estimateTokens, keywords, normalizeWhitespace, splitSentences, truncate } from "./text";
+import { cell, estimateTokens, keywords, normalizeWhitespace, splitSentences, STOPWORDS, tokenize, truncate } from "./text";
 import type { LlmContent, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall } from "./types";
 
 export const OFFLINE_MODEL = "roster-offline-1";
@@ -64,7 +64,7 @@ function collectToolEvents(messages: LlmMessage[]): ToolEvent[] {
   return events;
 }
 
-type Snippet = { title: string; text: string };
+type Snippet = { title: string; text: string; kind?: string };
 
 /** Parse knowledge_search / memory_recall JSON results back into snippets. */
 function snippetsFrom(events: ToolEvent[], tool: string): Snippet[] {
@@ -74,7 +74,7 @@ function snippetsFrom(events: ToolEvent[], tool: string): Snippet[] {
     try {
       const parsed = JSON.parse(e.result) as { results?: Array<{ title?: string; content?: string; kind?: string }> };
       for (const r of parsed.results ?? []) {
-        if (r.content) out.push({ title: r.title ?? r.kind ?? tool, text: r.content });
+        if (r.content) out.push({ title: r.title ?? r.kind ?? tool, text: r.content, kind: r.kind });
       }
     } catch {
       /* non-JSON result: ignore */
@@ -83,81 +83,162 @@ function snippetsFrom(events: ToolEvent[], tool: string): Snippet[] {
   return out;
 }
 
-/** Sentences from snippets that best match the task keywords. */
-function relevantSentences(snippets: Snippet[], kws: string[], max: number): Array<{ text: string; source: string }> {
-  const scored: Array<{ text: string; source: string; score: number; idx: number }> = [];
-  let idx = 0;
-  for (const s of snippets) {
-    for (const sentence of splitSentences(s.text.replace(/\*\*\d+:\d+\*\*\s*·\s*/g, ""))) {
-      const clean = normalizeWhitespace(sentence.replace(/\\\[[^\]]*\\\]/g, "").replace(/\[music\]/gi, ""));
-      if (clean.length < 40 || clean.length > 400) continue;
-      const lower = clean.toLowerCase();
-      let score = 0;
-      for (const k of kws) if (lower.includes(k)) score += 1;
-      if (/\d/.test(clean)) score += 0.5;
-      if (score > 0) scored.push({ text: clean, source: s.title, score, idx: idx++ });
-    }
-  }
-  const seen = new Set<string>();
-  return scored
-    .sort((a, b) => b.score - a.score || a.idx - b.idx)
-    .filter((s) => (seen.has(s.text) ? false : (seen.add(s.text), true)))
-    .slice(0, max)
-    .map(({ text, source }) => ({ text, source }));
+/** Strip transcript/markdown noise: headings, timestamps, speaker labels, stage directions. */
+function cleanSnippetText(text: string): string {
+  return text
+    .replace(/^[^“\n]{3,60}:\s*“([\s\S]*)”\s*$/, "$1")
+    .replace(/^#+\s.*$/gm, " ")
+    .replace(/\*\*\d{1,2}:\d{2}(?::\d{2})?\*\*\s*·?/g, "\n")
+    .replace(/(^|\n)\s*[A-Z][A-Za-z.'-]{1,20}(?: [A-Z][A-Za-z.'-]{1,20})?:\s+/g, "$1")
+    .replace(/\\\[[^\]]*\\\]/g, " ")
+    .replace(/\[(?:music|laughter|applause)\]/gi, " ");
 }
 
-/** Numbered / bulleted procedure steps from workflow instructions. */
+type Sentence = { text: string; source: string; idx: number };
+
+const sentenceKey = (t: string) => t.toLowerCase().replace(/\b(\w+) \1\b/g, "$1").replace(/[^a-z0-9]/g, "");
+
+function sentencesOf(snippets: Snippet[]): Sentence[] {
+  const out: Sentence[] = [];
+  const seen = new Set<string>();
+  let idx = 0;
+  for (const s of snippets) {
+    for (const sentence of splitSentences(cleanSnippetText(s.text))) {
+      const clean = normalizeWhitespace(sentence);
+      // Dedupe across transcript chunks and memories that quote them (ignoring stutters like "I I").
+      const key = sentenceKey(clean);
+      if (clean.length < 30 || clean.length > 400 || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ text: clean, source: s.title, idx: idx++ });
+    }
+  }
+  return out;
+}
+
+/**
+ * Sentences that best match a set of keywords, IDF-weighted so rare, specific words ("quotes", "catalogs") count
+ * far more than common ones ("call", "business"). Questions are skipped (usually the interviewer).
+ */
+/** Words that describe the *instructions* rather than the business; useless for grounding. */
+const INSTRUCTION_WORDS = new Set(
+  (
+    "build write list deliver document documents today date lead page kinds kind requests request described exact still fill real three each " +
+    "sample samples ready template markdown intro options terms checklist data call calls draft drafts drafted create include using based " +
+    "short clear table tables format line items item step steps first next send save time week weekly morning report reports summary placeholder " +
+    "titled title quote-ready best good better new open specific details detail need needed"
+  ).split(/\s+/),
+);
+
+function bestMatches(pool: Sentence[], rawKws: string[], max: number, exclude: Set<string> = new Set(), minScore = 1.2): Sentence[] {
+  const kws = [...new Set(rawKws.filter((k) => !INSTRUCTION_WORDS.has(k)))];
+  if (!kws.length || !pool.length) return [];
+  const n = pool.length;
+  const lowered = pool.map((s) => s.text.toLowerCase());
+  const res = new Map(kws.map((k) => [k, new RegExp(`\\b${k.replace(/[^a-z0-9]/g, "")}`)]));
+  const idf = new Map(kws.map((k) => [k, Math.log((n + 1) / (1 + lowered.filter((t) => res.get(k)!.test(t)).length))]));
+  // Small pools cap IDF low; scale the bar so a sentence holding the rarest term can still qualify.
+  const bar = Math.min(minScore, 0.75 * Math.log((n + 1) / 2));
+  return pool
+    .map((s, i) => ({ s, lower: lowered[i]! }))
+    .filter(({ s }) => !exclude.has(s.text) && !/\?\s*$/.test(s.text))
+    .map(({ s, lower }) => {
+      let score = 0;
+      for (const k of kws) if (res.get(k)!.test(lower)) score += idf.get(k) ?? 0;
+      if (score > 0 && /\d/.test(s.text)) score += 0.3;
+      return { s, score };
+    })
+    .filter((x) => x.score > 0 && x.score >= bar)
+    .sort((a, b) => b.score - a.score || a.s.idx - b.s.idx)
+    .slice(0, max)
+    .map((x) => x.s);
+}
+
+/** Every content word of a step (not just the most frequent), minus instruction words and the org's own name. */
+function stepKeywords(step: string, exclude: Set<string>): string[] {
+  return [...new Set(tokenize(step))].filter((w) => w.length >= 4 && !STOPWORDS.has(w) && !INSTRUCTION_WORDS.has(w) && !exclude.has(w)).slice(0, 12);
+}
+
+/** Numbered / bulleted procedure steps from workflow instructions (context lines like "Why:" excluded). */
 function procedureSteps(instructions: string): string[] {
-  const lines = instructions
+  const body = instructions.split(/\n\s*\n(?:Why(?: this matters)?:|Feedback:|Original)/)[0] ?? instructions;
+  const lines = body
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => /^(\d+[.)]|[-*•])\s+/.test(l))
     .map((l) => l.replace(/^(\d+[.)]|[-*•])\s+/, ""));
   if (lines.length) return lines.slice(0, 12);
-  return splitSentences(instructions).slice(0, 8);
+  return splitSentences(body).filter((l) => !/^(?:Using|From) the (?:discovery call|knowledge base)/i.test(l) || splitSentences(body).length === 1).slice(0, 8);
 }
 
-function composeDeliverable(brief: Brief, knowledge: Snippet[], memories: Snippet[], kws: string[]) {
-  const steps = procedureSteps(brief.body);
-  const findings = relevantSentences(knowledge, kws, 6);
-  const prefs = memories.filter((m) => /prefer|always|never|don't|do not|wants?|likes?/i.test(m.text)).slice(0, 5);
-  const facts = memories.filter((m) => !prefs.includes(m)).slice(0, 5);
+/** Steps that only say how to package the result ("Deliver it as one document…") are honoured, not listed as work. */
+const FORMAT_STEP = /^(?:deliver|format|title|send it|lead with)\b/i;
+
+function composeDeliverable(brief: Brief, knowledge: Snippet[], memories: Snippet[], kws: string[], orgName: string | null) {
+  const allSteps = procedureSteps(brief.body);
+  const steps = allSteps.filter((s) => !FORMAT_STEP.test(s));
+  if (!steps.length) steps.push(...allSteps.slice(0, 1));
+  const prefs = memories.filter((m) => m.kind === "preference").slice(0, 5);
+  const facts = memories.filter((m) => m.kind !== "preference");
+  const pool = sentencesOf([...knowledge, ...facts]);
   const isRevision = brief.kind === "revision";
+  const used = new Set<string>();
+  const orgWords = new Set(orgName ? tokenize(orgName) : []);
+  const titleKws = keywords(brief.title, 6).filter((k) => !orgWords.has(k));
+
+  const perStep = steps.map((step) => {
+    const ev = bestMatches(pool, [...stepKeywords(step, orgWords), ...titleKws], 2, used, 2.5);
+    ev.forEach((e) => used.add(e.text));
+    return { step, evidence: ev };
+  });
+  const grounded = perStep.filter((p) => p.evidence.length).length;
+  const extra = bestMatches(pool, kws.filter((k) => !orgWords.has(k)), 3, used, 3);
+  extra.forEach((e) => used.add(e.text));
+  const hours = facts.map((f) => /~(\d+(?:\.\d+)?) hours\/week/.exec(f.text)?.[1]).find(Boolean);
 
   const lines: string[] = [];
-  lines.push(`## Summary`);
+  lines.push("## Summary");
   lines.push(
-    `${isRevision ? "Revised" : "Prepared"} **${brief.title}** from the workflow procedure (${steps.length} steps)` +
-      `${findings.length ? `, ${findings.length} relevant passages from the knowledge base` : ""}` +
-      `${memories.length ? ` and ${memories.length} things I remember about how you work` : ""}. It is ready to use as-is; reply with changes and I will revise it.`,
+    `${isRevision ? "Revised" : "Finished"} **${brief.title}**: ${steps.length} step${steps.length === 1 ? "" : "s"}, ${grounded} grounded in your own materials` +
+      `${memories.length ? `, shaped by ${memories.length} things I know about how you work` : ""}. Reply with changes and I will revise it.`,
   );
+  if (hours && /time it (?:will )?saves?|hours? saved|save per week/i.test(brief.body)) {
+    lines.splice(1, 0, `**Time back:** this replaces about ${hours} hours a week of manual work.`, "");
+  }
   if (isRevision) {
     const fb = /Feedback:\s*([\s\S]+?)(?:\n\n|$)/.exec(brief.body)?.[1];
-    if (fb) lines.push("", `**What changed:** applied your feedback — “${truncate(normalizeWhitespace(fb), 300)}”.`);
+    if (fb) lines.push("", `**What changed:** I applied your feedback — “${truncate(normalizeWhitespace(fb), 300)}”.`);
   }
-  lines.push("", "## The work", "", "| # | Step | Result |", "|---|---|---|");
-  steps.forEach((s, i) => {
-    const support = findings[i % Math.max(1, findings.length)];
-    const result = support ? `Done — grounded in “${truncate(support.text, 120)}”` : "Done — ready for your review";
-    lines.push(`| ${i + 1} | ${cell(truncate(s, 160))} | ${cell(result)} |`);
+  if (prefs.length) lines.push("", `**Applied your preferences:** ${prefs.map((p) => truncate(p.text.replace(/^Preference from the call:\s*/i, ""), 140)).join(" · ")}`);
+
+  lines.push("", "| # | Step | Status | Based on |", "|---|---|---|---|");
+  perStep.forEach((p, i) => {
+    const status = p.evidence.length ? "Drafted from your materials" : "Drafted — needs your details";
+    const basis = p.evidence[0] ? truncate(p.evidence[0].text, 90) : "Best practice (no source material yet)";
+    lines.push(`| ${i + 1} | ${cell(truncate(p.step, 140))} | ${cell(status)} | ${cell(basis)} |`);
   });
-  if (findings.length) {
-    lines.push("", "## What I found in your materials", "");
-    for (const f of findings) lines.push(`- ${truncate(f.text, 280)} _(source: ${f.source})_`);
+
+  lines.push("", "## The work");
+  perStep.forEach((p, i) => {
+    lines.push("", `### ${i + 1}. ${truncate(p.step, 160)}`);
+    if (p.evidence.length) for (const e of p.evidence) lines.push(`- From ${e.source}: “${truncate(e.text, 260)}”`);
+    else lines.push("- I used a standard approach here. Send me the source material and I'll make it exact.");
+  });
+  if (extra.length) {
+    lines.push("", "## Also worth knowing", "");
+    for (const f of extra) lines.push(`- ${truncate(f.text, 260)} _(${f.source})_`);
   }
-  if (facts.length || prefs.length) {
-    lines.push("", "## Context I applied", "");
-    for (const p of prefs) lines.push(`- Preference: ${truncate(p.text, 200)}`);
-    for (const f of facts) lines.push(`- ${truncate(f.text, 200)}`);
+  const usedKeys = new Set([...used].map(sentenceKey));
+  const context = facts.filter((f) => !sentencesOf([f]).some((x) => usedKeys.has(sentenceKey(x.text)))).slice(0, 5);
+  if (context.length) {
+    lines.push("", "## Context I used", "");
+    for (const f of context) lines.push(`- ${truncate(f.text, 200)}`);
   }
+  const missing = perStep.filter((p) => !p.evidence.length).map((p) => truncate(p.step.replace(/[.;:]+$/, ""), 100));
   lines.push("", "## Next", "");
-  lines.push(`- I will run this again on schedule and flag anything that changed.`);
-  if (kws.length) lines.push(`- Send me any files about ${kws.slice(0, 3).join(", ")} and I will fold them in.`);
+  if (missing.length) lines.push(`- To make ${missing.length === 1 ? "this step" : "these steps"} exact, send me what you have for: ${missing.slice(0, 3).join("; ")}.`);
+  lines.push("- I'll keep running this on schedule and tell you what changed since last time.");
   const body = lines.join("\n");
-  const preview = truncate(
-    `${brief.title}: ${steps.length} steps completed${findings.length ? `, grounded in ${findings.length} passages from your materials` : ""}.`,
-    200,
-  );
+  const preview = truncate(`${brief.title} — ${steps.length} steps done, ${grounded} grounded in your materials.`, 200);
   return { title: brief.title, kind: brief.output, body, preview };
 }
 
@@ -238,7 +319,8 @@ export const offlineProvider: LlmProvider = {
     // 3. Produce finished work.
     const needsDeliverable = brief.kind !== "message" || wantsDocument(brief.body);
     if (needsDeliverable && has("create_deliverable") && !called("create_deliverable")) {
-      const d = composeDeliverable(brief, knowledge, memories, kws);
+      const orgName = /^## About (.+)$/m.exec(req.system)?.[1]?.trim() ?? null;
+      const d = composeDeliverable(brief, knowledge, memories, kws, orgName);
       return makeResponse(req, "Writing it up.", [{ name: "create_deliverable", input: d }]);
     }
 
@@ -251,7 +333,7 @@ export const offlineProvider: LlmProvider = {
     if (sent) parts.push(sent.isError ? "I could not send the message." : /approval/i.test(sent.result) ? "The outgoing email is waiting for your approval." : "Message sent.");
     if (saved) parts.push(`Got it — I'll remember that ${String(saved.input.content ?? "").replace(/^I\s/, "you ")}.`);
     if (!parts.length) {
-      const top = relevantSentences([...memories, ...knowledge], kws, 2);
+      const top = bestMatches(sentencesOf([...memories, ...knowledge]), kws, 2);
       parts.push(
         top.length
           ? `Here's what I have on that: ${top.map((t) => truncate(t.text, 220)).join(" ")}`

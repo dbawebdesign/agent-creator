@@ -144,7 +144,7 @@ describe("channel helpers", () => {
     expect(r.html).not.toContain("javascript:");
     expect(r.html).toContain("&lt;img");
     expect(r.html).toContain("<strong");
-    expect(r.html).toContain('href="https://example.com"');
+    expect(r.html).toContain('href="https://example.com/"');
     expect(r.html).toContain("View in portal");
     expect(r.html).toContain("#4F46E5"); // unsafe accent rejected
     expect(r.text).toContain("View in portal: https://app.roster.test/p/brandlord/d/123");

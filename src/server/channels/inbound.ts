@@ -1,8 +1,7 @@
 /**
  * Inbound processing (worker): webhook_events row → agent, contact, conversation, idempotent message,
- * and one `agent.run` job per new message.
- *
- * agent.run payload: { orgId, agentId, conversationId, messageId, trigger: "message" }
+ * then exactly one reply run per message via engine.startConversationRun (which queues agent.run { orgId, runId })
+ * plus engine.triggerEvent for event-triggered workflows (email.received / sms.received / slack.message).
  */
 import "server-only";
 import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
@@ -10,8 +9,8 @@ import type { DB } from "@/server/db/client";
 import { schema } from "@/server/db/client";
 import type { ChannelKind } from "@/server/db/schema";
 import { env } from "@/server/env";
-import { enqueue } from "@/server/jobs/queue";
 import { logger } from "@/server/lib/logger";
+import * as engine from "@/server/services/engine";
 import { fetchReceivedEmail, htmlToText, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "./email";
 import { E164_RE, START_WORDS, STOP_WORDS } from "./sms";
 import { stripMention } from "./slack";
@@ -36,7 +35,7 @@ export type IngestInput = {
   triggerAgent: boolean;
 };
 
-export type IngestResult = { conversationId: string; messageId: string | null; duplicate: boolean; jobId: string | null };
+export type IngestResult = { conversationId: string; messageId: string | null; duplicate: boolean };
 
 async function findOrCreateContact(database: DB, orgId: string, c: IngestInput["contact"]): Promise<string> {
   const cond = c.email
@@ -114,55 +113,110 @@ async function findOrCreateConversation(
   return conv.id;
 }
 
-/** Store an inbound message exactly once and wake the agent. Safe to call repeatedly with the same input. */
+class DuplicateMessage extends Error {}
+
+async function priorMessage(database: DB, orgId: string, externalId: string) {
+  const [prior] = await database
+    .select({ id: schema.messages.id, conversationId: schema.messages.conversationId })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.externalId, externalId.slice(0, 300))))
+    .limit(1);
+  return prior ?? null;
+}
+
+/**
+ * Store an inbound message exactly once. Safe to call repeatedly with the same input: a duplicate makes no
+ * writes at all (no stray contacts/conversations) and returns the original message and its conversation.
+ */
 export async function ingestInbound(database: DB, input: IngestInput): Promise<IngestResult> {
-  return database.transaction(async (txRaw) => {
-    const tx = txRaw as unknown as DB;
-    const contactId = await findOrCreateContact(tx, input.orgId, input.contact);
-    let conversationId = input.conversationId ?? null;
-    if (conversationId) {
-      const [ok] = await tx
-        .select({ id: schema.conversations.id })
-        .from(schema.conversations)
-        .where(and(eq(schema.conversations.id, conversationId), eq(schema.conversations.orgId, input.orgId), eq(schema.conversations.agentId, input.agentId)))
-        .limit(1);
-      if (!ok) conversationId = null;
-    }
-    conversationId ??= await findOrCreateConversation(tx, input, contactId);
+  const existing = await priorMessage(database, input.orgId, input.externalId);
+  if (existing) return { conversationId: existing.conversationId, messageId: existing.id, duplicate: true };
+  try {
+    return await database.transaction(async (txRaw) => {
+      const tx = txRaw as unknown as DB;
+      const contactId = await findOrCreateContact(tx, input.orgId, input.contact);
+      let conversationId = input.conversationId ?? null;
+      if (conversationId) {
+        const [ok] = await tx
+          .select({ id: schema.conversations.id })
+          .from(schema.conversations)
+          .where(and(eq(schema.conversations.id, conversationId), eq(schema.conversations.orgId, input.orgId), eq(schema.conversations.agentId, input.agentId)))
+          .limit(1);
+        if (!ok) conversationId = null;
+      }
+      conversationId ??= await findOrCreateConversation(tx, input, contactId);
 
-    const inserted = await tx
-      .insert(schema.messages)
-      .values({
-        orgId: input.orgId,
-        conversationId,
-        direction: "inbound",
-        author: "contact",
-        body: input.body.slice(0, MAX_BODY) || "(empty message)",
-        externalId: input.externalId.slice(0, 300),
-        meta: { ...input.meta, contactId },
-        deliveryStatus: "received",
-      })
-      .onConflictDoNothing()
-      .returning({ id: schema.messages.id });
-    const messageId = inserted[0]?.id ?? null;
-    if (!messageId) return { conversationId, messageId: null, duplicate: true, jobId: null };
+      const inserted = await tx
+        .insert(schema.messages)
+        .values({
+          orgId: input.orgId,
+          conversationId,
+          direction: "inbound",
+          author: "contact",
+          body: input.body.slice(0, MAX_BODY) || "(empty message)",
+          externalId: input.externalId.slice(0, 300),
+          meta: { ...input.meta, contactId },
+          deliveryStatus: "received",
+        })
+        .onConflictDoNothing()
+        .returning({ id: schema.messages.id });
+      const messageId = inserted[0]?.id;
+      if (!messageId) throw new DuplicateMessage(); // lost a race: roll back everything written above
 
-    await tx
-      .update(schema.conversations)
-      .set({ lastMessageAt: new Date(), contactId: sql`coalesce(${schema.conversations.contactId}, ${contactId}::uuid)` })
-      .where(eq(schema.conversations.id, conversationId));
+      await tx
+        .update(schema.conversations)
+        .set({ lastMessageAt: new Date(), contactId: sql`coalesce(${schema.conversations.contactId}, ${contactId}::uuid)` })
+        .where(eq(schema.conversations.id, conversationId));
 
-    let jobId: string | null = null;
-    if (input.triggerAgent) {
-      jobId = await enqueue(
-        tx,
-        "agent.run",
-        { orgId: input.orgId, agentId: input.agentId, conversationId, messageId, trigger: "message" },
-        { orgId: input.orgId, idempotencyKey: `agent.run:message:${messageId}`, priority: 10 },
-      );
-    }
-    return { conversationId, messageId, duplicate: false, jobId };
+      return { conversationId, messageId, duplicate: false };
+    });
+  } catch (err) {
+    if (!(err instanceof DuplicateMessage)) throw err;
+    const prior = await priorMessage(database, input.orgId, input.externalId);
+    if (!prior) throw err;
+    return { conversationId: prior.conversationId, messageId: prior.id, duplicate: true };
+  }
+}
+
+const EVENT_FOR: Partial<Record<ChannelKind, "email.received" | "sms.received" | "slack.message">> = {
+  email: "email.received",
+  sms: "sms.received",
+  slack: "slack.message",
+};
+
+/**
+ * Store + wake: ingest the message, then (once per message) ask the engine for a reply run and fire any
+ * event-triggered workflows. Crash-safe: if the process dies after the message commit, the retried
+ * inbound.process job finds the stored message, sees no run for it yet, and starts it then.
+ */
+export async function ingestAndWake(database: DB, input: IngestInput): Promise<IngestResult & { runId: string | null }> {
+  const res = await ingestInbound(database, input);
+  if (!input.triggerAgent || !res.messageId) return { ...res, runId: null };
+  const [prior] = await database
+    .select({ id: schema.runs.id })
+    .from(schema.runs)
+    .where(
+      and(
+        eq(schema.runs.orgId, input.orgId),
+        eq(schema.runs.conversationId, res.conversationId),
+        sql`${schema.runs.input}->>'messageId' = ${res.messageId}`,
+      ),
+    )
+    .limit(1);
+  if (prior) return { ...res, runId: prior.id };
+  const { runId } = await engine.startConversationRun({
+    orgId: input.orgId,
+    agentId: input.agentId,
+    conversationId: res.conversationId,
+    messageId: res.messageId,
   });
+  const event = EVENT_FOR[input.channel];
+  if (event) {
+    await engine
+      .triggerEvent({ orgId: input.orgId, agentId: input.agentId, event, payload: { conversationId: res.conversationId, messageId: res.messageId }, dedupeKey: res.messageId })
+      .catch((err: unknown) => logger.warn({ error: err instanceof Error ? err.message : String(err) }, "inbound: triggerEvent failed"));
+  }
+  return { ...res, runId };
 }
 
 // ── Email (Resend) ──────────────────────────────────────────────────────────
@@ -339,6 +393,7 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const autoSubmitted = (header(headers, "auto-submitted") ?? "no").toLowerCase();
   const precedence = (header(headers, "precedence") ?? "").toLowerCase();
   const isAuto = autoSubmitted !== "no" || ["bulk", "junk", "auto_reply", "list"].includes(precedence);
+  const authFailed = senderAuthFailed(header(headers, "authentication-results"));
 
   const subject = str(full.subject)?.slice(0, 300) ?? null;
   const rawText = str(full.text) ?? (str(full.html) ? htmlToText(str(full.html)!) : "");
@@ -348,7 +403,7 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const conversationId = await threadEmail(database, agent, ids, from.email, subject);
   const threadKey = references[0] ?? inReplyTo[0] ?? messageIdHeader ?? `resend:${emailId}`;
 
-  const res = await ingestInbound(database, {
+  const res = await ingestAndWake(database, {
     orgId: agent.orgId,
     agentId: agent.id,
     channel: "email",
@@ -366,11 +421,23 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
       from: from.email,
       fromName: from.name,
       autoSubmitted: isAuto || undefined,
+      senderAuthFailed: authFailed || undefined,
       attachments: Array.isArray(full.attachments) ? full.attachments.length : 0,
     },
-    triggerAgent: !isAuto && agent.status === "active",
+    triggerAgent: !isAuto && !authFailed && agent.status === "active",
   });
   return res.duplicate ? "duplicate" : "stored";
+}
+
+/**
+ * Spoofed-sender guard: when the receiving MTA reports DMARC failure (or both SPF and DKIM failing), the
+ * message is stored for humans to see but the agent is not woken — so a forged From can't drive the agent.
+ */
+export function senderAuthFailed(authResults: string | null): boolean {
+  if (!authResults) return false;
+  const r = authResults.toLowerCase();
+  if (/\bdmarc=fail\b/.test(r)) return true;
+  return /\bspf=(fail|softfail)\b/.test(r) && /\bdkim=(fail|none)\b/.test(r) && !/\bdkim=pass\b/.test(r);
 }
 
 // ── SMS (Twilio) ────────────────────────────────────────────────────────────
@@ -398,8 +465,27 @@ export async function agentForNumber(database: DB, to: string): Promise<Agent | 
   return conn?.agent ?? null;
 }
 
+const SMS_STATUS: Record<string, "sent" | "delivered" | "failed"> = { sent: "sent", delivered: "delivered", undelivered: "failed", failed: "failed" };
+
 export async function processTwilioEvent(database: DB, params: Record<string, unknown>): Promise<string> {
   const sid = str(params.MessageSid) ?? str(params.SmsSid);
+  const statusParam = str(params.MessageStatus);
+  if (statusParam) {
+    const status = SMS_STATUS[statusParam];
+    if (!status || !sid) return "ignored:status";
+    const key = `sms:${sid}`;
+    await database
+      .update(schema.messages)
+      .set({ deliveryStatus: status })
+      .where(
+        and(
+          eq(schema.messages.direction, "outbound"),
+          or(eq(schema.messages.externalId, key), sql`${schema.messages.meta}->>'providerId' = ${key}`),
+          status === "sent" ? eq(schema.messages.deliveryStatus, "pending") : sql`true`,
+        ),
+      );
+    return `status:${status}`;
+  }
   const from = str(params.From);
   const to = str(params.To);
   if (!sid || !from || !to || !E164_RE.test(from) || !E164_RE.test(to)) return "ignored:bad-params";
@@ -410,7 +496,7 @@ export async function processTwilioEvent(database: DB, params: Record<string, un
   const isStop = STOP_WORDS.has(keyword);
   const isStart = START_WORDS.has(keyword);
 
-  const res = await ingestInbound(database, {
+  const res = await ingestAndWake(database, {
     orgId: agent.orgId,
     agentId: agent.id,
     channel: "sms",
@@ -477,13 +563,18 @@ export async function processSlackEvent(database: DB, envelope: SlackEnvelope): 
     .limit(1);
   if (!agent) return "ignored:no-agent";
 
-  const threadTs = str(ev.thread_ts) ?? ts;
+  const explicitThread = str(ev.thread_ts);
+  const threadTs = explicitThread ?? ts;
+  const isDm = ev.type === "message" && ev.channel_type === "im";
+  // Channel mentions: one conversation per thread (reply in-thread). DMs: one running conversation per DM
+  // channel unless the user replied inside a thread.
+  const threadKey = isDm && !explicitThread ? channel : `${channel}:${threadTs}`;
   const text = stripMention(str(ev.text) ?? "", botUserId);
-  const res = await ingestInbound(database, {
+  const res = await ingestAndWake(database, {
     orgId: agent.orgId,
     agentId: agent.id,
     channel: "slack",
-    threadKey: `${channel}:${threadTs}`,
+    threadKey,
     contact: { slackUserId: user },
     body: text || "(empty message)",
     externalId: `slack:${channel}:${ts}`,

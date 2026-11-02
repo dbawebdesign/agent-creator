@@ -15,3 +15,4 @@ that judge the *running product* (screenshots, HTTP, tests), never builder summa
 | # | When (UTC) | What | Critic verdict / biggest gap |
 |---|---|---|---|
 | 0 | 04:00 | Scaffold: schema (30 tables), auth/session, access/tenancy, queue, crypto, design tokens, UI primitives | — |
+| 1a | 04:30 | Channels & API slice done (65 tests). Security critic launched on channels/API/auth. | pending |

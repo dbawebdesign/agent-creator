@@ -141,7 +141,10 @@ async function sendOne(
     const messageId = typeof message.meta.emailMessageId === "string" ? message.meta.emailMessageId : newMessageId();
     const subject = deliverable
       ? payload.subject ?? deliverable.title
-      : payload.subject ?? (typeof message.meta.subject === "string" ? message.meta.subject : replySubject(conversation.subject));
+      : (payload.subject ?? (typeof message.meta.subject === "string" ? message.meta.subject : replySubject(conversation.subject))).replace(
+          /^(\s*re\s*:\s*){2,}/i,
+          "Re: ",
+        );
     const rendered = await renderEmail({
       title: deliverable?.title ?? null,
       preview: deliverable?.preview ?? null,
@@ -204,6 +207,8 @@ async function sendOne(
     if (m) {
       target = m[1]!;
       threadTs = m[2]!;
+    } else if (/^[A-Z0-9]{2,32}$/.test(key)) {
+      target = key; // a DM conversation: post straight into the DM
     } else {
       const slackMeta = message.meta.slack as { channel?: unknown } | undefined;
       target =
@@ -214,12 +219,14 @@ async function sendOne(
     if (!target) throw new ProviderError("no slack channel", false);
     if (!conn) throw new ProviderError("slack not connected", false);
     const token = await slackBotToken(org.id, conn.secretId);
+    // A connection with a stored token that can't be read is an error, not a demo: never silently drop.
+    if (conn.secretId && !token) throw new ProviderError("slack bot token unavailable; reconnect Slack", false);
     const text = deliverable
       ? `*${markdownToSlack(deliverable.title)}*${deliverable.preview ? `\n${markdownToSlack(deliverable.preview)}` : ""}${portalUrl ? `\n<${portalUrl}|View in portal>` : ""}`
       : markdownToSlack(message.body);
     const result = await slackPostMessage({ token, channel: target, text, threadTs });
     // A top-level post starts a thread: key the conversation by it so replies continue here.
-    if (!threadTs && result.providerId) {
+    if (!threadTs && result.providerId && key.startsWith("deliverable:")) {
       await tx
         .update(schema.conversations)
         .set({ externalThreadId: `${target}:${result.providerId}` })
