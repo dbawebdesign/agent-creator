@@ -10,6 +10,7 @@ import { schema } from "@/server/db/client";
 import type { ChannelKind } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
+import { rateLimit } from "@/server/security/rate-limit";
 import * as engine from "@/server/services/engine";
 import { fetchReceivedEmail, htmlToText, MAX_TEXT, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "./email";
 import { E164_RE, START_WORDS, STOP_WORDS } from "./sms";
@@ -33,11 +34,20 @@ export type IngestInput = {
   meta: Record<string, unknown>;
   /** false: store the message but don't wake the agent (auto-replies, STOP keywords). */
   triggerAgent: boolean;
+  /**
+   * Whether the channel authenticated the sender: email = DMARC/SPF/DKIM verdict of the receiving MTA
+   * ("none" when no Authentication-Results), Slack = verified event from the connected workspace, Twilio =
+   * signed webhook. Stored on every inbound message as meta.senderAuth; the engine treats anything but
+   * "pass" from a non-member as untrusted.
+   */
+  senderAuth: SenderAuth;
 };
+
+export type SenderAuth = "pass" | "fail" | "none";
 
 export type IngestResult = { conversationId: string; messageId: string | null; duplicate: boolean };
 
-async function findOrCreateContact(database: DB, orgId: string, c: IngestInput["contact"]): Promise<string> {
+async function findOrCreateContact(database: DB, orgId: string, c: IngestInput["contact"]): Promise<{ id: string; userId: string | null }> {
   const cond = c.email
     ? sql`lower(${schema.contacts.email}) = ${c.email.toLowerCase()}`
     : c.phone
@@ -47,14 +57,14 @@ async function findOrCreateContact(database: DB, orgId: string, c: IngestInput["
         : null;
   if (cond) {
     const [found] = await database
-      .select({ id: schema.contacts.id, name: schema.contacts.name })
+      .select({ id: schema.contacts.id, name: schema.contacts.name, userId: schema.contacts.userId })
       .from(schema.contacts)
       .where(and(eq(schema.contacts.orgId, orgId), cond))
       .orderBy(schema.contacts.createdAt)
       .limit(1);
     if (found) {
       if (!found.name && c.name) await database.update(schema.contacts).set({ name: c.name }).where(eq(schema.contacts.id, found.id));
-      return found.id;
+      return { id: found.id, userId: found.userId };
     }
   }
   // Link to a platform user with the same email in this org's membership, when there is one.
@@ -79,7 +89,7 @@ async function findOrCreateContact(database: DB, orgId: string, c: IngestInput["
       slackUserId: c.slackUserId ?? null,
     })
     .returning({ id: schema.contacts.id });
-  return row!.id;
+  return { id: row!.id, userId };
 }
 
 async function findOrCreateConversation(
@@ -134,7 +144,8 @@ export async function ingestInbound(database: DB, input: IngestInput): Promise<I
   try {
     return await database.transaction(async (txRaw) => {
       const tx = txRaw as unknown as DB;
-      const contactId = await findOrCreateContact(tx, input.orgId, input.contact);
+      const contact = await findOrCreateContact(tx, input.orgId, input.contact);
+      const contactId = contact.id;
       let conversationId = input.conversationId ?? null;
       if (conversationId) {
         const [ok] = await tx
@@ -155,7 +166,13 @@ export async function ingestInbound(database: DB, input: IngestInput): Promise<I
           author: "contact",
           body: input.body.slice(0, MAX_BODY) || "(empty message)",
           externalId: input.externalId.slice(0, 300),
-          meta: { ...input.meta, contactId },
+          meta: {
+            ...input.meta,
+            contactId,
+            senderAuth: input.senderAuth,
+            // Only an authenticated sender may be identified as a platform member.
+            senderUserId: input.senderAuth === "pass" ? contact.userId : null,
+          },
           deliveryStatus: "received",
         })
         .onConflictDoNothing()
@@ -178,6 +195,24 @@ export async function ingestInbound(database: DB, input: IngestInput): Promise<I
   }
 }
 
+/** Inbound volume caps (cost DoS, SMS pumping, reply loops): per sender per agent, and per agent. */
+export const INBOUND_LIMITS = { perSenderPerHour: 20, perAgentPerHour: 300 } as const;
+
+async function inboundThrottled(agentId: string, messageId: string, database: DB): Promise<boolean> {
+  const [msg] = await database.select({ meta: schema.messages.meta }).from(schema.messages).where(eq(schema.messages.id, messageId)).limit(1);
+  const sender = typeof msg?.meta.contactId === "string" ? msg.meta.contactId : "unknown";
+  const perSender = await rateLimit(`inbound:sender:${agentId}:${sender}`, INBOUND_LIMITS.perSenderPerHour, 3600);
+  const perAgent = perSender.ok ? await rateLimit(`inbound:agent:${agentId}`, INBOUND_LIMITS.perAgentPerHour, 3600) : perSender;
+  if (perSender.ok && perAgent.ok) return false;
+  const reason = perSender.ok ? "agent" : "sender";
+  await database
+    .update(schema.messages)
+    .set({ meta: sql`${schema.messages.meta} || ${JSON.stringify({ throttled: reason })}::jsonb` })
+    .where(eq(schema.messages.id, messageId));
+  logger.warn({ agentId, messageId, reason }, "inbound: volume cap reached; stored without waking the agent");
+  return true;
+}
+
 const EVENT_FOR: Partial<Record<ChannelKind, "email.received" | "sms.received" | "slack.message">> = {
   email: "email.received",
   sms: "sms.received",
@@ -192,6 +227,10 @@ const EVENT_FOR: Partial<Record<ChannelKind, "email.received" | "sms.received" |
 export async function ingestAndWake(database: DB, input: IngestInput): Promise<IngestResult & { runId: string | null }> {
   const res = await ingestInbound(database, input);
   if (!input.triggerAgent || !res.messageId) return { ...res, runId: null };
+  if (!res.duplicate) {
+    const throttled = await inboundThrottled(input.agentId, res.messageId, database);
+    if (throttled) return { ...res, runId: null };
+  }
   const [prior] = await database
     .select({ id: schema.runs.id })
     .from(schema.runs)
@@ -395,10 +434,8 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const messageIdHeader = parseMessageIds(str(full.message_id) ?? header(headers, "message-id"))[0] ?? null;
   const inReplyTo = parseMessageIds(header(headers, "in-reply-to") ?? str(full.in_reply_to));
   const references = parseMessageIds(header(headers, "references") ?? str(full.references));
-  const autoSubmitted = (header(headers, "auto-submitted") ?? "no").toLowerCase();
-  const precedence = (header(headers, "precedence") ?? "").toLowerCase();
-  const isAuto = autoSubmitted !== "no" || ["bulk", "junk", "auto_reply", "list"].includes(precedence);
-  const authFailed = senderAuthFailed(header(headers, "authentication-results"));
+  const isAuto = isAutomatedEmail(headers, from.email, full.headers === undefined ? null : str(full.content_type) ?? header(headers, "content-type"));
+  const senderAuth = emailSenderAuth(header(headers, "authentication-results"), from.email);
 
   const subject = str(full.subject)?.slice(0, 300) ?? null;
   // Both helpers cap their input before parsing (see email.ts); never feed unbounded HTML to regexes.
@@ -426,24 +463,59 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
       subject,
       from: from.email,
       fromName: from.name,
-      autoSubmitted: isAuto || undefined,
-      senderAuthFailed: authFailed || undefined,
+      automated: isAuto || undefined,
       attachments: Array.isArray(full.attachments) ? full.attachments.length : 0,
     },
-    triggerAgent: !isAuto && !authFailed && agent.status === "active",
+    triggerAgent: !isAuto && senderAuth !== "fail" && agent.status === "active",
+    senderAuth,
   });
   return res.duplicate ? "duplicate" : "stored";
 }
 
 /**
- * Spoofed-sender guard: when the receiving MTA reports DMARC failure (or both SPF and DKIM failing), the
- * message is stored for humans to see but the agent is not woken — so a forged From can't drive the agent.
+ * Sender authentication verdict from the receiving MTA's Authentication-Results header (the topmost one, which
+ * our provider adds). DMARC decides when present; otherwise an SPF or DKIM pass counts only when its domain
+ * aligns with the From domain. Missing/neutral results are "none" (unverified), never "pass".
+ * Set EMAIL_AUTHSERV_ID to only trust results stamped by your receiving MTA.
  */
-export function senderAuthFailed(authResults: string | null): boolean {
-  if (!authResults) return false;
-  const r = authResults.toLowerCase();
-  if (/\bdmarc=fail\b/.test(r)) return true;
-  return /\bspf=(fail|softfail)\b/.test(r) && /\bdkim=(fail|none)\b/.test(r) && !/\bdkim=pass\b/.test(r);
+export function emailSenderAuth(authResults: string | null, fromEmail: string): SenderAuth {
+  if (!authResults) return "none";
+  const r = authResults.slice(0, 4096).toLowerCase();
+  const trusted = process.env.EMAIL_AUTHSERV_ID?.trim().toLowerCase();
+  if (trusted) {
+    const servId = r.split(";", 1)[0]!.trim().split(/\s/, 1)[0];
+    if (servId !== trusted) return "none";
+  }
+  const fromDomain = fromEmail.split("@")[1] ?? "";
+  const aligned = (d: string | undefined) => !!d && !!fromDomain && (d === fromDomain || d.endsWith(`.${fromDomain}`) || fromDomain.endsWith(`.${d}`));
+  const dmarc = /\bdmarc=([a-z]+)/.exec(r)?.[1];
+  if (dmarc === "pass") return "pass";
+  if (dmarc === "fail") return "fail";
+  let dkimPass = false;
+  for (const m of r.matchAll(/\bdkim=pass\b[^;]{0,300}?header\.(?:d|i)=@?([a-z0-9.-]{1,253})/g)) if (aligned(m[1]?.split("@").pop())) dkimPass = true;
+  const spf = /\bspf=([a-z]+)/.exec(r)?.[1];
+  const mailFrom = /smtp\.mailfrom=(?:[^@;\s]{0,64}@)?([a-z0-9.-]{1,253})/.exec(r)?.[1];
+  if (dkimPass || (spf === "pass" && aligned(mailFrom))) return "pass";
+  if ((spf === "fail" || spf === "softfail") && !/\bdkim=pass\b/.test(r)) return "fail";
+  return "none";
+}
+
+const AUTO_SENDER = /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|bounces?|notifications?)([+._-]|@|$)/;
+
+/** Auto-replies, bounces, lists and bulk mail never wake the agent (prevents reply loops and backscatter). */
+export function isAutomatedEmail(headers: unknown, fromEmail: string, contentType: string | null): boolean {
+  const autoSubmitted = (header(headers, "auto-submitted") ?? "no").trim().toLowerCase();
+  if (autoSubmitted !== "no") return true;
+  const precedence = (header(headers, "precedence") ?? "").trim().toLowerCase();
+  if (["bulk", "junk", "list", "auto_reply"].includes(precedence)) return true;
+  for (const h of ["x-autoreply", "x-autorespond", "x-auto-reply", "x-failed-recipients", "list-id", "list-unsubscribe", "feedback-id"]) {
+    if (header(headers, h) !== null) return true;
+  }
+  const suppress = (header(headers, "x-auto-response-suppress") ?? "").toLowerCase();
+  if (/\b(all|oof|autoreply)\b/.test(suppress)) return true;
+  if ((header(headers, "return-path") ?? "").trim() === "<>") return true;
+  if ((contentType ?? "").toLowerCase().includes("multipart/report")) return true;
+  return AUTO_SENDER.test(fromEmail.split("@")[0] ?? "");
 }
 
 // ── SMS (Twilio) ────────────────────────────────────────────────────────────
@@ -512,6 +584,7 @@ export async function processTwilioEvent(database: DB, params: Record<string, un
     externalId: `sms:${sid}`,
     meta: { from, to, numMedia: Number(str(params.NumMedia) ?? 0) || 0, keyword: isStop ? "stop" : isStart ? "start" : undefined },
     triggerAgent: !isStop && !isStart && agent.status === "active",
+    senderAuth: "pass", // reached us through a Twilio-signed webhook
   });
   if (!res.duplicate && (isStop || isStart)) {
     await database
@@ -586,6 +659,7 @@ export async function processSlackEvent(database: DB, envelope: SlackEnvelope): 
     externalId: `slack:${channel}:${ts}`,
     meta: { slack: { team: teamId, channel, ts, threadTs, user, type: ev.type } },
     triggerAgent: true,
+    senderAuth: "pass", // signed event from the org's connected workspace
   });
   return res.duplicate ? "duplicate" : "stored";
 }
