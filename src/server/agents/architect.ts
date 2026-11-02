@@ -18,7 +18,7 @@ import { OFFLINE_MODEL } from "@/server/llm/offline";
 import { conceptHits, hoursPerWeekIn, moneyIn, quoteOf, readDiscovery, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
 import { hash32, normalizeWhitespace, truncate } from "@/server/llm/text";
 import type { LlmUsage } from "@/server/llm/types";
-import { agentSpec, type AgentSpec, type WorkflowSpec } from "./spec";
+import { agentSpec, normalizeApprovals, type AgentSpec, type WorkflowSpec } from "./spec";
 
 export type ArchitectInput = { transcript: string; orgName?: string | null; industry?: string | null };
 export type ArchitectResult = { spec: AgentSpec; model: string; usage: LlmUsage };
@@ -121,7 +121,7 @@ export function finalizeSpec(spec: AgentSpec): AgentSpec {
   const tools = [...new Set([...core, ...spec.tools, ...spec.workflows.flatMap((w) => w.tools)])];
   const channels = [...new Set(["portal" as const, ...spec.channels])];
   const usesComputer = tools.some((t) => /^computer_/.test(t));
-  const requireApprovalFor = [...new Set(["send_external_email", "send_external_sms", ...(usesComputer ? ["write_client_system"] : []), ...spec.requireApprovalFor])];
+  const requireApprovalFor = normalizeApprovals([...(usesComputer ? ["write_client_system"] : []), ...spec.requireApprovalFor]).actions;
   const weekly =
     spec.weeklyHoursSaved > 0
       ? spec.weeklyHoursSaved
@@ -574,7 +574,7 @@ const PLAYS: Record<Action, Play> = {
     defaultHours: 4,
     steps: (t, ctx) => {
       const sys = t.systems.length ? t.systems : ctx.d.systems;
-      const missed = t.items.length ? t.items : null;
+      const missed = t.lists.find((l) => /\bmiss|left (?:off|out)|forget/i.test(l.text))?.items ?? null;
       return [
         `Each weekday morning, find jobs that are ready for a claim packet or have a new adjuster estimate, and gather everything for each one${sys.length ? ` from ${listJoin(sys.slice(0, 4))}` : ""}: photos, measurements, our estimate, signed paperwork and the adjuster's scope.`,
         "Check the packet against the carrier's checklist and list anything missing.",
@@ -592,7 +592,10 @@ const PLAYS: Record<Action, Play> = {
       instructions: [
         "Using the discovery call and memory:",
         "1. Write the claim packet checklist as a GFM table: item, where it comes from (the systems named on the call), who provides it.",
-        `2. Draft the supplement request template${t.items.length ? ` with a line for each usual miss (${listJoin(t.items)})` : ""} and the adjuster cover email.`,
+        `2. Draft the supplement request template${(() => {
+          const m = t.lists.find((l) => /\bmiss|left (?:off|out)|forget/i.test(l.text))?.items;
+          return m ? ` with a line for each usual miss (${listJoin(m)})` : "";
+        })()} and the adjuster cover email.`,
         "3. Lay out the open-claims tracker (job, carrier, submitted, days waiting, amount pending, next step).",
         "4. List what access you need to assemble the first real packet.",
       ].join("\n"),
@@ -614,6 +617,7 @@ const PLAYS: Record<Action, Play> = {
       return [
         `On the first business day, build the close checklist for every client: ${listJoin(items)}.`,
         `Reconcile bank and card accounts in ${rec}; list every unmatched or uncategorized transaction with date, payee and amount.`,
+        ...(t.lists[1] ? [`Assemble each client's close package: ${listJoin(t.lists[1].items)}.`] : []),
         "Draft ONE email per client with a table of what we need from them (receipt, explanation, document) — never one email per item.",
         `Prepare proposed adjusting entries for review; nothing is posted in ${rec} without approval.`,
         approvalStep(t, ctx, "any email goes to a client"),
@@ -930,6 +934,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
         score: 0,
         cadence: { kind: "weekly", dow: 1 },
         items: [],
+        lists: [],
         systems: d.systems,
         people: [],
         rules: [],
@@ -1032,7 +1037,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     .map((q) => truncate(q, 300))
     .slice(0, 10);
 
-  const requireApprovalFor = [...new Set(["send_external_email", "send_external_sms", ...(usesComputer ? ["write_client_system"] : [])])];
+  const requireApprovalFor = normalizeApprovals(usesComputer ? ["write_client_system"] : []).actions;
   const specTools = [...new Set(["knowledge_search", "memory_recall", "memory_save", "create_deliverable", "send_message", "request_approval", "schedule_followup", ...workflows.flatMap((w) => w.tools)])];
 
   const first = PLAYS[primary.action].overnight(primary, ctx);

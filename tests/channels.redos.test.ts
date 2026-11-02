@@ -1,6 +1,6 @@
 /** Regression: hostile inbound content must parse in linear time (security critique r1 #2). */
 import { describe, expect, it } from "vitest";
-import { htmlToText, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "@/server/channels/email";
+import { htmlToText, normalizeSubject, tidyWhitespace, parseAddress, parseMessageIds, stripQuotedReply } from "@/server/channels/email";
 import { markdownToSlack, markdownToText } from "@/server/channels/text";
 import { segmentSms } from "@/server/channels/sms";
 
@@ -21,6 +21,20 @@ describe("linear-time parsing of hostile input", () => {
     expect(ms(() => htmlToText("<b>x</b>".repeat(200_000)))).toBeLessThan(BUDGET * 2);
     expect(htmlToText("<p>Hi&nbsp;<b>Maya</b></p><script>evil()</script><div>Thanks &amp; bye</div>")).toBe("Hi Maya\n\nThanks & bye");
     expect(htmlToText("<head><title>x</title></head>ok<script")).toBe("ok");
+  });
+
+  it("htmlToText whitespace runs (critique: 9.5 s on 100k spaces)", () => {
+    for (const evil of [" ".repeat(100_000) + "x", "\t".repeat(100_000) + "x", " \t".repeat(100_000) + "x", ("x" + " ".repeat(1000)).repeat(300)]) {
+      expect(ms(() => htmlToText(evil))).toBeLessThan(BUDGET);
+      expect(ms(() => tidyWhitespace(evil))).toBeLessThan(BUDGET);
+      expect(ms(() => markdownToText(evil))).toBeLessThan(BUDGET);
+      expect(ms(() => markdownToSlack(evil))).toBeLessThan(BUDGET);
+      expect(ms(() => stripQuotedReply(evil))).toBeLessThan(BUDGET);
+    }
+    // Upload-sized input with a raised cap is still linear.
+    expect(ms(() => htmlToText(" ".repeat(2_000_000) + "x", { maxHtml: 10_000_000, maxText: 2_000_000 }))).toBeLessThan(BUDGET * 2);
+    expect(tidyWhitespace("a  \t\n\n\n\n b \n")).toBe("a\n\n b\n");
+    expect(htmlToText("<p>one   </p>\n\n\n\n<p>two</p>")).toBe("one\n\ntwo");
   });
 
   it("parseAddress and friends", () => {

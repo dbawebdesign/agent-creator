@@ -49,6 +49,7 @@ export const useCommandPalette = () => useContext(Ctx);
  */
 export function CommandPalette({ items, placeholder = "Type a command or searchâ€¦", children }: { items: PaletteItem[]; placeholder?: string; children?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const router = useRouter();
 
   useEffect(() => {
@@ -69,12 +70,19 @@ export function CommandPalette({ items, placeholder = "Type a command or searchâ
       list.push(it);
       map.set(it.group, list);
     }
-    return [...map.entries()];
-  }, [items]);
+    const entries = [...map.entries()];
+    if (!search.trim()) return entries;
+    // Best match first: order groups by their top score, and items within a group by score.
+    const score = (it: PaletteItem) => paletteScore(`${it.label}${SEP}${it.id}`, search, it.keywords);
+    return entries
+      .map(([g, list]) => [g, [...list].sort((a, b) => score(b) - score(a))] as [string, PaletteItem[]])
+      .sort((a, b) => Math.max(...b[1].map(score)) - Math.max(...a[1].map(score)));
+  }, [items, search]);
 
   const run = useCallback(
     (it: PaletteItem) => {
       setOpen(false);
+      setSearch("");
       if (it.onSelect) it.onSelect();
       else if (it.href) router.push(it.href);
     },
@@ -86,7 +94,7 @@ export function CommandPalette({ items, placeholder = "Type a command or searchâ
   return (
     <Ctx.Provider value={ctx}>
       {children}
-      <D.Root open={open} onOpenChange={setOpen}>
+      <D.Root open={open} onOpenChange={(o) => (setOpen(o), o || setSearch(""))}>
         <D.Portal>
           <D.Overlay className="fixed inset-0 z-50 bg-black/20 animate-fade-in dark:bg-black/50" />
           <D.Content
@@ -95,11 +103,13 @@ export function CommandPalette({ items, placeholder = "Type a command or searchâ
           >
             <D.Title className="sr-only">Command palette</D.Title>
             <D.Description className="sr-only">Search pages, clients, agents and actions</D.Description>
-            <Command loop className="flex flex-col" label="Command palette" filter={paletteScore}>
+            <Command loop className="flex flex-col" label="Command palette" filter={paletteScore} shouldFilter>
               <div className="flex items-center gap-2.5 border-b border-line px-4">
                 <Search className="size-4 text-ink-4" aria-hidden />
                 <Command.Input
                   autoFocus
+                  value={search}
+                  onValueChange={setSearch}
                   placeholder={placeholder}
                   className="h-12 w-full bg-transparent text-[14.5px] text-ink placeholder:text-ink-4 focus:outline-none"
                 />

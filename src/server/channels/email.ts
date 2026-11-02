@@ -120,8 +120,11 @@ const ENTITIES: Record<string, string> = { nbsp: " ", lt: "<", gt: ">", quot: '"
  * HTML → text for inbound mail that has no text part. A single linear scan (indexOf only moves forward; an
  * unclosed tag or skip-block ends the scan), so hostile input can't trigger regex backtracking.
  */
-export function htmlToText(input: string): string {
-  const html = input.slice(0, MAX_HTML);
+export function htmlToText(input: string, limits: { maxHtml?: number; maxText?: number } = {}): string {
+  const maxHtml = limits.maxHtml ?? MAX_HTML;
+  const maxText = limits.maxText ?? MAX_TEXT;
+  const maxParts = Math.max(50_000, Math.ceil(maxHtml / 8));
+  const html = input.slice(0, maxHtml);
   const lower = html.toLowerCase();
   const out: string[] = [];
   let i = 0;
@@ -151,15 +154,37 @@ export function htmlToText(input: string): string {
     }
     if (BREAK_TAGS.has(name)) out.push("\n");
     i = gt + 1;
-    if (out.length > 50_000) break;
+    if (out.length > maxParts) break;
   }
-  return out
-    .join("")
-    .replace(/&(nbsp|lt|gt|quot|#39|apos|amp);/g, (_m, e: string) => ENTITIES[e] ?? "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .slice(0, MAX_TEXT)
-    .trim();
+  const decoded = out.join("").replace(/&(nbsp|lt|gt|quot|#39|apos|amp);/g, (_m, e: string) => ENTITIES[e] ?? "");
+  return tidyWhitespace(decoded).slice(0, maxText).trim();
+}
+
+/**
+ * Strip spaces/tabs at line ends and keep at most one blank line in a row, in one linear pass.
+ * (A regex like /[ \t]+\n/ backtracks quadratically on a long run of spaces with no newline.)
+ */
+export function tidyWhitespace(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let blanks = 0;
+  for (const line of lines) {
+    let end = line.length;
+    while (end > 0) {
+      const c = line.charCodeAt(end - 1);
+      if (c !== 32 && c !== 9) break;
+      end--;
+    }
+    const kept = end === line.length ? line : line.slice(0, end);
+    if (kept === "") {
+      blanks++;
+      if (blanks > 1) continue;
+    } else {
+      blanks = 0;
+    }
+    out.push(kept);
+  }
+  return out.join("\n");
 }
 
 export type OutboundEmail = {

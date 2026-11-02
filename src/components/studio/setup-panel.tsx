@@ -97,6 +97,11 @@ export function BeforeTonight({
         </button>
       </div>
       <ul className="divide-y divide-line">
+        {needs.length ? (
+          <li className="bg-surface-2/40 px-4 py-2 text-[12px] font-medium text-ink-3" aria-hidden>
+            Knowledge to collect
+          </li>
+        ) : null}
         {needs.map((n) => {
           const done = isDone(n.title);
           return (
@@ -118,6 +123,11 @@ export function BeforeTonight({
             </li>
           );
         })}
+        {questions.length ? (
+          <li className="bg-surface-2/40 px-4 py-2 text-[12px] font-medium text-ink-3" aria-hidden>
+            Confirm with {clientName}
+          </li>
+        ) : null}
         {questions.map((q) => (
           <li key={`q-${q}`} className="flex items-start gap-3 px-4 py-3">
             <MessageCircleQuestion className="mt-0.5 size-4 shrink-0 text-ink-3" aria-hidden />

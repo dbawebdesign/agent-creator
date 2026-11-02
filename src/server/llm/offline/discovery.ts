@@ -52,6 +52,8 @@ export type Topic = {
   score: number;
   cadence: Cadence | null;
   items: string[];
+  /** Every "A, B, C" list said about this task, with its sentence. */
+  lists: Array<{ text: string; items: string[] }>;
   systems: string[];
   people: string[];
   rules: string[];
@@ -350,6 +352,10 @@ function peopleIn(sentences: string[]): Person[] {
       while ((m = re.exec(s))) add(m[nameIdx]!, m[roleIdx]!);
     }
     for (const m of s.matchAll(/\bDr\.? ([A-Z][a-z]+)/g)) add(`Dr. ${m[1]}`, "doctor");
+    for (const m of s.matchAll(/\b(?:my|our) (?:two |three |\w+ )?((?:senior |staff )?(?:accountants|coordinators|managers|techs|technicians|estimators|partners|hygienists)),? ([A-Z][a-z]+) and ([A-Z][a-z]+)\b/g)) {
+      add(m[2]!, singular(m[1]!));
+      add(m[3]!, singular(m[1]!));
+    }
     for (const m of s.matchAll(/\b(?:his|her|my) name is ([A-Z][a-z]+)/g)) add(m[1]!, null);
   }
   return out;
@@ -370,7 +376,9 @@ function listItems(s: string): string[] {
         return x.replace(/^(?:and|or|the|a|an)\s+/i, "").replace(/^whether it'?s\s+/i, "").trim();
       })
       .filter((x) => x.length >= 3 && x.split(/\s+/).length <= 7);
-    if (cleaned.length > best.length) best = cleaned;
+    // Prefer lists of things (lowercase) over lists of names (systems, carriers).
+    const weight = (xs: string[]) => xs.filter((x) => /^[a-z]/.test(x)).length * 2 + xs.length;
+    if (weight(cleaned) > weight(best)) best = cleaned;
   }
   return best.length >= 3 ? best.slice(0, 8) : [];
 }
@@ -463,6 +471,7 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     score: 0,
     cadence: null,
     items: [],
+    lists: [],
     systems: [],
     people: [],
     rules: [],
@@ -543,7 +552,11 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
       t.moneyText = s.text;
     }
     for (const sys of systemsIn(s.text)) if (!t.systems.includes(sys)) t.systems.push(sys);
-    if (!t.items.length && !shared) t.items = listItems(s.text);
+    const li = shared ? [] : listItems(s.text);
+    if (li.length) {
+      t.lists.push({ text: s.text, items: li });
+      if (!t.items.length) t.items = li;
+    }
     if (APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d/i.test(s.text)) t.rules.push(s.text);
     const lead = /\b(\d+) days (?:out|before|ahead|in advance|prior|early)\b/i.exec(s.text);
     if (lead) t.leadDays = Number(lead[1]);
@@ -591,7 +604,8 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   if (deliverySents.length) {
     const txt = deliverySents.map((s) => s.text).join(" ");
     const askedAt = deliveryTurn >= 0 ? earliestMorningTime(turns[deliveryTurn]!.text) : null;
-    const named = people.find((p) => new RegExp(`\\b${p.name.replace(".", "\\.")}\\b`).test(txt) && p.name !== owner);
+    const sendTo = /\b(?:send|email|text) (?:it |this |them )?(?:to )?([A-Z][a-z]+)\b/.exec(txt)?.[1];
+    const named = people.find((p) => new RegExp(`\\b${p.name.replace(".", "\\.")}\\b`).test(txt) && p.name !== owner) ?? (sendTo && !CAP_STOP.has(sendTo) ? { name: sendTo, role: null } : undefined);
     const toMe = /\b(?:text|email|send) (?:it )?(?:to )?me\b/i.test(txt);
     recipient = {
       name: toMe ? owner : (named?.name ?? owner),
@@ -606,8 +620,8 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   if (/\bmanagement agreement\b|\bcontract says\b|\bper our (?:agreement|contract)\b/i.test(joined)) compliance.push("contract");
 
   // Facts: volumes and scale the owner stated about the business ("about 340 units for 28 owners").
-  const facts = sentences
-    .filter((s) => /\b(?:we|i)\b.*\b(?:manage|see|do|serve|run|have|got|employ|handle|send|file|install)\b[^.]*\b\d[\d,]*\b/i.test(s.text) && s.text.length < 260 && !hoursPerWeekIn(s.text))
+  const facts = (labelled ? sentences : [])
+    .filter((s) => /\b(?:we|i)(?:'re| are| manage| see| do| serve| run| have| got| employ| handle| send| file| install)\b[^.]*\b\d[\d,]*\b/i.test(s.text) && !/\$/.test(s.text) && s.text.length < 260 && !hoursPerWeekIn(s.text))
     .map((s) => s.text)
     .slice(0, 6);
   const preferences = sentences
@@ -640,5 +654,7 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     vertical: null,
   };
 }
+
+const singular = (w: string) => w.replace(/ies$/, "y").replace(/(?<!s)s$/, "");
 
 export const quoteOf = (s: string, max = 240) => truncate(normalizeWhitespace(s.replace(/^(?:so|and|but|yeah|well|okay|like|honestly|oh),?\s+/i, "")), max);

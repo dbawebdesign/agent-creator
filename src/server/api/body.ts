@@ -8,12 +8,22 @@ export async function readStreamCapped(
   maxBytes: number,
   declaredLength?: string | null,
 ): Promise<string | null> {
+  const bytes = await readBytesCapped(stream, maxBytes, declaredLength);
+  return bytes === null ? null : bytes.toString("utf8");
+}
+
+/** Same as readStreamCapped, returning the raw bytes (multipart uploads, attachments). */
+export async function readBytesCapped(
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+  declaredLength?: string | null,
+): Promise<Buffer | null> {
   const declared = Number(declaredLength ?? 0);
   if (Number.isFinite(declared) && declared > maxBytes) {
     await stream?.cancel().catch(() => {});
     return null;
   }
-  if (!stream) return "";
+  if (!stream) return Buffer.alloc(0);
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -27,7 +37,7 @@ export async function readStreamCapped(
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
 }
 
 export function readTextCapped(req: Request | Response, maxBytes: number): Promise<string | null> {
