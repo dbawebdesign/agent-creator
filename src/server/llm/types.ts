@@ -7,7 +7,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 
 export type ModelTier = "smart" | "fast";
 
-export type LlmMessage = Anthropic.Beta.BetaMessageParam;
+export type LlmMessage = Anthropic.Beta.BetaUserMessageParam | Anthropic.Beta.BetaAssistantMessageParam;
 export type LlmContent = Anthropic.Beta.BetaContentBlockParam;
 
 export type LlmToolDef = {

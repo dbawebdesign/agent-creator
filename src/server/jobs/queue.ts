@@ -27,7 +27,8 @@ export type EnqueueOptions = {
   queue?: string;
 };
 
-export async function enqueue(database: DB, type: JobType, payload: Record<string, unknown>, opts: EnqueueOptions = {}) {
+/** Accepts the db or a transaction (anything with `insert`). */
+export async function enqueue(database: Pick<DB, "insert">, type: JobType, payload: Record<string, unknown>, opts: EnqueueOptions = {}) {
   const rows = await database
     .insert(schema.jobs)
     .values({

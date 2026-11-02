@@ -104,7 +104,14 @@ async function countNeedsYou(orgId: string): Promise<number> {
   const [a] = await db()
     .select({ n: sql<number>`count(*)::int` })
     .from(schema.approvals)
-    .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.status, "pending")));
+    .where(
+      and(
+        eq(schema.approvals.orgId, orgId),
+        eq(schema.approvals.status, "pending"),
+        // Counted once: approvals riding along with a pending review.
+        sql`not exists (select 1 from deliverables d where d.org_id = ${orgId} and d.run_id = ${schema.approvals.runId} and d.needs_review and d.status in ('new','seen'))`,
+      ),
+    );
   return (d?.n ?? 0) + (a?.n ?? 0);
 }
 
@@ -158,7 +165,7 @@ export async function getToday(orgId: string) {
   const since = new Date(Date.now() - 1000 * 60 * 60 * 24);
   const [recent, approvals, overnight, agents, nextRun] = await Promise.all([
     db()
-      .select(deliverableCard)
+      .select({ ...deliverableCard, runId: schema.deliverables.runId })
       .from(schema.deliverables)
       .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
       .where(and(eq(schema.deliverables.orgId, orgId), ne(schema.deliverables.status, "archived")))
@@ -170,6 +177,7 @@ export async function getToday(orgId: string) {
         action: schema.approvals.action,
         description: schema.approvals.description,
         createdAt: schema.approvals.createdAt,
+        runId: schema.approvals.runId,
         agent: agentLite,
       })
       .from(schema.approvals)
@@ -200,11 +208,16 @@ export async function getToday(orgId: string) {
       .orderBy(asc(schema.workflows.nextRunAt))
       .limit(1),
   ]);
-  const needsReview = recent.filter((d) => d.needsReview && (d.status === "new" || d.status === "seen"));
-  const feed = recent.filter((d) => !needsReview.includes(d));
+  const pendingRuns = new Set(approvals.map((a) => a.runId).filter(Boolean));
+  const needsReview = recent
+    .filter((d) => d.needsReview && (d.status === "new" || d.status === "seen"))
+    .map((d) => ({ ...d, sendsOnApprove: Boolean(d.runId && pendingRuns.has(d.runId)) }));
+  const reviewRuns = new Set(needsReview.map((d) => d.runId).filter(Boolean));
+  const feed = recent.filter((d) => !needsReview.some((n) => n.id === d.id));
   return {
-    needsReview,
-    approvals: approvals as ApprovalCard[],
+    needsReview: needsReview as (DeliverableCard & { sendsOnApprove: boolean })[],
+    // Approvals that ride along with a review are decided from that review.
+    approvals: approvals.filter((a) => !a.runId || !reviewRuns.has(a.runId)) as ApprovalCard[],
     feed: feed as DeliverableCard[],
     overnight: { count: overnight[0]?.n ?? 0, hours: overnight[0]?.hours ?? 0 },
     agents,
@@ -238,7 +251,15 @@ export async function getDeliverable(orgId: string, id: string) {
   const row = rows[0];
   if (!row) return null;
   const { d } = row;
+  const pending = d.runId
+    ? await db()
+        .select({ id: schema.approvals.id })
+        .from(schema.approvals)
+        .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.runId, d.runId), eq(schema.approvals.status, "pending")))
+        .limit(1)
+    : [];
   return {
+    sendsOnApprove: pending.length > 0,
     id: d.id,
     title: d.title,
     kind: d.kind,
