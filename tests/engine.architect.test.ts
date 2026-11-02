@@ -478,6 +478,28 @@ describe("Architect (offline) — product critic r3 H4 and design critic r4 regr
     expect(spec.vertical).toBe("Independent insurance agency");
   });
 
+  it("roofing (Ironclad): “First, estimate follow-up…” names the job, never the ordinal; Rick from the header and the rule", () => {
+    const spec = checkRubric({
+      file: "discovery-roofing-ironclad.md",
+      org: "Ironclad Roofing & Exteriors",
+      industry: "Residential roofing contractor",
+      main: /estimate follow-up/i,
+      also: [/supplement/i, /crew scheduling/i, /warranty registration/i],
+      never: /^(?:first|second|third|fourth|next|then|also|finally|one|two)\b/i,
+      weekly: [18 * 0.6, 18 * 1.25],
+      role: /^Roofing Estimate Follow-up Coordinator$/,
+      extra: (s) => {
+        expect(s.workflows).toHaveLength(4);
+        expect(s.workflows[0]!.name).toBe("Estimate follow-up");
+        expect(s.role).not.toMatch(/\b(?:first|second|third|fourth)\b/i);
+        for (const text of allText(s)) expect(text).not.toMatch(/\b(?:how|of|handles) (?:first|second|third|fourth)\b/i);
+        expect(s.instructions).toMatch(/People: [^\n]*Rick Alvarez \(office manager\)/);
+        expect(s.instructions).toContain("Rick Alvarez handles them personally");
+      },
+    });
+    expect(spec.firstDeliverable.title).toMatch(/^Estimate follow-up/);
+  });
+
   it("estate planning law firm (Harbor & Pine): Monday aging, Friday cash summary, reply routing — no answered questions, no markup words", () => {
     const spec = checkRubric({
       file: "discovery-law-harbor-pine.md",

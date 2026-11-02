@@ -211,6 +211,11 @@ export function namesIn(clause: string): string[] {
 const has = (hay: string, name: string) => new RegExp(`(?:^|[^\\p{L}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^\\p{L}])`, "iu").test(hay);
 
 export type Exclusion = { names: string[]; why: string; rule?: boolean };
+
+/** "Hendersons" → "Henderson", "the Henderson family" → "Henderson" (names in rules are often plural). */
+export function singularName(n: string): string {
+  return n.replace(/\s+(?:family|household|residence|home|house)$/i, "").replace(/(?<=[a-z]{3})(?:'s|s')$/, "").replace(/(?<=[a-z]{3}[^s])s$/, "");
+}
 export type Hold = { names: string[]; who: string | null; why: string };
 
 /** "Skip Biscuit…", "Leave Biscuit out", "never contact the Whitfield family about Biscuit" → names to leave out. */
@@ -224,8 +229,10 @@ export function exclusionsFrom(text: string, rules: string[]): Exclusion[] {
   }
   for (const r of rules) {
     if (!/\bnever (?:contact|text|email|call|message|reach out to)\b|\bdo not (?:contact|text|email|call)\b|\bdon'?t (?:contact|text|email|call)\b/i.test(r)) continue;
-    const names = namesIn(r.replace(/^.*?\b(?:contact|text|email|call|message|reach out to)\b/i, ""));
-    if (names.length) out.push({ names, why: `your rule: “${truncate(r.replace(/^[“"]|[”"]$/g, ""), 120)}”`, rule: true });
+    // Only the clause that says who ("the Hendersons on Maple Court"), not who handles them ("; Rick Alvarez handles them").
+    const who = r.replace(/^.*?\b(?:contact|text|email|call|message|reach out to)\b/i, "").split(/[;—–]|\s-\s|\bbecause\b|\bsince\b|\bwho\b|,\s*(?:[A-Z][a-z]+ [A-Z][a-z]+|they|he|she)\b/)[0] ?? "";
+    const names = namesIn(who).flatMap((n) => [n, singularName(n)]);
+    if (names.length) out.push({ names: [...new Set(names)], why: `your rule: “${truncate(r.replace(/^[“"]|[”"]$/g, ""), 120)}”`, rule: true });
   }
   return out;
 }
@@ -309,13 +316,18 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
   })();
 
   // 1. Value filters on categorical columns ("overdue for rabies or DHPP").
-  const excludeClauses = splitSentences(text).filter((s) => /\b(?:skip|exclude|leave|except|omit|remove|drop|never)\b/i.test(s)).join(" ").toLowerCase();
+  // Only the words after the verb, up to a dash or "only/but/keep" ("leave out the signed — I only want status sent").
+  const excludeClauses = splitSentences(text)
+    .map((s) => /\b(?:skip|exclude|leave|except|omit|remove|drop|never)\b(.*)$/i.exec(s)?.[1]?.split(/[—–;:]|\s-\s|\bonly\b|\bbut\b|\bkeep\b|\binstead\b/i)[0] ?? "")
+    .join(" ")
+    .toLowerCase();
   // Negation kept: "hasn't been quoted (yet)", "not yet quoted", "without a quote" → "not quoted".
   const neg = (t: string) =>
     t
       .replace(/\b(?:has|have|is|are|was|were)n['’]?t\s+(?:yet\s+)?(?:been\s+)?(?:yet\s+)?/g, "not ")
       .replace(/\b(?:has|have|is|are|was|were) not\s+(?:yet\s+)?(?:been\s+)?/g, "not ")
       .replace(/\bnot yet\s+/g, "not ")
+      .replace(/\bun(signed|paid|quoted|scheduled|booked|approved|answered|read|sent)\b/g, "not $1")
       .replace(/\bwithout (?:a |an |any )?([a-z]+?)e?s?\b/g, (_m, w: string) => `not ${w}ed`);
   const lowerN = neg(lower);
   const exclN = ` ${neg(excludeClauses)} `;
@@ -334,14 +346,19 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
       });
       void found;
     }
-    const yes = [...new Set(hit)];
-    const no = [...new Set(notHit)].filter((v) => !yes.includes(v));
+    // Values named in a "leave out / skip" clause ("leave out the signed and declined estimates") are excluded.
+    const exclVals = vals.filter((v) => new RegExp(`(?:^|[^a-z0-9])${v.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:e?s|ed)?(?=[^a-z0-9]|$)`).test(exclN));
+    const yes = [...new Set(hit)].filter((v) => !exclVals.includes(v));
+    const no = [...new Set([...notHit, ...exclVals])].filter((v) => !yes.includes(v));
     if (yes.length && yes.length < vals.length) {
       rows = rows.filter((r) => yes.some((v) => v.toLowerCase() === (r[c] ?? "").trim().toLowerCase()));
       applied.push(`${label(c)} is ${yes.length === 1 ? yes[0] : `${yes.slice(0, -1).join(", ")} or ${yes[yes.length - 1]}`}`);
     } else if (no.length && !yes.length) {
-      rows = rows.filter((r) => !no.some((v) => v.toLowerCase() === (r[c] ?? "").trim().toLowerCase()));
-      applied.push(`${label(c)} is not ${no.join(" or ")}`);
+      // "Unsigned" / "open" also means not finished the other way (declined, lost, closed…).
+      const done = /status|stage|state/.test(label(c)) && /\bnot (?:signed|paid|approved)\b|\bopen\b|\boutstanding\b|\bpending\b/.test(lowerN) ? vals.filter((v) => /^(?:signed|declined|won|lost|closed|cancel+ed|accepted|rejected|complete[d]?|paid)$/i.test(v)) : [];
+      const drop = [...new Set([...no, ...done])];
+      rows = rows.filter((r) => !drop.some((v) => v.toLowerCase() === (r[c] ?? "").trim().toLowerCase()));
+      applied.push(`${label(c)} is not ${drop.join(" or ")}`);
     }
   }
 
@@ -363,7 +380,17 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
         const v = numVal(r[col] ?? "");
         return v != null && cmp(v);
       });
-      applied.push(`${label(col)} ${sym} ${money ? "$" : ""}${n}`);
+      const ap = `${label(col)} ${sym} ${money ? "$" : ""}${n}`;
+      if (!applied.includes(ap)) applied.push(ap);
+    } else if (/\bdays?\b/.test(unit) && !overdueOf && cols.dates.length) {
+      // "sent more than 7 days ago", "sitting unsigned for more than 7 days": age from the date the verb names.
+      const dc = cols.dates.find((i) => tokenize(H[i]!.replace(/_/g, " ")).some((w) => w.length >= 4 && w !== "date" && new RegExp(`\\b${w}`).test(lower))) ?? cols.dates[0]!;
+      rows = rows.filter((r) => {
+        const d = parseDate(r[dc] ?? "");
+        return !!d && cmp(Math.floor((now.getTime() - d.getTime()) / DAY));
+      });
+      const ap = `${label(dc)} ${sym === ">" ? "more than" : sym === "≥" ? "at least" : sym === "<" ? "less than" : "at most"} ${n} days ago`;
+      if (!applied.includes(ap)) applied.push(ap);
     } else if (/\bdays?\b/.test(unit) && overdueOf) {
       rows = rows.filter((r) => {
         const v = overdueOf(r);
@@ -456,6 +483,11 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
     if (overdueish && cols.overdue >= 0) sc = cols.overdue;
     // "soonest first", "earliest first", "most urgent first": the date the window used, else the due date.
     if (sc < 0 && !overdueish && /soonest|earliest|latest|newest|oldest|most urgent/.test(dirWord)) sc = windowCol >= 0 ? windowCol : cols.due >= 0 ? cols.due : (cols.dates[0] ?? -1);
+    // "biggest first", "largest first": the amount the request is about (a threshold's column, else a money column).
+    if (sc < 0 && !overdueish && /biggest|largest|highest|smallest|lowest|most|least/.test(dirWord)) {
+      const th = applied.map((a) => H.findIndex((h) => a.startsWith(`${norm(h)} `) && cols.numeric.includes(H.indexOf(h)))).find((i) => i >= 0);
+      sc = th ?? cols.numeric.find((i) => /amount|total|value|price|balance|owed|premium|revenue|\$/.test(label(i))) ?? -1;
+    }
     const asc = /least|lowest|smallest|soonest|earliest|most urgent/.test(dirWord) || (/oldest/.test(dirWord) && sc >= 0 && cols.dates.includes(sc));
     const keyOf = (r: string[]): number | string | null => {
       if (sc < 0 && overdueish && overdueOf) return overdueOf(r);
@@ -581,8 +613,16 @@ export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; 
   const forWhom = subject && subject !== personRaw && !isOrg ? ` for ${subject}` : "";
   const renewLine = due ? `Your ${policy}${carrier ? ` with ${carrier}` : ""}${forWhom} renews on ${fmtDate(due)}.` : `Your ${policy}${forWhom} is coming up for renewal.`;
   const renewAsk = "We'd like to review it with you before then so there's time to compare options. Could you reply with a good time for a quick call, and let us know about any changes to the business this year?";
-  let lines = renewal ? [`${greet} this is ${o.org}. ${renewLine} ${renewAsk}`] : [`${greet} this is ${o.org}. ${cap(what)}${status}. ${act}`];
-  if (o.channel === "email") lines = [greet, "", renewal ? `${renewLine} ${renewAsk}` : `${cap(what)}${status}. ${act}`, "", "Thank you,", o.agent, o.org];
+  // An estimate / quote / proposal that was sent: a follow-up on it (never a price, never "get it booked").
+  const sentCol = H.findIndex((h, i) => /sent|issued|quoted|submitted/.test(norm(h)) && cols.dates.includes(i));
+  const estimate = !renewal && /estimate|quote|proposal|bid/i.test(`${p.table.title} ${H.join(" ")}`);
+  const sentOn = sentCol >= 0 ? parseDate(r[sentCol] ?? "") : null;
+  const jobCol = H.findIndex((h) => /job|work|project|service|type|scope/.test(norm(h)));
+  const job = jobCol >= 0 ? (r[jobCol] ?? "").trim().toLowerCase() : "";
+  const estLine = `I wanted to follow up on the ${job ? `${job} ` : ""}${/quote/i.test(p.table.title) ? "quote" : "estimate"} we sent you${sentOn ? ` on ${fmtDate(sentOn)}` : ""}. Do you have any questions, or anything you'd like us to walk through? Just reply here and we'll take it from there.`;
+  const main = renewal ? `${renewLine} ${renewAsk}` : estimate ? estLine : `${cap(what)}${status}. ${act}`;
+  let lines = [`${greet} this is ${o.org}. ${main}`];
+  if (o.channel === "email") lines = [greet, "", main, "", "Thank you,", o.agent, o.org];
   // Never write about a topic a rule forbids.
   const clean = (s: string) => o.forbidden.reduce((x, w) => x.replace(new RegExp(`[^.]*\\b${w}[^.]*\\.\\s*`, "gi"), ""), s);
   const body = lines.map(clean).join(o.channel === "email" ? "\n" : " ");
@@ -593,7 +633,7 @@ export function rowDraft(p: Plan, r: string[], o: { org: string; agent: string; 
   const to = o.channel === "text" ? `${who}${phone ? ` · ${phone}` : ""}` : mail && o.addressed !== false ? `${who} <${mail}>` : who;
   const held = p.held.find((h) => h.row === r)?.why ?? null;
   const label = `${subject && subject !== personRaw ? `${subject} — ` : ""}${who}`;
-  const subj = renewal ? `Your ${policy} renewal${due ? ` (${fmtDate(due)})` : ""}` : `${cap(what)}${status.replace(/ \(it was due [^)]+\)/, "")}`;
+  const subj = renewal ? `Your ${policy} renewal${due ? ` (${fmtDate(due)})` : ""}` : estimate ? `Following up on your ${job ? `${job} ` : ""}${/quote/i.test(p.table.title) ? "quote" : "estimate"}` : `${cap(what)}${status.replace(/ \(it was due [^)]+\)/, "")}`;
   return { label, to, channel: o.channel, subject: o.channel === "email" ? subj : null, body, held };
 }
 
@@ -621,7 +661,14 @@ export function criteriaProse(applied: string[]): string {
 /** A row whose status says the relationship is over (lapsed, cancelled…): no outreach unless the task is a win-back. */
 export function closedRow(p: Plan, r: string[], text: string): boolean {
   if (/\bwin[- ]?back|\breactivat|\bre-?engage|\blapsed\b|\bcancel+ed\b/i.test(text)) return false;
-  return p.table.headers.some((h, i) => /status|stage|state/.test(norm(h)) && /\b(?:lapsed|cancel+ed|closed|declined|lost|non-?renew\w*|inactive|terminated)\b/i.test(r[i] ?? ""));
+  const followUp = /\bfollow[- ]?up|\bchase|\bnudge|\bunsigned|\bnot signed|\bremind/i.test(text);
+  return p.table.headers.some((h, i) => /status|stage|state/.test(norm(h)) && (/\b(?:lapsed|cancel+ed|closed|declined|lost|non-?renew\w*|inactive|terminated)\b/i.test(r[i] ?? "") || (followUp && /^(?:signed|won|accepted|paid|complete[d]?)$/i.test((r[i] ?? "").trim()))));
+}
+
+/** The status cell of a row, for plain wording ("its status is declined"). */
+export function statusOf(p: Plan, r: string[]): string {
+  const i = p.table.headers.findIndex((h) => /status|stage|state/.test(norm(h)));
+  return i >= 0 ? (r[i] ?? "").trim() : "";
 }
 
 /** One-line description of what was done to the rows. */
@@ -644,7 +691,7 @@ export function nounOf(p: Plan): string {
   if (/^(?:patient|pet|animal|item|product|property|site|unit|job|project|account|vehicle|invoice|claim|order)$/.test(h)) return h;
   const t = p.table.title.toLowerCase();
   if (/renewal|polic/.test(t) || /^policy/.test(p.table.headers.map(norm).join(" "))) return "policy";
-  const m = /(patient|invoice|claim|order|customer|client|lead|job|property|tenant|account)s?/.exec(t);
+  const m = /(estimate|quote|patient|invoice|claim|order|customer|client|lead|job|property|tenant|account)s?/.exec(t);
   return m?.[1] ?? "row";
 }
 

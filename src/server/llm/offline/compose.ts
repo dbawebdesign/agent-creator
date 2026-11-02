@@ -6,7 +6,7 @@
  */
 import { cell, normalizeWhitespace, tokenize, truncate } from "../text";
 import { mentions, namedInTask } from "./quotes";
-import { answerFromRows, asksForRows, closedRow, collectTables, columnsOf as tableColumns, describePlan, exclusionsFrom, namesIn, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
+import { answerFromRows, asksForRows, closedRow, statusOf, collectTables, columnsOf as tableColumns, describePlan, exclusionsFrom, namesIn, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
 
 export type Snip = { title: string; text: string; kind?: string };
 export type ComposeInput = {
@@ -319,7 +319,7 @@ function revise(input: ComposeInput, pool: Sent[]): Composed {
   if (fileTables.length && rowsAsked) {
     // A new value filter in the note ("only rabies") replaces the old one instead of adding to it.
     const newValueFilter = fbPlans.some((x) => x.applied.some((a) => / is /.test(a)));
-    const summaryText = (newValueFilter ? origSummary.replace(/\s*\([^)]*\bis\b[^)]*\)/, "") : origSummary).replace(/\bLeft out: /g, "Leave out ");
+    const summaryText = (newValueFilter ? origSummary.replace(/\s*\([^)]*\bis\b[^)]*\)/, "") : origSummary).replace(/No draft for [^.]*?(?:”|\.)(?=\s|$)\.?/g, "").replace(/\bLeft out: /g, "Leave out ");
     // "Remove Tank" / "drop the Elm St. Rescue row" leave those rows out.
     const fbRows = fb.replace(/\b(?:remove|drop|delete|cut|take out|get rid of)\b/gi, "Leave out");
     const before = collectTables([{ title: "previous", text: doc }]).find((t) => t.headers.length > 2);
@@ -530,8 +530,8 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
     summary.push(`${drafts.length} ${drafts[0]!.channel === "text" ? (drafts.length === 1 ? "reminder text" : "reminder texts") : drafts.length === 1 ? "email" : "emails"} drafted below, one per ${p.cols.person >= 0 ? norm1(p.table.headers[p.cols.person]!) : noun}${heldN ? `; ${heldN} ${heldN === 1 ? "waits" : "wait"} for sign-off` : ""}. Nothing is sent until you approve.`);
   }
   const closed = p.rows.filter((r) => closedRow(p, r, text));
-  if (closed.length && wantsRowDrafts(text)) summary.push(`No draft for ${closed.map(nameOf).join(", ")}: the status says the policy or account is closed.`);
-  if (p.noContact.length) summary.push(`No draft for ${p.noContact.map((x) => nameOf(x.row)).join(", ")} — ${[...new Set(p.noContact.map((x) => x.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
+  if (closed.length && wantsRowDrafts(text)) summary.push(`No draft for ${closed.map((r) => `${nameOf(r)}${statusOf(p, r) ? ` (status: ${statusOf(p, r)})` : ""}`).join(", ")}: nothing to follow up on.`);
+  if (p.noContact.length && drafts.length) summary.push(`No draft for ${p.noContact.map((x) => nameOf(x.row)).join(", ")} — ${[...new Set(p.noContact.map((x) => x.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
   if (p.excluded.length) summary.push(`Left out: ${p.excluded.map((e) => nameOf(e.row)).join(", ")} — ${[...new Set(p.excluded.map((e) => e.why))].join("; ")}`.replace(/([^.”])$/, "$1."));
   lines.push("## Summary", "", summary.join(" "));
   if (p.unmapped.length) lines.push("", `_Note: ${cap(p.unmapped[0]!)}${p.applied.length ? "" : "; showing every row"}._`);
@@ -541,9 +541,8 @@ function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, 
   if (drafts.length) {
     lines.push("", `## ${drafts[0]!.channel === "text" ? "Reminder texts" : "Emails"}`, "");
     for (const d of drafts) lines.push(...renderDraft(d));
-    if (drafts[0]!.channel === "email" && input.kind !== "workflow") lines.push("_Not addressed yet: the addresses are in the table. Name one person in your request, or run this as a workflow, and I'll address the drafts for approval._", "");
-    const undrafted = p.rows.length - p.noContact.length - drafts.length;
-    if (undrafted > 0) lines.push(`_${undrafted} more rows are in the table above; I draft the first ${drafts.length} per run._`, "");
+    const undrafted = p.rows.length - p.noContact.length - drafts.length - p.rows.filter((r) => closedRow(p, r, text)).length;
+    if (undrafted > 0) lines.push(`_The other ${undrafted} are in the table above; their drafts come in the next batch._`, "");
   }
   for (const h of p.held) decisions.push(`${nameOf(h.row)}: ${h.why}${h.who ? "" : ""} — the draft is ready but stays with you until it is signed off.`);
   const fb = forbiddenTopics(rules);

@@ -410,7 +410,14 @@ const NOT_NP = /\b(?:is|are|was|were|be|been|do|does|did|have|has|had|i|we|you|t
 /** Questions that invite the next pain ("What's next?", "Where does your time go?"). */
 const NEXT_Q = /what(?:'s| is)? next|what else|anything else|what other|where does (?:your|the) time|eats? the most|start there|walk me through|itch|biggest/i;
 /** "Vaccine recalls." / "Then no-shows." / "Month-end close, no question." → the speaker's name for a job, or null. */
+/** List markers and ordinals never name a job: "First, estimate follow-up." → "estimate follow-up." */
+export const LIST_MARKER = /^(?:(?:first(?: of all| off)?|second(?:ly)?|third(?:ly)?|fourth|fifth|next|then|also|finally|lastly|last|one|two|three|four|five|number (?:one|two|three|four|five)|and|plus|oh,? and)[,:.]?\s+)+/i;
 export function nounPhraseAnswer(text: string): string | null {
+  const stripped = text.trim().replace(LIST_MARKER, "");
+  if (stripped !== text.trim()) {
+    if (!stripped || /^(?:first|second|third|fourth|fifth|next|one|two|three|four)[.!]?$/i.test(stripped)) return null;
+    text = stripped;
+  }
   const intro = /^(?:the|my|our) (?:biggest|main|worst|other|next|first|second|third) (?:drain|pain|problem|time sink|thing|one|headache|issue|time suck)(?: for (?:me|us))? is ([a-z][\w'’ -]{2,40}?)[.!]?$/i.exec(text.trim())?.[1];
   if (intro) return nounPhraseAnswer(intro);
   const m = /^(?:(?:and|then|also|plus|oh,? and|next|so)\s+)?([A-Za-z][\w'’-]*(?:[ ,]+[\w'’-]+){0,5}?)[.!]?$/i.exec(text.trim());
@@ -880,7 +887,21 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
       if (role && !people.some((p) => p.name === m[1])) people.push({ name: m[1]!, role });
     }
   }
-  for (const sp of speakerCounts.keys()) if (!people.some((p) => p.name === sp)) people.push({ name: sp, role: null });
+  // "(owner: Gina Moretti; office manager: Rick Alvarez)" in a header, and "Rick Alvarez handles them personally" in a rule.
+  for (const m of raw.matchAll(new RegExp(`\\b(owner|founder|${ROLE_WORDS}):\\s*([A-Z][a-z]+(?: [A-Z][a-z]+)?)`, "g"))) {
+    const first = m[2]!.split(" ")[0]!;
+    if (agencyNames.has(first)) continue;
+    const prev = people.find((p) => p.name === first || p.name === m[2]);
+    if (prev) {
+      prev.role ??= m[1]!.toLowerCase();
+      if (prev.name === first && m[2] !== first && first !== owner) prev.name = m[2]!;
+    } else if (first !== owner) people.push({ name: m[2]!, role: m[1]!.toLowerCase() });
+  }
+  for (const s of sentences) for (const m of s.text.matchAll(/\b([A-Z][a-z]+ [A-Z][a-z]+) (?:handles|owns|manages|takes care of) (?:them|it|that account|the account|those|that client)\b/g)) {
+    const first = m[1]!.split(" ")[0]!;
+    if (!people.some((p) => p.name === m[1] || p.name.split(" ")[0] === first)) people.push({ name: m[1]!, role: "handles an account personally" });
+  }
+  for (const sp of speakerCounts.keys()) if (!people.some((p) => p.name === sp || p.name.split(" ")[0] === sp)) people.push({ name: sp, role: null });
   if (owner && !people.some((p) => p.name === owner)) people.unshift({ name: owner, role: "owner" });
   else if (owner) people.find((p) => p.name === owner)!.role ??= "owner";
   const systems0 = [...new Set(sentences.flatMap((s) => systemsIn(s.text)))];

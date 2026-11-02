@@ -15,7 +15,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { isOfflineModel } from "@/server/env";
 import { anthropicStructured } from "@/server/llm/anthropic";
 import { OFFLINE_MODEL } from "@/server/llm/offline";
-import { conceptHits, hoursPerWeekIn, moneyIn, quoteOf, readDiscovery, trimPhrase, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
+import { conceptHits, hoursPerWeekIn, LIST_MARKER, moneyIn, quoteOf, readDiscovery, trimPhrase, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
 import { hash32, normalizeWhitespace, truncate } from "@/server/llm/text";
 import type { LlmUsage } from "@/server/llm/types";
 import { agentSpec, normalizeApprovals, type AgentSpec, type WorkflowSpec } from "./spec";
@@ -419,7 +419,7 @@ const visitOf = (t: Topic) => (/walk-?through/i.test(topicText(t)) ? "walk-throu
 const GUARDISH = /^(?:and |also |but )?(?:never|always|don'?t ever|only)\b/i;
 /** The speaker's own name for the job, made a complete noun phrase ("No-shows" + "call to rebook" → "No-show rebooking"). */
 const jobName = (t: Topic): string => {
-  const base = trimPhrase(t.label ?? t.phrase);
+  const base = trimPhrase((t.label ?? t.phrase).replace(LIST_MARKER, "")) || trimPhrase(t.phrase);
   const txt = topicText(t);
   if (/^(?:no-?shows?|cancellations?|missed appointments?)$/i.test(base)) return /rebook|reschedul/i.test(txt) ? `${cap(singular(base.toLowerCase()))} rebooking` : `${cap(singular(base.toLowerCase()))} follow-up`;
   return cap(base);
