@@ -2,12 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { Popover as P } from "radix-ui";
-import { CalendarClock, ChevronDown, Clock, HelpCircle, Inbox, Library, Loader2, Repeat, Sparkles, Zap } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, Clock, HelpCircle, Inbox, Library, Loader2, Repeat, Sparkles, Zap } from "lucide-react";
 import type { AgentSpec, WorkflowSpec } from "@/server/agents/spec";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { cn } from "@/lib/utils";
 import { CHANNEL_LABEL, OUTPUT_LABEL } from "../bits";
 import { buildCron, DAY_NAMES, describeTrigger, parseCadence, type Cadence } from "../cron";
@@ -120,8 +121,14 @@ export function ProposalReview({
             <span className="text-[12.5px] text-ink-3 max-sm:hidden">Switch off anything you don’t want yet</span>
           </div>
           <div className="space-y-3">
-            {draft.workflows.map((w) => (
-              <WorkflowCard key={w._id} w={w} onChange={(p) => setWf(w._id, p)} canDisable={onCount > 1 || !w._on} />
+            {draft.workflows.map((w, i) => (
+              <WorkflowCard
+                key={w._id}
+                w={w}
+                onChange={(p) => setWf(w._id, p)}
+                canDisable={onCount > 1 || !w._on}
+                repeatProblem={!!w.problem && draft.workflows.slice(0, i).some((x) => x.problem.trim() === w.problem.trim())}
+              />
             ))}
           </div>
         </section>
@@ -250,7 +257,7 @@ export function ProposalReview({
       </div>
 
       {/* Mobile hire bar */}
-      <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-line bg-canvas/90 px-4 py-3 backdrop-blur-md lg:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-line bg-canvas px-4 py-3 shadow-[0_-4px_16px_rgb(0_0_0/0.06)] lg:hidden">
         <div className="min-w-0 flex-1">
           <p className="tabular text-[15px] font-semibold text-ink">{weekly} h / week</p>
           <p className="truncate text-[12px] text-ink-3">{onCount} workflow{onCount === 1 ? "" : "s"} · {priceLabel ?? "flat rate"}</p>
@@ -297,7 +304,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function WorkflowCard({ w, onChange, canDisable }: { w: DraftWorkflow; onChange: (p: Partial<DraftWorkflow>) => void; canDisable: boolean }) {
+function WorkflowCard({ w, onChange, canDisable, repeatProblem }: { w: DraftWorkflow; onChange: (p: Partial<DraftWorkflow>) => void; canDisable: boolean; repeatProblem?: boolean }) {
   const [open, setOpen] = useState(false);
   const TriggerIcon = w.trigger.type === "schedule" ? CalendarClock : w.trigger.type === "event" ? Inbox : Zap;
   return (
@@ -310,7 +317,7 @@ function WorkflowCard({ w, onChange, canDisable }: { w: DraftWorkflow; onChange:
             onChange={(e) => onChange({ name: e.target.value })}
             className="w-full rounded bg-transparent text-[15px] font-semibold tracking-[-0.01em] text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
           />
-          {w.problem ? <p className="mt-1 text-[13.5px] leading-relaxed text-ink-3">{w.problem}</p> : null}
+          {w.problem && !repeatProblem ? <p className="mt-1 text-[13.5px] leading-relaxed text-ink-3">{w.problem}</p> : null}
 
           <div className="mt-3.5 flex flex-wrap items-center gap-2">
             <SchedulePicker w={w} onChange={onChange} icon={<TriggerIcon className="size-3.5" aria-hidden />} />
@@ -338,35 +345,41 @@ function WorkflowCard({ w, onChange, canDisable }: { w: DraftWorkflow; onChange:
                 step={0.25}
                 value={w.hoursSavedPerRun}
                 onChange={(e) => onChange({ hoursSavedPerRun: Math.max(0, Number(e.target.value) || 0) })}
-                className="tabular w-9 bg-transparent text-right focus:outline-none"
+                className="tabular w-[4.5ch] bg-transparent text-right focus:outline-none"
                 aria-label="Hours saved per run"
               />
               h saved / run
             </label>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Delivery channels">
-            <span className="mr-1 text-[12px] text-ink-3">Delivers to</span>
-            {CHANNELS.map((c) => {
-              const on = w.deliverTo.includes(c);
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => {
-                    const next = on ? w.deliverTo.filter((x) => x !== c) : [...w.deliverTo, c];
-                    if (next.length) onChange({ deliverTo: next });
-                  }}
-                  className={cn(
-                    "h-6 rounded-md px-2 text-[12px] font-medium transition-colors",
-                    on ? "bg-ink text-canvas" : "text-ink-3 hover:bg-surface-2 hover:text-ink-2",
-                  )}
-                >
-                  {CHANNEL_LABEL[c]}
-                </button>
-              );
-            })}
+          <div className="mt-3 flex items-center gap-1.5">
+            <span className="text-[12px] text-ink-3">Delivers to</span>
+            <Menu>
+              <MenuTrigger className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[12.5px] font-medium text-ink-2 hover:bg-surface-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 data-[state=open]:bg-surface-2" aria-label={`Delivery channels: ${w.deliverTo.map((c) => CHANNEL_LABEL[c] ?? c).join(", ")}`}>
+                {w.deliverTo.map((c) => CHANNEL_LABEL[c] ?? c).join(", ")}
+                <ChevronDown className="size-3 text-ink-3" aria-hidden />
+              </MenuTrigger>
+              <MenuContent className="w-48">
+                {CHANNELS.map((c) => {
+                  const on = w.deliverTo.includes(c);
+                  return (
+                    <MenuItem
+                      key={c}
+                      role="menuitemcheckbox"
+                      aria-checked={on}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        const next = on ? w.deliverTo.filter((x) => x !== c) : CHANNELS.filter((x) => x === c || w.deliverTo.includes(x));
+                        if (next.length) onChange({ deliverTo: next });
+                      }}
+                    >
+                      <span className="flex-1">{CHANNEL_LABEL[c]}</span>
+                      {on ? <Check className="text-accent" /> : null}
+                    </MenuItem>
+                  );
+                })}
+              </MenuContent>
+            </Menu>
           </div>
 
           <button type="button" onClick={() => setOpen((o) => !o)} className="mt-3 inline-flex items-center gap-1 text-[12.5px] font-medium text-ink-3 hover:text-ink" aria-expanded={open}>

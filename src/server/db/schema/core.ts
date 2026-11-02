@@ -256,7 +256,12 @@ export const subscriptions = pgTable(
     stripeSubscriptionId: text("stripe_subscription_id"),
     currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    /** Connected account (the seller's) that owns stripeSubscriptionId. Null for manual (non-Stripe) rows. */
+    stripeAccountId: text("stripe_account_id"),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    /** `created` of the last Stripe event applied, so out-of-order webhook deliveries never regress state. */
+    stripeEventAt: timestamp("stripe_event_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [index("subscriptions_org_idx").on(t.orgId)],
+  (t) => [index("subscriptions_org_idx").on(t.orgId), uniqueIndex("subscriptions_stripe_uq").on(t.stripeSubscriptionId)],
 );

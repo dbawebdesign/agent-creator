@@ -35,7 +35,7 @@ export default async function KnowledgePage({ params }: { params: Promise<{ agen
                     <p className="truncate text-[13.5px] font-medium text-ink">{s.title}</p>
                     <p className="truncate text-[12px] text-ink-3">
                       {s.uri ? `${s.uri} · ` : ""}
-                      {s.chunkCount ? `${s.chunkCount} chunks · ` : ""}
+                      {s.chunkCount ? `${s.chunkCount} ${s.chunkCount === 1 ? "passage" : "passages"} · ` : ""}
                       {s.agentId ? "" : "Shared with all agents · "}
                       <RelativeTime date={s.createdAt} />
                     </p>

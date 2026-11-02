@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import type { DeliverableCard as Card } from "@/server/queries/portal";
 import { DeliveredVia, KindIcon, kindLabel } from "./icons";
+import { testModeChannels } from "./test-mode";
 import { clockTime, dayWord, shortHours, capitalize } from "./lib";
 import { cn } from "@/lib/utils";
 
@@ -71,7 +72,7 @@ export function DeliverableCardView({
           <KindIcon kind={d.kind} />
           {kindLabel(d.kind)}
         </span>
-        <DeliveredVia via={d.deliveredVia} />
+        <DeliveredVia via={d.deliveredVia} testMode={testModeChannels()} />
         {d.status === "approved" ? (
           <span className="text-good">Approved</span>
         ) : null}

@@ -32,6 +32,7 @@ export function ReviewPanel({
   next,
   sendTo,
   sentAt,
+  sendTestMode,
 }: {
   slug: string;
   deliverableId: string;
@@ -46,6 +47,8 @@ export function ReviewPanel({
   /** Who the linked send goes to (e.g. an email address), and when it went, once approved. */
   sendTo?: string | null;
   sentAt?: string | null;
+  /** Email isn't connected here: the send is simulated, so never claim it went out. */
+  sendTestMode?: boolean;
 }) {
   const [mode, setMode] = useState<"idle" | "changes">("idle");
   const [text, setText] = useState("");
@@ -74,12 +77,18 @@ export function ReviewPanel({
           local ? (
             <span>
               Approved. {agentName} is sending it to{" "}
-              <span className="font-semibold">{sendTo}</span> now.
+              <span className="font-semibold">{sendTo}</span>
+              {sendTestMode ? (
+                <span className="font-normal"> in test mode, so no real email goes out.</span>
+              ) : (
+                " now."
+              )}
             </span>
           ) : (
             <span>
               Approved and sent to{" "}
               <span className="font-semibold">{sendTo}</span>
+              {sendTestMode ? <span className="font-normal"> (test mode)</span> : null}
               {sentAt ? <span className="font-normal"> · {sentAt}</span> : null}
             </span>
           )

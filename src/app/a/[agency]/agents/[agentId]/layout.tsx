@@ -24,9 +24,9 @@ export default async function AgentLayout({ children, params }: { children: Reac
   return (
     <div className="mx-auto w-full max-w-[1080px] px-4 pt-6 sm:px-6 md:px-10 md:pt-9">
       <nav aria-label="Breadcrumb" className="mb-5 flex items-center gap-1 text-[12.5px] text-ink-3">
-        <Link href={`/a/${slug}/agents`} className="hover:text-ink-2">Agents</Link>
-        <ChevronRight className="size-3" aria-hidden />
         <Link href={`/a/${slug}/clients/${org.slug}`} className="hover:text-ink-2">{org.name}</Link>
+        <ChevronRight className="size-3" aria-hidden />
+        <span aria-current="page" className="truncate text-ink-3">{agent.name}</span>
       </nav>
       <header className="flex items-start gap-4">
         <AgentOrb seed={agent.avatarSeed ?? agent.id} size={48} live={agent.status === "active"} />

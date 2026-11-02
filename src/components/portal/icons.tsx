@@ -59,13 +59,19 @@ export function ChannelIcon({
 export function DeliveredVia({
   via,
   className,
+  testMode = [],
 }: {
   via: ChannelKind[];
   className?: string;
+  /** Channels that only simulate sends here: labelled "(test mode)", never claimed as sent. */
+  testMode?: ChannelKind[];
 }) {
   const shown = via.filter((v) => v !== "portal");
   if (!shown.length) return null;
-  const words = shown.map((v) => CHANNEL_LABEL[v] ?? v);
+  const words = shown.map(
+    (v) =>
+      `${CHANNEL_LABEL[v] ?? v}${testMode.includes(v) ? " (test mode)" : ""}`,
+  );
   const text =
     words.length > 2
       ? `${words.slice(0, -1).join(", ")} & ${words.at(-1)}`

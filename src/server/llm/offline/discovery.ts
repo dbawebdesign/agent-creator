@@ -30,11 +30,11 @@ export type Action =
   | "inbox"
   | "manual";
 
-export type Sentence = { text: string; turn: number; idx: number; speaker: string | null; afterItch: boolean };
+export type Sentence = { text: string; turn: number; idx: number; speaker: string | null; afterItch: boolean; question?: string | null; asked?: boolean };
 
 export type Cadence =
   | { kind: "daily"; days: "1-5" | "1-6" | "*" }
-  | { kind: "weekly"; dow: number }
+  | { kind: "weekly"; dow: number; months?: number[] }
   | { kind: "monthly"; day: number; deadlineDay: number | null }
   | { kind: "event"; channel: "email" | "sms" };
 
@@ -68,6 +68,8 @@ export type Discovery = {
   people: Person[];
   systems: string[];
   rules: string[];
+  /** "Never promise a homeowner a dollar amount." — hard rules the agent must follow. */
+  guardrails: string[];
   channels: { sms: boolean; slack: boolean; email: boolean };
   /** Who wants the morning output, how, and by when. */
   recipient: { name: string | null; channel: "email" | "sms" | null; by: { h: number; m: number } | null };
@@ -116,17 +118,27 @@ export function parseTurns(raw: string): Turn[] {
     if (text.length < 2) continue;
     turns.push({ speaker, text, agency: speaker ? AGENCY_SPEAKERS.test(speaker) : false });
   }
+  // "Attendees: Marco Delgado (Ridgeline AI), Rick Alvarez (owner, Summit Peak Roofing)": anyone not marked as the
+  // client's owner/staff is on the agency side.
+  const att = /\b(?:attendees|participants|on the call)\s*:\s*([^\n]+)/i.exec(t)?.[1];
+  if (att) {
+    for (const m of att.matchAll(/([A-Z][a-z]+)(?: [A-Z][a-z]+)?\s*\(([^)]*)\)/g)) {
+      const clientSide = new RegExp(`\\b(?:owner|founder|ceo|president|manager|office|staff|lead|partner|bookkeeper|coordinator|accountant|admin|${ROLE_WORDS})\\b`, "i").test(m[2]!);
+      if (!clientSide) for (const x of turns) if (x.speaker === m[1] || x.speaker?.startsWith(`${m[1]} `)) x.agency = true;
+    }
+  }
   // Named interviewer ("AJ:", "Sarah:"): the labelled speaker who mostly asks questions.
   const speakers = [...new Set(turns.map((x) => x.speaker).filter((s): s is string => !!s))];
-  if (speakers.length >= 2 && !turns.some((x) => x.agency)) {
+  if (speakers.length >= 2 && !turns.some((x) => x.agency && x.speaker)) {
     const qRatio = (s: string) => {
       const mine = turns.filter((x) => x.speaker === s);
       return mine.filter((x) => /\?\s*$/.test(x.text)).length / Math.max(1, mine.length);
     };
     const asker = [...speakers].sort((a, b) => qRatio(b) - qRatio(a))[0]!;
-    if (qRatio(asker) >= 0.5) for (const x of turns) if (x.speaker === asker) x.agency = true;
+    if (qRatio(asker) >= 0.4) for (const x of turns) if (x.speaker === asker) x.agency = true;
   }
-  return turns;
+  // In a labelled call, unlabelled lines are headers and stage directions, not the client talking.
+  return speakers.length ? turns.filter((x) => x.speaker) : turns;
 }
 
 // ───────────────────────────────────────────── numbers ─────────────────────────────────────────────
@@ -204,23 +216,23 @@ type Concept = {
  */
 const CONCEPTS: Concept[] = [
   { action: "urgent", re: /\b(after[- ]hours|overnight|middle of the night|weekend|late[- ]night)\s+(emergenc(?:y|ies)|calls?|texts?|requests?)\b|\b(emergenc(?:y|ies))\s+(?:after hours|at night|overnight|on (?:the )?weekends?)/i },
-  { action: "verify", re: /\b(insurance|eligibility|benefits?|coverage|credit|background|license|income|employment)\s+(verifications?|checks?)\b|\b()(verif(?:y|ying|ications?))\b|\b()(eligibility and benefits)\b/i },
+  { action: "verify", re: /\b(insurance|eligibility|benefits?|coverage|credit|background|license|income|employment)\s+(verifications?|checks?)\b|\b()(verif(?:y|ying|ied|ications?))\b|\b()(eligibility and benefits)\b/i },
   {
     action: "chase",
-    re: /\b(unscheduled|unbooked|unsigned|outstanding|past[- ]due|overdue|missing|open)\s+(treatment(?: plans?)?|estimates?|quotes?|proposals?|receipts?|documents?|invoices?|paperwork|balances?|leads?|applications?)\b|\bfollow(?:ing|s)?[- ]?(?:ups?\s+)?(?:up\s+)?(?:on|with)\s+(?:the |our |all |those |these )?()((?!them\b|it\b|that\b)[a-z]+(?: [a-z]+)?)|\bchas(?:e|es|ing)\s+(?:clients|customers|patients|people|homeowners|tenants|owners|members)\s+(?:for|about|on)\s+()([a-z]+(?: (?:and )?(?:missing )?[a-z]+)?)/i,
+    re: /\b(unscheduled|unbooked|unsigned|outstanding|past[- ]due|overdue|missing|open)\s+(treatment(?: plans?)?|estimates?|quotes?|proposals?|receipts?|documents?|invoices?|paperwork|balances?|leads?|applications?)\b|\bfollow(?:ing|s)?[- ]?(?:ups?\s+)?(?:up\s+)?(?:on|with)\s+(?:the |our |all |those |these )?()((?!them\b|it\b|that\b)[a-z]+(?: [a-z]+)?)|\bchas(?:e|es|ing)\s+(?:clients|customers|patients|people|homeowners|tenants|owners|members)\s+(?:for|about|on)\s+()([a-z]+(?: (?:and )?(?:missing )?[a-z]+)?)|\b()((?:1099|W-?9|W-?2|COI|lien waiver)s?)\b|\b(?:the |our )?(adjusters?|carriers?|insurance compan(?:y|ies)|vendors?|subs?)\s+(chased|follow[- ]?ups?)\b|\b(?:heard back from|chas(?:e|ing)|follow(?:ing)? up with) (?:the |our )?()(adjusters?|carriers?|insurance compan(?:y|ies))\b/i,
   },
-  { action: "close", re: /\b(month[- ]end|year[- ]end|quarter[- ]end)\s+(close|closes|closing)\b|\b()(clos(?:e|ing) the books|reconciliations?|reconcil(?:e|ing) (?:the )?(?:bank|accounts|credit cards?))\b/i },
+  { action: "close", re: /\b(month[- ]end|year[- ]end|quarter[- ]end)\s+(close|closes|closing)\b|\b()(clos(?:e|ing) the books|close package|reconciliations?|reconcil(?:e|ing) (?:the )?(?:bank|accounts|credit cards?))\b/i },
   { action: "renewal" as Action, re: /\b(lease|policy|contract|membership|subscription|license|warranty|service agreement)\s+(renewals?)\b|\b()(renewal (?:offers?|notices?|letters?))\b/i },
-  { action: "packet", re: /\b(insurance|warranty|permit)\s+(claims? (?:paperwork|packets?|files?|documentation|submissions?)|claims? and supplements?|paperwork)\b|\b()(supplements?|claim packets?|permit applications?|submittals?)\b/i },
+  { action: "packet", re: /\b(insurance|warranty|permit)\s+(claims? (?:paperwork|packets?|files?|documentation|submissions?)|claims? and supplements?|paperwork)\b|\b()(supplements?|(?:claim |insurance )?packets?|paperwork|permit applications?|submittals?)\b/i },
   {
     action: "triage",
-    re: /\b(maintenance|service|repair|support|warranty|work)\s+(requests?|tickets?|orders?)\b|\b()(dispatch(?:es|ing|ed)? (?:a |the )?vendors?|vendors? (?:gets? )?dispatched)\b/i,
+    re: /\b(maintenance|service|repair|support|warranty|work)\s+(requests?|tickets?|orders?)\b|\b()(dispatch(?:es|ing|ed)? (?:a |the )?vendors?|vendors? (?:gets? )?dispatched|(?:preferred )?vendor list|pick the vendor)\b/i,
   },
-  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))/i },
+  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))|\b(weekly|monthly|daily)\s+(?:text |email |status )?(updates?)\b/i },
   { action: "quote", re: /\b(?:put(?:ting)? together|build(?:ing)?|writ(?:e|ing)|creat(?:e|ing)|do(?:ing)?)\s+()(quotes?|proposals?|bids?|estimates?)\b|\b(quote|proposal|bid)\s+(requests?|building|prep)\b/i },
   {
     action: "entry",
-    re: /\b()(data entry|re-?typ(?:e|ing)|re-?key(?:ing)?|re-?enter(?:ing)?|copy(?:ing)? and past(?:e|ing)|migrat(?:e|ing|ion)|switch(?:ing)? over from|bring (?:all )?(?:of )?(?:this|the|their) data|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields)\b/i,
+    re: /\b()(data entry|re-?typ(?:e|ing)|re-?key(?:ing)?|re-?enter(?:ing)?|copy(?:ing)? and past(?:e|ing)|migrat(?:e|ing|ion)|switch(?:ing)? over from|bring (?:all )?(?:of )?(?:this|the|their) data|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields|typ(?:e|es|ing) (?:the |it |them |every |each |all )?(?:[a-z]+ )?into)\b/i,
   },
   { action: "schedule", re: /\b()((?:build(?:ing)?|mak(?:e|ing)|do(?:ing)?|reshuffl\w*) (?:the |our |a )?(?:technician |crew |tech |staff |driver |install )?schedules?|dispatch board|dispatch(?:ing)?(?! (?:a |the )?vendors?)(?=[\s.,]))/i },
   { action: "reviews", re: /\b(google|online|yelp|five[- ]star|5[- ]star|our|more|new|bad)\s+(reviews)\b|\b()(ask(?:ing)? (?:for|people for) (?:a )?reviews?|reputation)\b/i },
@@ -233,7 +245,7 @@ for (const c of CONCEPTS) if ((c.action as string) === "renewal") c.action = "de
 
 type Hit = { action: Action; qualifier: string; object: string; phrase: string; index: number };
 
-function conceptHits(s: string): Hit[] {
+export function conceptHits(s: string): Hit[] {
   const hits: Hit[] = [];
   for (const c of CONCEPTS) {
     const m = c.re.exec(s);
@@ -247,6 +259,11 @@ function conceptHits(s: string): Hit[] {
         object = (m[g + 1] ?? "").trim();
         break;
       }
+    }
+    // "adjusters chased" / "adjuster follow-ups": the party is the object.
+    if (/^(?:chased|follow[- ]?ups?)$/i.test(object)) {
+      object = qualifier;
+      qualifier = "";
     }
     const phrase = normalizeWhitespace(`${qualifier} ${object}`).toLowerCase() || m[0].toLowerCase();
     if (hits.some((h) => h.action === c.action)) continue;
@@ -265,18 +282,20 @@ const PAIN_WORDS =
 const ITCH_Q = /\bitch\b|pain points?|eats? (?:up )?hours|spend(?:ing)? hours|repetitive|headache|biggest (?:problem|time)|walk me through your week|what(?:'s| is) (?:the|your) (?:biggest|main)/i;
 const INTRO = /^(?:and|also|oh,? and|plus|then|the other|another|the worst|the biggest|the big one|honestly|on top of that|the main|our biggest|my biggest|the last|last thing|lastly|finally|one more)\b/i;
 
+const WANT = /\bI'?d love\b|\bwould love\b|\bthat would (?:be huge|change)\b|\bif (?:she|he|we|I) had\b|\bI want\b|\bwe want\b/i;
+
 function painScore(s: string): number {
   const hours = hoursPerWeekIn(s);
   const money = moneyIn(s);
   const words = (s.match(PAIN_WORDS) ?? []).length;
-  return (hours ? 3 + Math.min(hours, 20) / 2 : 0) + (money ? 2 + Math.log10(Math.max(10, money.value)) / 2 : 0) + words * 1.5;
+  return (hours ? 3 + Math.min(hours, 20) / 2 : 0) + (money ? 2 + Math.log10(Math.max(10, money.value)) / 2 : 0) + words * 1.5 + (WANT.test(s) ? 2.5 : 0);
 }
 
 // ───────────────────────────────────────────── entities ─────────────────────────────────────────────
 
 const KNOWN_SYSTEMS = [
   "Salesforce", "HubSpot", "QuickBooks Online", "QuickBooks", "Xero", "NetSuite", "Sage Intacct", "FreshBooks", "Bill.com", "Gusto", "ADP", "Expensify",
-  "Hubdoc", "Dext", "Karbon", "TaxDome", "Canopy", "Excel", "Google Sheets", "Google Drive", "Dropbox", "Gmail", "Outlook", "Shopify", "Canva",
+  "Hubdoc", "Dext", "Karbon", "TaxDome", "Canopy", "Excel", "Google Sheets", "Google Sheet", "Google Drive", "Dropbox", "Gmail", "Outlook", "Shopify", "Canva",
   "Zapier", "ServiceTitan", "Housecall Pro", "Jobber", "Applied Epic", "EZLynx", "HawkSoft", "Dentrix", "Eaglesoft", "Open Dental", "Weave",
   "Clio", "Asana", "Trello", "Notion", "Airtable", "Stripe", "Square", "SAGE", "ESP", "commonsku", "DocuSign", "Calendly", "AppFolio", "Buildium",
   "Yardi", "Rent Manager", "Xactimate", "AccuLynx", "JobNimbus", "CompanyCam", "EagleView", "Procore", "Buildertrend", "CoConstruct", "Podium",
@@ -356,7 +375,7 @@ function listItems(s: string): string[] {
   return best.length >= 3 ? best.slice(0, 8) : [];
 }
 
-const TIME_RE = /\b(?:at|by|before|around|gets? in at|in the truck by|starts? at|huddle is at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/gi;
+const TIME_RE = /\b(?:at|by|before|around|gets? in at|(?:he'?s|she'?s|i'?m|is) in (?:at|by)|in the truck by|starts? at|huddle is at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/gi;
 
 function earliestMorningTime(s: string): { h: number; m: number } | null {
   let best: { h: number; m: number } | null = null;
@@ -383,12 +402,15 @@ function cadenceIn(text: string): Cadence | null {
   if (d) return { kind: "weekly", dow: dows.indexOf((d[1] ?? d[2]!.replace(/s$/, ""))) };
   if (/\bevery week\b|\bweekly\b|\beach week\b|\bonce a week\b/.test(t)) return { kind: "weekly", dow: 1 };
   if (/\bevery (?:morning|afternoon|day|evening|night|weekday)\b|\beach (?:morning|day)\b|\bdaily\b|\btomorrow'?s\b|\ba day\b/.test(t)) return { kind: "daily", days: /saturday|six days/.test(t) ? "1-6" : "1-5" };
+  const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const months = MONTHS.map((m, i) => (new RegExp(`\\b(?:in|across|through|and) ${m}\\b|\\b${m} and\\b`).test(t) ? i + 1 : 0)).filter(Boolean);
+  if (months.length) return { kind: "weekly", dow: 1, months };
   if (/\b(?:comes? in|come in|arrive|submit|texts? (?:us|our|at)|emails? us|when (?:a|an|the) [a-z]+ (?:calls|emails|texts|submits))\b/.test(t)) return { kind: "event", channel: /\btext/.test(t) ? "sms" : "email" };
   return null;
 }
 
 const APPROVAL_RULE =
-  /\bwithout (?:me|us|[A-Z][a-z]+(?: or (?:me|[A-Z][a-z]+))?) (?:seeing|reading|reviewing|approving|signing off|looking at|checking)|\bnothing (?:goes|gets sent|leaves)\b|\b(?:reviews?|approves?|signs? off on) (?:anything|everything|every)\b|\bsign[- ]off\b|\bneeds? (?:\w+ )?approval\b|\bwant(?:s)? approval\b|\bdon'?t want (?:the agent|anything|it|you)\b|\bbefore (?:it'?s|it is|anything is) sent\b/i;
+  /\bwithout (?:me|us|[A-Z][a-z]+(?: or (?:me|[A-Z][a-z]+))?) (?:seeing|reading|reviewing|approving|signing off|looking at|checking)|\bnothing (?:goes|gets sent|leaves)\b|\b(?:reviews?|approves?|signs? off on) (?:anything|everything|every)\b|\bsign[- ]off\b|\bneeds? (?:\w+ )?approval\b|\bwant(?:s)? approval\b|\bdon'?t want (?:the agent|anything|it|you)\b|\bbefore (?:it'?s|it is|anything is) sent\b|\bwithout (?:one of )?(?:the |my |our )?[a-z]+s? (?:approving|reviewing|signing off|seeing)\b/i;
 
 // ───────────────────────────────────────────── main ─────────────────────────────────────────────
 
@@ -398,15 +420,18 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   const labelled = turns.some((t) => t.speaker);
   const sentences: Sentence[] = [];
   let lastAgencyItch = false;
+  let lastQuestion: string | null = null;
   let idx = 0;
   turns.forEach((t, ti) => {
     if (t.agency) {
       lastAgencyItch = ITCH_Q.test(t.text);
+      lastQuestion = t.text;
       return;
     }
     for (const s of splitSentences(t.text)) {
       if (s.length < 3) continue;
-      sentences.push({ text: s, turn: ti, idx: idx++, speaker: t.speaker, afterItch: lastAgencyItch });
+      const asked = !!lastQuestion && /would you want|waiting for you|wish|magic wand|if you could|what would (?:help|change)|ideal/i.test(lastQuestion);
+      sentences.push({ text: s, turn: ti, idx: idx++, speaker: t.speaker, afterItch: lastAgencyItch, question: lastQuestion, asked });
     }
     lastAgencyItch = false;
   });
@@ -418,7 +443,8 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   }
   const speakerCounts = new Map<string, number>();
   for (const t of turns) if (t.speaker && !t.agency) speakerCounts.set(t.speaker, (speakerCounts.get(t.speaker) ?? 0) + 1);
-  const owner = [...speakerCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const attOwner = /\b([A-Z][a-z]+)(?: [A-Z][a-z]+)?\s*\((?:[^)]*\b)?(?:owner|founder|ceo|president)\b/i.exec(/\b(?:attendees|participants)\s*:\s*([^\n]+)/i.exec(raw)?.[1] ?? "")?.[1];
+  const owner = (attOwner && speakerCounts.has(attOwner) ? attOwner : null) ?? [...speakerCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
   // Walk the call; start topics where the owner introduces a task, attach what follows to the current topic.
   const topics: Topic[] = [];
@@ -446,10 +472,16 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     if (s.turn !== lastTurn) {
       lastTurn = s.turn;
       conceptSeenInTurn = false;
+      // "What goes in the close package?" — the answer belongs to the topic the question is about.
+      const asked = s.question ? conceptHits(s.question).map((h) => topics.find((t) => t.action === h.action)).find((t): t is Topic => !!t) : undefined;
+      if (asked) {
+        current = asked;
+        conceptSeenInTurn = true;
+      }
     }
     const isQuestion = /\?\s*$/.test(s.text);
     const hits = isQuestion ? [] : conceptHits(s.text);
-    const pain = painScore(s.text);
+    const pain = painScore(s.text) + (s.asked ? 3 : 0);
     const intro = INTRO.test(s.text) || /,\s*hands down\b/i.test(s.text) || s.text.split(/\s+/).length <= 5;
     let target: Topic | null = null;
     if (hits.length) {
@@ -463,14 +495,23 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
           for (const h of fresh) topics.push(newTopic(h, s));
           target = topics.find((t) => t.action === fresh[0]!.action) ?? null;
           // Several tasks in one breath ("scrape catalogs and create invoices"): each gets this sentence.
-          for (const h of fresh.slice(1)) attach(topics.find((t) => t.action === h.action)!, s, pain);
+          for (const h of fresh.slice(1)) attach(topics.find((t) => t.action === h.action)!, s, pain, hits.length > 1);
         } else if (existing[0]) target = existing[0];
       }
       conceptSeenInTurn = true;
     }
-    if (!target && current && current.first.turn <= s.turn && s.turn - lastTopicTurn(current) <= (labelled ? 4 : 1)) target = current;
+    // "The other thing is X." with no known task: start a topic named from the owner's own words.
+    if (!hits.length && !isQuestion && INTRO.test(s.text) && labelled) {
+      const np = /^(?:and|also|oh,? and|plus|then|the other (?:big )?(?:thing|one)(?: that [a-z ]+)?(?: is)?|another (?:thing|one)(?: is)?|the last thing(?: is)?|lastly|finally)\s*,?\s+(?:it'?s\s+)?(?:the |our |my )?([a-z0-9][a-z0-9' -]{2,40}?)(?=[.,!]|$| is | are | in | every | that )/i.exec(s.text)?.[1];
+      if (np && np.split(/\s+/).length <= 4 && !/^(?:it|that|this|them|those|we|i|they|you|no|nothing|everything|anything|yeah|so)\b/i.test(np)) {
+        const t = newTopic({ action: "manual", qualifier: "", object: np.toLowerCase(), phrase: np.toLowerCase(), index: 0 }, s);
+        topics.push(t);
+        target = t;
+      }
+    }
+    if (!target && current && (labelled ? s.turn - lastTopicTurn(current) <= 4 : s.idx - (current.sentences[current.sentences.length - 1]?.idx ?? -9) <= 1)) target = current;
     if (target) {
-      attach(target, s, pain);
+      attach(target, s, pain, hits.length > 1);
       current = target;
     }
   }
@@ -490,19 +531,19 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   function lastTopicTurn(t: Topic) {
     return t.sentences[t.sentences.length - 1]?.turn ?? t.first.turn;
   }
-  function attach(t: Topic, s: Sentence, pain: number) {
+  function attach(t: Topic, s: Sentence, pain: number, shared = false) {
     if (t.sentences.includes(s)) return;
     t.sentences.push(s);
     t.score += pain + (s.afterItch ? 4 : 0);
     const h = hoursPerWeekIn(s.text);
     if (h && (t.hoursPerWeek == null || h > t.hoursPerWeek)) t.hoursPerWeek = h;
     const mo = moneyIn(s.text);
-    if (mo && !APPROVAL_RULE.test(s.text) && !/\bover \$|\babove \$/i.test(s.text) && (t.money == null || mo.value > t.money)) {
+    if (mo && mo.value >= 1000 && !APPROVAL_RULE.test(s.text) && !/\b(?:over|above|more than|under) \$/i.test(s.text) && (t.money == null || mo.value > t.money)) {
       t.money = mo.value;
       t.moneyText = s.text;
     }
     for (const sys of systemsIn(s.text)) if (!t.systems.includes(sys)) t.systems.push(sys);
-    if (!t.items.length) t.items = listItems(s.text);
+    if (!t.items.length && !shared) t.items = listItems(s.text);
     if (APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d/i.test(s.text)) t.rules.push(s.text);
     const lead = /\b(\d+) days (?:out|before|ahead|in advance|prior|early)\b/i.exec(s.text);
     if (lead) t.leadDays = Number(lead[1]);
@@ -517,32 +558,45 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     if (t.first.afterItch) t.score += 6;
   }
   const ranked = topics
-    .filter((t) => t.score >= 2.5 && (t.hoursPerWeek || t.money || t.sentences.some((s) => (s.text.match(PAIN_WORDS) ?? []).length > 0) || t.first.afterItch))
+    .filter((t) => t.score >= 2 && (t.hoursPerWeek || t.money || t.sentences.some((s) => (s.text.match(PAIN_WORDS) ?? []).length > 0 || s.asked || WANT.test(s.text)) || t.first.afterItch))
     .sort((a, b) => b.score - a.score || a.first.idx - b.first.idx);
 
   const allText = sentences.map((s) => s.text);
   const people = peopleIn(allText);
+  const att = /\b(?:attendees|participants)\s*:\s*([^\n]+)/i.exec(raw)?.[1];
+  const agencyNames = new Set(turns.filter((t) => t.agency && t.speaker).map((t) => t.speaker!.split(" ")[0]!));
+  if (att) {
+    for (const m of att.matchAll(/([A-Z][a-z]+)(?: [A-Z][a-z]+)?\s*\(([^)]*)\)/g)) {
+      if (agencyNames.has(m[1]!)) continue;
+      const role = /\b(owner|founder|ceo|president|office manager|manager|partner|bookkeeper|coordinator|accountant|admin)\b/i.exec(m[2]!)?.[1]?.toLowerCase() ?? null;
+      if (role && !people.some((p) => p.name === m[1])) people.push({ name: m[1]!, role });
+    }
+  }
+  for (const sp of speakerCounts.keys()) if (!people.some((p) => p.name === sp)) people.push({ name: sp, role: null });
   if (owner && !people.some((p) => p.name === owner)) people.unshift({ name: owner, role: "owner" });
   else if (owner) people.find((p) => p.name === owner)!.role ??= "owner";
   const systems = [...new Set(sentences.flatMap((s) => systemsIn(s.text)))];
   const rules = [...new Set(sentences.filter((s) => APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d[\d,]*\b[^.]*\bapprov/i.test(s.text)).map((s) => s.text))];
 
   const joined = allText.join(" ");
-  const sms = /\btext(?:s|ing|ed)?\b(?! (?:file|box|field))|\bsms\b|\bweave\b|\bpodium\b/i.test(joined);
-  const slack = /\bslack\b/i.test(joined);
+  const sms = labelled
+    ? /\btext(?:s|ing|ed)?\b(?! (?:file|box|field))|\bsms\b|\bweave\b|\bpodium\b/i.test(joined)
+    : /\btext (?:it )?(?:to )?(?:me|us)\b|\balways text\b|\bprefer text/i.test(joined);
+  const slack = labelled ? /\bslack\b/i.test(joined) : /\b(?:our|my) slack\b|\bslack me\b/i.test(joined);
 
   // Who gets the morning output: the answer to "who should get…" or any "email her/text me" line.
   let recipient: Discovery["recipient"] = { name: null, channel: null, by: null };
-  const deliveryTurn = turns.findIndex((t, i) => t.agency && /who (?:should|gets?|wants?)|morning stuff|send (?:it|this) to|how do (?:you|your) .* (?:like|want) to hear/i.test(t.text) && !!turns[i + 1]);
+  const deliveryTurn = turns.findIndex((t, i) => t.agency && /who (?:should|gets?|wants?)|morning stuff|waiting for you|first thing in the morning|send (?:it|this) to|how do (?:you|your) .* (?:like|want) to hear/i.test(t.text) && !!turns[i + 1]);
   const deliverySents = sentences.filter((s) => (deliveryTurn >= 0 && s.turn === deliveryTurn + 1) || /\b(?:email|text|send) (?:it to )?(?:me|her|him|them)\b/i.test(s.text));
   if (deliverySents.length) {
     const txt = deliverySents.map((s) => s.text).join(" ");
+    const askedAt = deliveryTurn >= 0 ? earliestMorningTime(turns[deliveryTurn]!.text) : null;
     const named = people.find((p) => new RegExp(`\\b${p.name.replace(".", "\\.")}\\b`).test(txt) && p.name !== owner);
     const toMe = /\b(?:text|email|send) (?:it )?(?:to )?me\b/i.test(txt);
     recipient = {
       name: toMe ? owner : (named?.name ?? owner),
       channel: /\btext (?:it )?(?:to )?(?:me|her|him)\b/i.test(txt) ? "sms" : /\bemail (?:it )?(?:to )?(?:me|her|him)|outlook|gmail|inbox\b/i.test(txt) ? "email" : null,
-      by: earliestMorningTime(txt),
+      by: earliestMorningTime(txt) ?? askedAt,
     };
   }
 
@@ -560,7 +614,7 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     .filter((s) => /\b(?:i|we) (?:prefer|always|never|don'?t want|do not want|like to|want everything|need (?:it|them|everything))\b|\b(?:prefer|definitely) (?:texts?|emails?|calls?)\b|^(?:texts?|email)[,.]/i.test(s.text) && s.text.length < 300)
     .map((s) => s.text);
   const resale =
-    sentences.find((s) => /\bsell (?:this|it|that|the [\w\s-]{2,40}?) to (?:my |our |your |their )?(?:own )?(?:customers|clients|owners|members)|\bresell\b|\bpackage (?:this|it) up\b|\bpay (?:us )?extra for\b/i.test(s.text))?.text ?? null;
+    sentences.find((s) => /\bsell (?:this|it|that|the [\w\s-]{2,40}?) to (?:my |our |your |their )?(?:own )?(?:customers|clients|owners|members)|\bresell\b|\bpackage (?:this|it) up\b|\b(?:would )?pay (?:us )?(?:extra )?for (?:a|an|this|that)\b/i.test(s.text))?.text ?? null;
 
   return {
     owner,
@@ -570,6 +624,13 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     people: people.slice(0, 10),
     systems,
     rules,
+    guardrails: [
+      ...new Set(
+        sentences
+          .filter((s) => /^(?:and |but |also |oh,? and )?(?:never|always|don'?t ever|do not ever|under no circumstances|make sure|no one)\b|\b(?:you|the agent|it|we) (?:should|must|can) (?:never|not ever)\b|\bnot allowed to\b/i.test(s.text) && !/\?\s*$/.test(s.text) && s.text.length < 300)
+          .map((s) => s.text),
+      ),
+    ].slice(0, 8),
     channels: { sms, slack, email: true },
     recipient,
     compliance,

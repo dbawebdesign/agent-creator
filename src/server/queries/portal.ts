@@ -76,7 +76,12 @@ export function resolveBrand(chain: Org[]): PortalBrand {
     logoUrl: firstOf(fromProvider, (o) =>
       isSafeUrl(o.branding?.logoUrl) ? o.branding.logoUrl : null,
     ),
-    whiteLabel: chain.some((o) => o.branding?.whiteLabel === true),
+    // Clients see their agency's name, never ours: "Powered by Roster" is opt-in (branding.showPoweredBy).
+    whiteLabel: !chain.some(
+      (o) =>
+        (o.branding as { showPoweredBy?: unknown } | null)?.showPoweredBy ===
+        true,
+    ),
   };
 }
 

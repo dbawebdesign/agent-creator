@@ -15,7 +15,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { isOfflineModel } from "@/server/env";
 import { anthropicStructured } from "@/server/llm/anthropic";
 import { OFFLINE_MODEL } from "@/server/llm/offline";
-import { hoursPerWeekIn, moneyIn, quoteOf, readDiscovery, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
+import { conceptHits, hoursPerWeekIn, moneyIn, quoteOf, readDiscovery, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
 import { hash32, normalizeWhitespace, truncate } from "@/server/llm/text";
 import type { LlmUsage } from "@/server/llm/types";
 import { agentSpec, type AgentSpec, type WorkflowSpec } from "./spec";
@@ -192,7 +192,13 @@ export function runsPerWeek(trigger: WorkflowSpec["trigger"]): number {
   const parts = trigger.cron.trim().split(/\s+/);
   const [, hours = "0", dom = "*", , dow = "*"] = parts;
   const perDay = hours.includes(",") ? hours.split(",").length : 1;
-  if (dom !== "*") return Math.round((dom.split(",").length / 4.33) * 100) / 100;
+  if (dom !== "*") {
+    const days = dom.split(",").reduce((n, part) => {
+      const r = /^(\d+)-(\d+)$/.exec(part);
+      return n + (r ? Number(r[2]) - Number(r[1]) + 1 : 1);
+    }, 0);
+    return Math.round((days / 4.33) * 100) / 100;
+  }
   if (dow === "*") return 7 * perDay;
   if (/^\d-\d$/.test(dow)) {
     const [a, b] = dow.split("-").map(Number) as [number, number];
@@ -203,6 +209,7 @@ export function runsPerWeek(trigger: WorkflowSpec["trigger"]): number {
 
 // ── helpers ──
 
+const an = (w: string) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
 const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 const plural = (s: string) => (/s$/.test(s) ? s : /y$/.test(s) ? `${s.slice(0, -1)}ies` : `${s}s`);
 const singular = (s: string) => s.replace(/ies$/, "y").replace(/(?<!s)s$/, "");
@@ -214,7 +221,7 @@ const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? "st" : n % 10 =
 const clock = (h: number, m: number) => `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 
 /** Systems that hold records (not the portals/carriers the agent checks against). */
-const RECORD_SYSTEMS = /^(?:Dentrix|Eaglesoft|Open Dental|AppFolio|Buildium|Yardi|Rent Manager|QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|ServiceTitan|Housecall Pro|Jobber|Applied Epic|EZLynx|HawkSoft|Clio|Salesforce|HubSpot|AccuLynx|JobNimbus|Procore|Buildertrend|Karbon|TaxDome|Canopy|Shopify|Airtable|Google Sheets|Excel|commonsku|ESP|SAGE)$/;
+const RECORD_SYSTEMS = /^(?:Google Sheet|Dentrix|Eaglesoft|Open Dental|AppFolio|Buildium|Yardi|Rent Manager|QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|ServiceTitan|Housecall Pro|Jobber|Applied Epic|EZLynx|HawkSoft|Clio|Salesforce|HubSpot|AccuLynx|JobNimbus|Procore|Buildertrend|Karbon|TaxDome|Canopy|Shopify|Airtable|Google Sheets|Excel|commonsku|ESP|SAGE)$/;
 const MESSAGING_SYSTEMS = /^(?:Weave|Podium|Outlook|Gmail|Slack|Teams)$/;
 
 type Ctx = {
@@ -231,6 +238,8 @@ const checkSources = (t: Topic) => t.systems.filter((s) => !RECORD_SYSTEMS.test(
 const doerOf = (t: Topic, ctx: Ctx) => t.people.find((p) => p !== ctx.d.owner && !p.startsWith("Dr.")) ?? ctx.d.owner ?? "the owner";
 const messagingTool = (ctx: Ctx) => ctx.d.systems.find((s) => /^(?:Weave|Podium)$/.test(s)) ?? null;
 const audienceOf = (t: Topic, ctx: Ctx): string => {
+  const direct = /\b(?:to|for) (?:each |every |all |our |the )?(owners|clients|customers|patients|tenants|homeowners|members|buyers)\b/i.exec(t.first.text);
+  if (direct) return singular(direct[1]!.toLowerCase());
   const txt = t.sentences.map((s) => s.text).join(" ").toLowerCase();
   const m = /\b(?:each|every|all|our|the|those) (owner|client|customer|patient|tenant|homeowner|member|insured|buyer|adjuster)s?\b/.exec(txt) ?? /\b(owners|clients|customers|patients|tenants|homeowners|members|buyers)\b/.exec(txt);
   return m ? singular(m[1]!) : singular(ctx.vertical?.customers.split(" ")[0] ?? "customer");
@@ -243,11 +252,27 @@ const prefersText = (t: Topic, ctx: Ctx) => {
 };
 const rulesFor = (t: Topic, ctx: Ctx) => [...new Set([...t.rules, ...ctx.d.rules])].map((r) => quoteOf(r, 200));
 
-function cronFor(t: Topic, ctx: Ctx, fallback: Cadence): WorkflowSpec["trigger"] {
-  const c = t.cadence ?? fallback;
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function cronFor(t: Topic, ctx: Ctx, p: Play): WorkflowSpec["trigger"] {
+  if (p.manual?.(t)) return { type: "manual" };
+  let c = (p.fixed ? null : t.cadence) ?? p.cadence;
+  // Chasing that peaks at month end still runs daily, not once a month.
+  if (t.action === "chase" && (c.kind === "monthly" || c.kind === "event")) c = { kind: "daily", days: "1-5" };
   if (c.kind === "event") return { type: "event", event: c.channel === "sms" ? "sms.received" : "email.received" };
-  if (c.kind === "monthly") return { type: "schedule", cron: `0 6 ${c.day} * *`, label: `Monthly on the ${ordinal(c.day)} at 6:00 AM` };
-  if (c.kind === "weekly") return { type: "schedule", cron: `0 7 * * ${c.dow}`, label: `${DOW[c.dow]} at 7:00 AM` };
+  if (c.kind === "monthly") {
+    if (t.action === "close") return { type: "schedule", cron: "0 7 1-8 * *", label: "Daily on the 1st–8th of each month at 7:00 AM" };
+    return { type: "schedule", cron: `0 6 ${c.day} * *`, label: `Monthly on the ${ordinal(c.day)} at 6:00 AM` };
+  }
+  if (c.kind === "weekly") {
+    const months = c.months?.length ? c.months : null;
+    return {
+      type: "schedule",
+      cron: `0 7 * ${months ? months.join(",") : "*"} ${c.dow}`,
+      label: `${DOW[c.dow]} at 7:00 AM${months ? ` in ${listJoin(months.map((m) => MONTH_NAMES[m - 1]!))}` : ""}`,
+    };
+  }
+  if (p.at) return { type: "schedule", cron: `${p.at.m} ${p.at.h} * * ${c.days}`, label: `${c.days === "1-6" ? "Mon–Sat" : c.days === "*" ? "Every day" : "Weekdays"} at ${clock(p.at.h, p.at.m)}` };
   // Daily: land before the recipient starts their day ("Rosa gets in at 7:15" → 6:30).
   const by = ctx.d.recipient.by;
   let mins = by ? by.h * 60 + by.m - 45 : 6 * 60;
@@ -262,6 +287,11 @@ type Play = {
   role: (t: Topic, ctx: Ctx) => string;
   name: (t: Topic, ctx: Ctx) => string;
   cadence: Cadence;
+  /** Ignore cadence words in the call (event-driven by nature). */
+  fixed?: boolean;
+  /** Daily run time when it should not follow the morning recipient (e.g. review requests at 5 PM). */
+  at?: { h: number; m: number };
+  manual?: (t: Topic) => boolean;
   outputKind: (t: Topic, ctx: Ctx) => WorkflowSpec["outputKind"];
   tools: string[];
   /** Works inside the client's systems through the computer (gated by write_client_system). */
@@ -305,7 +335,7 @@ const PLAYS: Record<Action, Play> = {
         `Write the verified benefits into ${rec ? `the ${aud} notes in ${rec}` : "the record system"}; this changes a client system, so it waits for approval until ${who} says otherwise.`,
         `Deliver the verification sheet as a GFM table (${aud}, appointment time, carrier, status, remaining max, deductible, frequency flags, estimated ${aud} portion, action) to ${ctx.d.recipient.name ?? who}${ctx.d.recipient.by ? ` before ${clock(ctx.d.recipient.by.h, ctx.d.recipient.by.m)}` : " first thing"}, with problems at the top.`,
         `For each flagged ${aud}, draft the day-before ${prefersText(t, ctx) ? `text${messagingTool(ctx) ? ` (sent through ${messagingTool(ctx)})` : ""}` : "call script"} explaining what they will likely owe, or offering to reschedule.`,
-        approvalStep(t, ctx, `any message reaches a ${aud}`),
+        approvalStep(t, ctx, `any message reaches ${an(aud)}`),
       ];
     },
     knowledge: (t, ctx) => [
@@ -335,8 +365,14 @@ const PLAYS: Record<Action, Play> = {
     verb: (t) => `verifies ${t.qualifier || "insurance"} before every visit`,
   },
   chase: {
-    role: (t, ctx) => `${cap(audienceOf(t, ctx))} Follow-up Coordinator`,
-    name: (t) => `${cap(normalizeObject(t.phrase))} follow-up`,
+    role: (t, ctx) => (/claim/i.test(t.sentences.map((s) => s.text).join(" ")) && /adjuster|carrier/.test(t.phrase) ? "Claims Follow-up Coordinator" : `${cap(audienceOf(t, ctx))} Follow-up Coordinator`),
+    name: (t) => {
+      const txt = t.sentences.map((s) => s.text).join(" ");
+      if (/1099|w-?9/i.test(t.phrase)) return "W-9 collection & 1099 prep";
+      if (/adjuster|carrier|insurance compan/i.test(t.phrase)) return /claim/i.test(txt) ? "Stalled claims: adjuster follow-up" : "Adjuster follow-up";
+      const obj = normalizeObject(t.phrase);
+      return `${cap(obj.includes(" ") ? obj : singular(obj))} follow-up`;
+    },
     cadence: { kind: "weekly", dow: 1 },
     outputKind: () => "email_draft",
     tools: [...BASE, "send_message", "request_approval", "schedule_followup"],
@@ -347,7 +383,7 @@ const PLAYS: Record<Action, Play> = {
       const txt = prefersText(t, ctx);
       const via = txt ? `text${messagingTool(ctx) ? ` (through ${messagingTool(ctx)})` : ""}` : "email";
       return [
-        `Pull the list of ${normalizeObject(t.phrase)} from ${rec ? `${rec}${/report/i.test(t.sentences.map((s) => s.text).join(" ")) ? " (the report the team already runs)" : ""}` : "the knowledge base and memory"}: ${aud}, what is open, value, and last contact.`,
+        `Pull the list of ${/adjuster|carrier/.test(t.phrase) && /claim/i.test(t.sentences.map((s) => s.text).join(" ")) ? "stalled claims (no reply from the adjuster in 5+ days)" : normalizeObject(t.phrase)} from ${t.systems.filter((x) => RECORD_SYSTEMS.test(x)).length > 1 ? listJoin(t.systems.filter((x) => RECORD_SYSTEMS.test(x))) : rec ? `${rec}${/report/i.test(t.sentences.map((s) => s.text).join(" ")) ? " (the report the team already runs)" : ""}` : "the knowledge base and memory"}: ${aud}, what is open, value, and last contact.`,
         `Prioritize by value and age${t.money ? ` — about ${fmtMoney(t.money)} sits in this list today, so start with the largest items` : ""}; skip anyone contacted in the last 7 days.`,
         `Draft one short, personal ${via} per ${aud} that names exactly what is open and makes the next step easy (book a time, send the document, reply yes).`,
         approvalStep(t, ctx, `anything goes to a ${aud}`),
@@ -356,9 +392,9 @@ const PLAYS: Record<Action, Play> = {
       ];
     },
     knowledge: (t, ctx) => [{ title: `Export of open ${normalizeObject(t.phrase)}${recordSystem(t, ctx) ? ` from ${recordSystem(t, ctx)}` : ""}`, why: "The follow-up queue is built from it." }],
-    questions: (t, ctx) => [`How many touches should a ${audienceOf(t, ctx)} get before we stop, and from whose name and number should messages go?`],
+    questions: (t, ctx) => [`How many touches should ${an(audienceOf(t, ctx))} get before we stop, and from whose name and number should messages go?`],
     overnight: (t, ctx) => ({
-      title: `${cap(normalizeObject(t.phrase))}: follow-up queue and message drafts`,
+      title: `${PLAYS.chase.name(t, ctx).replace(/^Stalled claims: adjuster follow-up$/, "Stalled claims")} — today's queue and drafted ${prefersText(t, ctx) ? "texts" : "emails"}`,
       description: `Every open item ${ctx.org} mentioned, prioritized by value, with a message ready to approve${t.money ? ` — about ${fmtMoney(t.money)} is waiting in this list` : ""}.`,
       instructions: [
         "Using the discovery call and memory:",
@@ -367,23 +403,35 @@ const PLAYS: Record<Action, Play> = {
         `3. Say exactly which export you need to fill the real queue next run, and what needs a decision (who approves, how many touches).`,
       ].join("\n"),
     }),
-    resale: (t, ctx) => `Package the ${normalizeObject(t.phrase)} follow-up as a done-for-you service ${ctx.org} can offer peers in the same trade.`,
-    verb: (t) => `follows up on ${normalizeObject(t.phrase)}`,
+    resale: (t, ctx) => `Package the ${PLAYS.chase.name(t, ctx).toLowerCase()} as a done-for-you service ${ctx.org} can offer peers in the same trade.`,
+    verb: (t, ctx) => `handles ${PLAYS.chase.name(t, ctx).toLowerCase()}`,
   },
   report: {
     role: () => "Reporting Analyst",
     name: (t, ctx) => {
       const c = t.cadence;
-      const when = c?.kind === "monthly" ? "Monthly" : c?.kind === "weekly" ? (c.dow === 1 ? "Monday" : "Weekly") : c?.kind === "daily" ? "Daily" : "";
+      const when = /^(?:weekly|monthly|daily)$/.test(t.qualifier) ? cap(t.qualifier) : c?.kind === "monthly" ? "Monthly" : c?.kind === "weekly" ? (c.dow === 1 ? "Monday" : "Weekly") : c?.kind === "daily" ? "Daily" : "";
       const aud = audienceOf(t, ctx);
       const q = t.qualifier && !/^(?:monthly|weekly|daily|monday)$/.test(t.qualifier) ? t.qualifier : "";
-      return normalizeWhitespace(`${when} ${q !== aud ? `${aud} ` : ""}${q} reports`).replace(/^./, (x) => x.toUpperCase());
+      const noun = /update/.test(t.phrase) ? "updates" : /letter/.test(t.phrase) ? "letters" : /statement/.test(t.phrase) ? "statements" : /summar/.test(t.phrase) ? "summaries" : "reports";
+      return normalizeWhitespace(`${when} ${q !== aud ? `${aud} ` : ""}${q} ${noun}`).replace(/^./, (x) => x.toUpperCase());
     },
     cadence: { kind: "weekly", dow: 1 },
-    outputKind: () => "report",
+    outputKind: (t) => (/\btext/i.test(t.sentences.map((s) => s.text).join(" ")) ? "message" : "report"),
     tools: [...BASE, "send_message", "request_approval"],
     defaultHours: 2,
     steps: (t, ctx) => {
+      const aud0 = audienceOf(t, ctx);
+      if (/\btext/i.test(t.sentences.map((s) => s.text).join(" "))) {
+        const example = t.sentences.find((s) => /^something like/i.test(s.text))?.text;
+        return [
+          `Each week, list every open ${singular(audienceOf(t, ctx)) === aud0 ? aud0 : aud0} matter from ${recordSystem(t, ctx) ?? "the tracker"} with its current status, the last action we took and the next step.`,
+          `Write one short text per ${aud0}: where things stand, what we did this week, what happens next${example ? ` (the call's example: “${quoteOf(example.replace(/^something like,?\s*/i, ""), 160)}”)` : ""}.`,
+          `Keep it to facts we can see in the records; mark anything unknown instead of guessing.`,
+          `Deliver the batch to the portal as a GFM table (${aud0}, status, last action, next step, drafted text).`,
+          approvalStep(t, ctx, `the texts go out to ${plural(aud0)}`),
+        ];
+      }
       const rec = recordSystem(t, ctx);
       const aud = audienceOf(t, ctx);
       const items = t.items.length ? t.items : ["the key figures", "what changed since last period", "what needs attention"];
@@ -419,6 +467,7 @@ const PLAYS: Record<Action, Play> = {
     role: (t) => `${cap(t.qualifier || "Service")} Coordinator`,
     name: (t) => `${cap(t.qualifier || "Service")} request triage & dispatch`,
     cadence: { kind: "event", channel: "email" },
+    fixed: true,
     outputKind: () => "message",
     tools: [...BASE, "send_message", "request_approval", "schedule_followup"],
     defaultHours: 5,
@@ -458,6 +507,7 @@ const PLAYS: Record<Action, Play> = {
     role: () => "After-hours Coordinator",
     name: () => "After-hours emergency triage",
     cadence: { kind: "event", channel: "sms" },
+    fixed: true,
     outputKind: () => "message",
     tools: [...BASE, "send_message", "request_approval"],
     defaultHours: 2,
@@ -511,20 +561,24 @@ const PLAYS: Record<Action, Play> = {
     verb: (t) => `sends ${t.qualifier || ""} renewal offers on time`,
   },
   packet: {
-    role: (t) => (/claim|supplement/i.test(t.phrase) ? "Claims Coordinator" : "Paperwork Coordinator"),
-    name: (t) => (/claim|supplement/i.test(t.phrase) ? `${/insurance/i.test(t.phrase) || /insurance/i.test(t.first.text) ? "Insurance claim" : "Claim"} packets & supplements` : `${cap(t.phrase)} prep`),
-    cadence: { kind: "event", channel: "email" },
+    role: (t) => (/claim|supplement/i.test(t.sentences.map((s) => s.text).join(" ")) ? "Claims Coordinator" : "Paperwork Coordinator"),
+    name: (t) => {
+      const txt = t.sentences.map((s) => s.text).join(" ");
+      return /claim|supplement/i.test(txt) ? `${/insurance/i.test(txt) ? "Insurance claim" : "Claim"} packets & supplements` : `${cap(t.phrase)} prep`;
+    },
+    cadence: { kind: "daily", days: "1-5" },
+    fixed: true,
     outputKind: () => "document",
     tools: [...BASE, ...COMPUTER, "send_message", "request_approval", "schedule_followup"],
     computer: true,
     defaultHours: 4,
     steps: (t, ctx) => {
       const sys = t.systems.length ? t.systems : ctx.d.systems;
-      const items = t.items.length ? t.items : ["photos", "measurements", "the estimate", "the adjuster's scope"];
+      const missed = t.items.length ? t.items : null;
       return [
-        `When a job is ready for the claim, gather everything for it${sys.length ? ` from ${listJoin(sys.slice(0, 4))}` : ""}: ${listJoin(items)}.`,
+        `Each weekday morning, find jobs that are ready for a claim packet or have a new adjuster estimate, and gather everything for each one${sys.length ? ` from ${listJoin(sys.slice(0, 4))}` : ""}: photos, measurements, our estimate, signed paperwork and the adjuster's scope.`,
         "Check the packet against the carrier's checklist and list anything missing.",
-        "Compare our scope with the adjuster's line by line; draft a supplement for every item they left out, with the photo or measurement that supports it.",
+        `Compare our scope with the adjuster's line by line; draft a supplement for every item they left out${missed ? ` (the call names the usual misses: ${listJoin(missed)})` : ""}, with the photo or measurement that supports it.`,
         "Draft the cover email to the adjuster.",
         approvalStep(t, ctx, "anything is submitted to a carrier or adjuster"),
         "Track every open claim (submitted, days waiting, amount pending) and deliver a weekly GFM status table; schedule a follow-up for anything waiting more than 10 days.",
@@ -537,8 +591,8 @@ const PLAYS: Record<Action, Play> = {
       description: `The packet ${ctx.org} assembles by hand today, as a checklist and templates — plus a tracker for every open claim${t.money ? ` (the call mentioned ${fmtMoney(t.money)} at stake)` : ""}.`,
       instructions: [
         "Using the discovery call and memory:",
-        `1. Write the claim packet checklist (${listJoin(t.items.length ? t.items : ["photos", "measurements", "estimate", "scope"])}) as a GFM table: item, where it comes from, who provides it.`,
-        "2. Draft the supplement request template and the adjuster cover email.",
+        "1. Write the claim packet checklist as a GFM table: item, where it comes from (the systems named on the call), who provides it.",
+        `2. Draft the supplement request template${t.items.length ? ` with a line for each usual miss (${listJoin(t.items)})` : ""} and the adjuster cover email.`,
         "3. Lay out the open-claims tracker (job, carrier, submitted, days waiting, amount pending, next step).",
         "4. List what access you need to assemble the first real packet.",
       ].join("\n"),
@@ -586,6 +640,7 @@ const PLAYS: Record<Action, Play> = {
     role: () => "Quoting Specialist",
     name: (t, ctx) => (ctx.vertical?.id === "promo" || /presentation/i.test(t.sentences.map((s) => s.text).join(" ")) ? "Quote & product presentation builder" : "Quote builder"),
     cadence: { kind: "event", channel: "email" },
+    fixed: true,
     outputKind: () => "document",
     tools: [...BASE, "http_fetch", "send_message", "request_approval"],
     defaultHours: 8,
@@ -625,8 +680,15 @@ const PLAYS: Record<Action, Play> = {
   },
   entry: {
     role: (t) => (/migrat|switch|bring/i.test(t.phrase) ? "Data Migration Specialist" : "Data Entry Specialist"),
-    name: (t, ctx) => (/migrat|switch|bring|pulling records|fields/i.test(t.phrase) ? (ctx.vertical?.id === "insurance" ? "Overnight policy & insured data migration" : "Overnight data migration") : `Data entry into ${recordSystem(t, ctx) ?? "your system"}`),
+    name: (t, ctx) => {
+      if (/migrat|switch|bring|pulling records|fields/i.test(t.phrase)) return ctx.vertical?.id === "insurance" ? "Overnight policy & insured data migration" : "Overnight data migration";
+      const txt = t.sentences.map((s) => s.text).join(" ");
+      const obj = /\b(?:the|our|every|each)\s+((?:[a-z]+\s+)?(?:orders?|lists?|forms?|sheets?|logs?|requests?|timesheets?|records?|bills?|receipts?|purchase orders?))\b/i.exec(txt)?.[1];
+      const into = /\binto (?:the |our )?([a-z]+(?: [a-z]+)?? (?:website|portal|system|app|software))\b/i.exec(txt)?.[1] ?? recordSystem(t, ctx);
+      return obj ? `${cap(singular(obj.toLowerCase()))} entry${into ? ` into the ${into}` : ""}` : `Data entry into ${into ?? "your system"}`;
+    },
     cadence: { kind: "event", channel: "email" },
+    manual: (t) => /migrat|switch|bring|pulling records|fields/i.test(t.phrase),
     outputKind: () => "table",
     tools: [...BASE, ...COMPUTER, "request_approval"],
     computer: true,
@@ -693,6 +755,8 @@ const PLAYS: Record<Action, Play> = {
     role: () => "Reputation Manager",
     name: () => "Review requests & responses",
     cadence: { kind: "daily", days: "1-5" },
+    fixed: true,
+    at: { h: 17, m: 0 },
     outputKind: () => "email_draft",
     tools: [...BASE, "send_message", "request_approval"],
     defaultHours: 1,
@@ -715,6 +779,8 @@ const PLAYS: Record<Action, Play> = {
     role: () => "Catalog & Pricing Analyst",
     name: () => "Nightly catalog & pricing sync",
     cadence: { kind: "daily", days: "1-5" },
+    fixed: true,
+    at: { h: 2, m: 0 },
     outputKind: () => "table",
     tools: ["http_fetch", ...BASE],
     defaultHours: 5,
@@ -735,6 +801,7 @@ const PLAYS: Record<Action, Play> = {
     role: () => "Billing Coordinator",
     name: () => "Invoice prep & payment follow-up",
     cadence: { kind: "daily", days: "1-5" },
+    at: { h: 7, m: 0 },
     outputKind: () => "document",
     tools: [...BASE, "send_message", "request_approval"],
     defaultHours: 3,
@@ -791,8 +858,9 @@ const PLAYS: Record<Action, Play> = {
   },
 };
 
-/** "unscheduled treatment" / "receipts and missing documents" → readable object for names. */
+/** "unscheduled treatment" / "receipts and missing documents" → readable object; a party ("adjusters") → what waits on them. */
 function normalizeObject(phrase: string): string {
+  if (/^(?:adjusters?|carriers?|insurance compan(?:y|ies)|vendors?|subs?)$/.test(phrase)) return `open items waiting on ${plural(singular(phrase))}`;
   return phrase.replace(/\band\b/g, "&").replace(/\s+/g, " ").trim();
 }
 
@@ -820,6 +888,21 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
         })
       : raw;
   d.vertical = vertical?.label ?? null;
+  if (!labelled && vertical) {
+    // A task the speaker also describes for other businesses, never tied to this one, is theirs, not this client's.
+    const offTopic = new Set<Action>();
+    raw.sentences.forEach((s, i) => {
+      const vs = detectVerticals(`${raw.sentences[i - 1]?.text ?? ""} ${s.text} ${raw.sentences[i + 1]?.text ?? ""}`);
+      if (vs.size && !vs.has(vertical.id)) for (const h of conceptHits(s.text)) offTopic.add(h.action);
+    });
+    d.topics = d.topics.filter((t) => {
+      if (!offTopic.has(t.action)) return true;
+      return t.sentences.some((s) => {
+        const i = raw.sentences.findIndex((r) => r.text === s.text);
+        return detectVerticals(`${raw.sentences[i - 1]?.text ?? ""} ${s.text} ${raw.sentences[i + 1]?.text ?? ""}`).has(vertical.id);
+      });
+    });
+  }
 
   const approverNames = (() => {
     const r = d.rules.join(" ");
@@ -857,22 +940,34 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
 
   const workflows: WorkflowSpec[] = topics.map((t) => {
     const p = PLAYS[t.action];
-    const trigger = cronFor(t, ctx, p.cadence);
+    const trigger = cronFor(t, ctx, p);
     const stated = t.hoursPerWeek;
     // The agent drafts; a person still reviews — count ~80% of the stated time as saved.
     const weekly = stated ? stated * 0.8 : p.defaultHours;
     const perRun = Math.min(200, Math.max(0.25, Math.round((weekly / runsPerWeek(trigger)) * 4) / 4));
-    const evidence = [...t.sentences].sort((a, b) => painScore(b.text) - painScore(a.text))[0] ?? t.first;
-    const cost = [stated ? `about ${fmtHours(stated)} by hand today` : null, t.money && t.moneyText ? `${fmtMoney(t.money)} at stake (“${quoteOf(t.moneyText, 120)}”)` : null].filter(Boolean).join("; ");
+    const long = (x: { text: string }) => x.text.split(/\s+/).length > 6 && !d.rules.includes(x.text);
+    const named = t.sentences.filter((s) => long(s) && conceptHits(s.text).some((h) => h.action === t.action));
+    const costly = t.sentences.filter((s) => long(s) && (hoursPerWeekIn(s.text) || moneyIn(s.text)));
+    const pool = named.length ? named : costly.length ? costly : t.sentences.filter(long);
+    const evidence = [...pool].sort((a, b) => painScore(b.text) - painScore(a.text))[0] ?? t.first;
+    const cost = [
+      stated ? `about ${fmtHours(stated)} by hand today` : null,
+      t.money && t.moneyText ? (t.moneyText === evidence.text ? `${fmtMoney(t.money)} at stake` : `${fmtMoney(t.money)} at stake (“${quoteOf(t.moneyText, 120)}”)`) : null,
+    ]
+      .filter(Boolean)
+      .join("; ");
     const problem = truncate(`On the call: “${quoteOf(evidence.text, 260)}”${cost ? ` — ${cost}.` : ""}`, 600);
     const deliverTo: WorkflowSpec["deliverTo"] = ["portal"];
     const recipientChannel = ctx.d.recipient.channel ?? "email";
     if (t.action === "urgent" || (t.action === "schedule" && d.channels.sms)) deliverTo.push("sms");
     else deliverTo.push(recipientChannel === "sms" && d.channels.sms ? "sms" : "email");
+    const steps = p.steps(t, ctx);
+    const outbound = p.tools.includes("send_message");
+    if (outbound && d.guardrails.length) steps.push(`Hard rules from the call, in every draft: ${d.guardrails.map((g) => `“${quoteOf(g, 160)}”`).join(" ")}`);
     return {
       name: truncate(p.name(t, ctx), 80),
       problem,
-      instructions: truncate(p.steps(t, ctx).map((s, i) => `${i + 1}. ${s}`).join("\n"), 6000),
+      instructions: truncate(steps.map((s, i) => `${i + 1}. ${s}`).join("\n"), 6000),
       trigger,
       outputKind: p.outputKind(t, ctx),
       deliverTo: [...new Set(deliverTo)],
@@ -909,6 +1004,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   for (const p of d.people) seedMemories.push(`Person: ${p.name}${p.role ? ` (${p.role}${p.name === d.owner ? ", on the call" : ""})` : ""}.`);
   if (d.systems.length) seedMemories.push(`Systems and tools mentioned: ${d.systems.join(", ")}.`);
   for (const r of d.rules) seedMemories.push(`Approval rule from the call: “${quoteOf(r)}”`);
+  for (const g of d.guardrails) if (!d.rules.includes(g)) seedMemories.push(`Hard rule from the call: “${quoteOf(g)}”`);
   for (const pref of d.preferences) if (!d.rules.includes(pref)) seedMemories.push(`Preference from the call: “${quoteOf(pref)}”`);
   if (d.recipient.name) {
     seedMemories.push(
@@ -949,7 +1045,9 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     ...workflows.map((w) => `- **${w.name}** — ${triggerLabel(w.trigger)}. ${truncate(w.problem, 240)}`),
     "",
     "## Rules from the call",
-    ...(d.rules.length ? d.rules.map((r) => `- “${quoteOf(r, 220)}”`) : ["- Nothing leaves the business (emails, texts, changes in client systems) without approval."]),
+    ...([...new Set([...d.rules, ...d.guardrails])].length
+      ? [...new Set([...d.rules, ...d.guardrails])].map((r) => `- “${quoteOf(r, 220)}”`)
+      : ["- Nothing leaves the business (emails, texts, changes in client systems) without approval."]),
     "",
     "## How you work",
     "- Be proactive: deliver finished work (documents, GFM tables, drafts), not questions. If one detail is missing, make a sensible assumption, label it, and keep going.",

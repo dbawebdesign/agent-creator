@@ -17,7 +17,6 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
   const cost = margin.reduce((s, m) => s + m.costCents, 0);
   const revenue = margin.reduce((s, m) => s + m.priceCents, 0);
   const pctRaw = revenue ? ((revenue - cost) / revenue) * 100 : 0;
-  const pct = pctRaw >= 99 && pctRaw < 100 ? pctRaw.toFixed(2) : pctRaw.toFixed(1);
   const activeSubs = subs.filter((s) => s.sub.status !== "canceled");
   const subByOrg = new Map(activeSubs.map((s) => [s.orgSlug, s] as const));
 
@@ -38,7 +37,7 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
       <section aria-label="Totals" className="grid grid-cols-2 gap-y-6 rounded-xl border border-line bg-surface px-5 py-5 shadow-xs sm:grid-cols-4 sm:divide-x sm:divide-line sm:px-0">
         <Stat className="sm:px-6" label="Monthly recurring" value={money(mrrCents)} sub={`${activeSubs.length} subscription${activeSubs.length === 1 ? "" : "s"}`} />
         <Stat className="sm:px-6" label="AI & infra cost" value={money(cost)} sub="last 30 days" />
-        <Stat className="sm:px-6" label="Gross margin" value={`${pct}%`} sub={`${money(revenue - cost)} / mo`} />
+        <Stat className="sm:px-6" label="Gross margin" value={revenue ? pct(pctRaw) : "—"} sub={`${money(Math.round(revenue - cost))} / mo`} />
         <Stat className="sm:px-6" label="Plans on sale" value={plans.filter((p) => p.plan.active).length} sub={`${plans.length} total`} />
       </section>
 

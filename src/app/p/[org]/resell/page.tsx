@@ -77,7 +77,7 @@ export default async function ResellPage({
       >
         <div>
           <p className="text-[13px] font-medium text-ink-3">
-            Monthly revenue from your customers
+            Monthly from your customers, at list price
           </p>
           <p className="mt-1 text-[40px] leading-none font-semibold tracking-[-0.03em] text-ink tabular md:text-[48px]">
             {formatMoney(r.monthlyCents)}
@@ -87,13 +87,13 @@ export default async function ResellPage({
           </p>
           <p className="mt-3 text-[13.5px] text-ink-3">
             {r.monthlyCents > 0
-              ? `${formatMoney(yearly)} a year, from work your team already does.`
+              ? `${formatMoney(yearly)} a year at your prices. Billing isn’t connected yet, so collect payment the way you do today.`
               : "Your first customer turns your team into a revenue line."}
           </p>
         </div>
         <dl className="grid grid-cols-2 gap-6 border-t border-line pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
           <div>
-            <dt className="text-[12px] text-ink-3">Paying customers</dt>
+            <dt className="text-[12px] text-ink-3">Subscribed customers</dt>
             <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">
               {paying}
             </dd>

@@ -23,6 +23,7 @@ import {
   nextToReview,
 } from "@/server/queries/portal";
 import * as engine from "@/server/services/engine";
+import { testModeChannels } from "@/components/portal/test-mode";
 
 export async function generateMetadata({
   params,
@@ -77,6 +78,7 @@ export default async function DeliverablePage({
   const tz = p.org.timezone;
   const next = p.canAct ? await nextToReview(p.org.id, d.id) : null;
   const via = d.deliveredVia.length ? d.deliveredVia : ["portal" as const];
+  const testMode = testModeChannels();
   const status =
     d.status === "approved"
       ? { tone: "good" as const, label: "Approved" }
@@ -107,6 +109,9 @@ export default async function DeliverablePage({
             <span key={v} className="inline-flex items-center gap-1.5">
               <ChannelIcon channel={v} className="text-ink-3" />{" "}
               {CHANNEL_LABEL[v] ?? v}
+              {testMode.includes(v) ? (
+                <span className="text-ink-3"> (test mode)</span>
+              ) : null}
             </span>
           ))}
         </dd>
@@ -185,6 +190,9 @@ export default async function DeliverablePage({
                 : null
             }
             sendTo={d.sendTo}
+            sendTestMode={
+              Boolean(d.sendTo?.includes("@")) && testMode.includes("email")
+            }
             sentAt={d.sentAt ? whenLabel(d.sentAt, p.org.timezone) : null}
           />
 

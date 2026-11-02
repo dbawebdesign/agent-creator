@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Clock, FileText, Hourglass, Plus, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowRight, Clock, FileText, Hourglass, MessageSquareWarning, Plus, ShieldCheck, Sparkles } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
 import { getHome } from "@/server/queries/studio";
 import { AgentOrb } from "@/components/ui/agent-orb";
@@ -22,7 +22,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
   const base = `/a/${slug}`;
   const first = (user.name ?? "").split(/\s+/)[0];
   const today = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: org.timezone }).format(new Date());
-  const attention = home.approvals.length + home.failed.length + home.provisioning.length + home.waiting.length;
+  const attention = home.approvals.length + home.changes.length + home.failed.length + home.provisioning.length + home.waiting.length;
 
   if (home.counts.agents === 0) {
     return (
@@ -135,6 +135,25 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                   <div className="mt-3 flex justify-end">
                     <ApprovalActions agency={slug} approvalId={a.id} />
                   </div>
+                </li>
+              ))}
+              {home.changes.map((d) => (
+                <li key={d.id}>
+                  <Link href={`${base}/agents/${d.agentId}?d=${d.id}`} className="group block rounded-xl border border-warn/30 bg-surface p-4 shadow-xs transition-colors hover:border-warn/50">
+                    <div className="flex items-start gap-3">
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-warn-soft">
+                        <MessageSquareWarning className="size-4 text-warn" aria-hidden />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13.5px] font-medium text-ink">{d.orgName} asked for changes</p>
+                        <p className="truncate text-[12px] text-ink-3">
+                          {d.title} · {d.agentName} · <RelativeTime date={d.seenAt ?? d.createdAt} />
+                        </p>
+                        {d.feedback ? <p className="mt-2 line-clamp-3 border-l-2 border-warn/40 pl-2.5 text-[13px] leading-relaxed text-ink-2">“{d.feedback}”</p> : null}
+                      </div>
+                      <ArrowRight className="mt-1 size-3.5 shrink-0 text-ink-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+                    </div>
+                  </Link>
                 </li>
               ))}
               {home.failed.map((r) => (

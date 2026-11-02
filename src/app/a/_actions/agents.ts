@@ -7,7 +7,7 @@ import { complete as completeJob, fail as failJob } from "@/server/jobs/queue";
 import { logger } from "@/server/lib/logger";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { agentSpec, channelKind, type AgentSpec } from "@/server/agents/spec";
+import { agentSpec, APPROVAL_ACTIONS, channelKind, type AgentSpec } from "@/server/agents/spec";
 import { db, schema } from "@/server/db/client";
 import {
   addKnowledge,
@@ -149,7 +149,7 @@ const updateAgentInput = z.object({
   summary: z.string().trim().max(280),
   instructions: z.string().trim().min(20, "Instructions need at least a few sentences.").max(12000),
   voice: z.string().trim().max(400),
-  requireApprovalFor: z.array(z.string().max(60)).max(20),
+  requireApprovalFor: z.array(z.enum(APPROVAL_ACTIONS)).max(APPROVAL_ACTIONS.length).transform((l) => [...new Set(l)]),
 });
 
 export async function updateAgent(slug: string, agentId: string, raw: z.input<typeof updateAgentInput>): Promise<Result> {
@@ -312,6 +312,33 @@ export async function forgetMemory(slug: string, agentId: string, memoryId: stri
     await db()
       .delete(schema.memories)
       .where(and(eq(schema.memories.id, memoryId), eq(schema.memories.agentId, ctx.agent.id), eq(schema.memories.orgId, ctx.agent.orgId)));
+    revalidatePath(`/a/${slug}/agents/${agentId}/memory`);
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const editMemoryInput = z.object({
+  memoryId: z.uuid(),
+  kind: z.enum(["fact", "preference", "person", "episode"]),
+  content: z.string().trim().min(3, "Write the memory in a sentence.").max(2000),
+  importance: z.number().int().min(1).max(5),
+});
+
+/** Correct what the agent remembers: wrong facts from discovery must be fixable, not only forgettable. */
+export async function editMemory(slug: string, agentId: string, raw: z.input<typeof editMemoryInput>): Promise<Result> {
+  const parsed = editMemoryInput.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the memory" };
+  try {
+    const ctx = await studioAgent(slug, agentId, "member");
+    const { memoryId, kind, content, importance } = parsed.data;
+    const rows = await db()
+      .update(schema.memories)
+      .set({ kind, content, importance, source: "Edited by the agency" })
+      .where(and(eq(schema.memories.id, memoryId), eq(schema.memories.agentId, ctx.agent.id), eq(schema.memories.orgId, ctx.agent.orgId)))
+      .returning({ id: schema.memories.id });
+    if (!rows.length) return { ok: false, error: "Memory not found" };
     revalidatePath(`/a/${slug}/agents/${agentId}/memory`);
     return { ok: true };
   } catch (err) {

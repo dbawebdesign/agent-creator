@@ -386,7 +386,7 @@ export async function messageAgent(input: {
   channel: "portal" | "api" | "mcp";
   actor: Actor;
   wait?: boolean;
-}): Promise<{ conversationId: string; runId: string; reply?: string }> {
+}): Promise<{ conversationId: string; runId: string; reply?: string; deliverables: Array<{ id: string; title: string; preview: string | null }> }> {
   const i = parse(
     z.object({
       orgId: uuid,
@@ -437,7 +437,7 @@ export async function messageAgent(input: {
   const runInput = { kind: "message", messageId: msg!.id, text: i.text, channel: i.channel };
   if (!i.wait) {
     const runId = await queueRun(database, { orgId: i.orgId, agentId: agent.id, conversationId, trigger: i.channel === "portal" ? "message" : "api", input: runInput }, { priority: 20 });
-    return { conversationId, runId };
+    return { conversationId, runId, deliverables: [] };
   }
   // Inline: create the run plus a delayed safety-net job (a no-op if the inline run finishes).
   const runId = await queueRun(
@@ -446,7 +446,14 @@ export async function messageAgent(input: {
     { runAt: new Date(Date.now() + INLINE_DEADLINE_MS + 30_000), priority: 20 },
   );
   const outcome = await executeRun(database, runId, { orgId: i.orgId, limits: { deadlineMs: INLINE_DEADLINE_MS } });
-  return { conversationId, runId, reply: outcome.reply };
+  // Deliverables created during this run (for API / MCP callers that want the finished work, not just the reply).
+  const deliverables = outcome.deliverableIds.length
+    ? await database
+        .select({ id: schema.deliverables.id, title: schema.deliverables.title, preview: schema.deliverables.preview })
+        .from(schema.deliverables)
+        .where(and(eq(schema.deliverables.orgId, i.orgId), inArray(schema.deliverables.id, outcome.deliverableIds)))
+    : [];
+  return { conversationId, runId, reply: outcome.reply, deliverables };
 }
 
 /**
@@ -687,10 +694,17 @@ export async function reviewDeliverable(input: {
     case "archive":
       await database.update(schema.deliverables).set({ status: "archived" }).where(scope);
       break;
-    case "approve":
+    case "approve": {
       await database.update(schema.deliverables).set({ status: "approved", needsReview: false, seenAt: d.seenAt ?? new Date(), feedback: i.feedback ?? d.feedback }).where(scope);
       await triggerEvent({ orgId: i.orgId, agentId: d.agentId, event: "deliverable.approved", payload: { deliverableId: d.id }, dedupeKey: `approved:${d.id}` });
+      // Approving a revision (or the reworked original) closes the agency's "client asked for changes" alert.
+      const revisedFrom = d.runId
+        ? ((await database.select({ input: schema.runs.input }).from(schema.runs).where(and(eq(schema.runs.id, d.runId), eq(schema.runs.orgId, i.orgId))).limit(1))[0]?.input ?? null)
+        : null;
+      const originals = [d.id, ...(revisedFrom?.kind === "revision" && typeof revisedFrom.deliverableId === "string" ? [revisedFrom.deliverableId] : [])];
+      await resolveChangeRequests(database, i.orgId, originals, i.actor, d.id);
       break;
+    }
     case "request_changes": {
       if (!i.feedback) throw new EngineInputError("Feedback is required to request changes");
       await database.update(schema.deliverables).set({ status: "changes_requested", feedback: i.feedback, seenAt: d.seenAt ?? new Date() }).where(scope);
@@ -706,10 +720,59 @@ export async function reviewDeliverable(input: {
       if (agent.status === "active") {
         await queueRun(database, { orgId: i.orgId, agentId: d.agentId, workflowId: d.workflowId, trigger: "manual", input: { kind: "revision", deliverableId: d.id, feedback: i.feedback } }, { priority: 15 });
       }
+      await notifyAgencyOfChangeRequest(database, i.orgId, agent, d, i.feedback, i.actor);
       break;
     }
   }
   await audit({ orgId: i.orgId, ...actorAudit(i.actor), action: `deliverable.${i.action}`, targetType: "deliverable", targetId: d.id });
+}
+
+/** Agency owners/admins of the org that runs this client (falls back to an org-wide row when none are found). */
+async function agencyRecipients(database: DB, clientOrgId: string): Promise<{ agencyId: string; userIds: Array<string | null> } | null> {
+  const org = await getOrg(database, clientOrgId);
+  const agencyId = org.agencyId && org.agencyId !== org.id ? org.agencyId : null;
+  if (!agencyId) return null;
+  const rows = await database
+    .select({ userId: schema.memberships.userId })
+    .from(schema.memberships)
+    .where(and(eq(schema.memberships.orgId, agencyId), sql`${schema.memberships.role} in ('owner', 'admin')`));
+  return { agencyId, userIds: rows.length ? rows.map((r) => r.userId) : [null] };
+}
+
+const changesHref = (agentId: string, deliverableId: string) => `/agents/${agentId}/activity?deliverable=${deliverableId}`;
+
+async function notifyAgencyOfChangeRequest(database: DB, orgId: string, agent: { id: string; name: string }, d: { id: string; title: string }, feedback: string, actor: Actor) {
+  const to = await agencyRecipients(database, orgId);
+  const client = await getOrg(database, orgId);
+  if (to) {
+    await database.insert(schema.notifications).values(
+      to.userIds.map((userId) => ({
+        orgId: to.agencyId,
+        userId,
+        kind: "deliverable.changes_requested",
+        title: truncate(`${client.name} asked ${agent.name} for changes on “${truncate(d.title, 80)}”`, 200),
+        body: truncate(feedback, 280),
+        href: changesHref(agent.id, d.id),
+      })),
+    );
+    await audit({ orgId: to.agencyId, ...actorAudit(actor), action: "client.changes_requested", targetType: "deliverable", targetId: d.id, metadata: { clientOrgId: orgId, agentId: agent.id, feedback: truncate(feedback, 1000) } });
+  }
+}
+
+async function resolveChangeRequests(database: DB, orgId: string, deliverableIds: string[], actor: Actor, approvedId: string) {
+  const to = await agencyRecipients(database, orgId);
+  if (!to) return;
+  const d = (await database.select({ agentId: schema.deliverables.agentId }).from(schema.deliverables).where(and(eq(schema.deliverables.id, approvedId), eq(schema.deliverables.orgId, orgId))).limit(1))[0];
+  if (!d) return;
+  const hrefs = deliverableIds.map((id) => changesHref(d.agentId, id));
+  const resolved = await database
+    .update(schema.notifications)
+    .set({ readAt: new Date() })
+    .where(and(eq(schema.notifications.orgId, to.agencyId), eq(schema.notifications.kind, "deliverable.changes_requested"), isNull(schema.notifications.readAt), inArray(schema.notifications.href, hrefs)))
+    .returning({ id: schema.notifications.id });
+  if (resolved.length) {
+    await audit({ orgId: to.agencyId, ...actorAudit(actor), action: "client.changes_resolved", targetType: "deliverable", targetId: approvedId, metadata: { clientOrgId: orgId, resolvedFor: deliverableIds } });
+  }
 }
 
 // ───────────────────────────────────────────── knowledge & lifecycle ─────────────────────────────────────────────
@@ -854,7 +917,9 @@ export async function resellAgent(input: { orgId: string; agentId: string; custo
   const source = await getAgent(database, i.orgId, i.agentId);
   const customer = await getOrg(database, i.customerOrgId);
   if (customer.parentId !== i.orgId || customer.kind !== "customer") throw new EngineNotFoundError("Customer organization");
-  const spec = await specFromAgent(database, i.orgId, source.id);
+  const reseller = await getOrg(database, i.orgId);
+  // Re-target the clone at the customer: it works for them now; the reseller is credited as the provider.
+  const spec = retargetSpec(await specFromAgent(database, i.orgId, source.id), reseller.name, customer.name);
   const { agentId } = await hireAgent({ orgId: customer.id, spec, actor: i.actor, sourceAgentId: source.id, monthlyBudgetCents: source.config.monthlyBudgetCents });
 
   // Shared knowledge: the source agent's non-transcript sources (discovery calls stay private to the client).
@@ -876,6 +941,26 @@ export async function resellAgent(input: { orgId: string; agentId: string; custo
   }
   await audit({ orgId: i.orgId, ...actorAudit(i.actor), action: "agent.resold", targetType: "agent", targetId: source.id, metadata: { customerOrgId: customer.id, newAgentId: agentId } });
   return { agentId };
+}
+
+/** Replace the reseller's name with the customer's throughout a cloned spec; credit the reseller once. */
+export function retargetSpec(spec: AgentSpec, fromName: string, toName: string): AgentSpec {
+  const from = fromName.trim();
+  const swap = (t: string) => (from ? t.replace(new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), toName) : t);
+  const credit = `Provided to ${toName} by ${from}.`;
+  return agentSpec.parse({
+    ...spec,
+    summary: truncate(`${swap(spec.summary).replace(/\s*Provided to .* by .*\.$/, "")} ${credit}`.trim(), 280),
+    instructions: truncate(`You work for ${toName}. ${swap(spec.instructions)}\n\n(${credit})`, 12000),
+    workflows: spec.workflows.map((w) => ({ ...w, name: truncate(swap(w.name), 80), problem: truncate(swap(w.problem), 600), instructions: truncate(swap(w.instructions), 6000) })),
+    firstDeliverable: {
+      title: truncate(swap(spec.firstDeliverable.title), 120),
+      description: truncate(swap(spec.firstDeliverable.description), 600),
+      instructions: truncate(swap(spec.firstDeliverable.instructions), 4000),
+    },
+    seedMemories: spec.seedMemories.map(swap),
+    openQuestions: spec.openQuestions.map(swap),
+  });
 }
 
 export { LlmError };

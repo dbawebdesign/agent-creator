@@ -2,7 +2,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function Loading() {
   return (
-    <div className="mx-auto w-full max-w-[1040px] px-4 pt-5 md:px-6 md:pt-8" aria-busy="true" aria-label="Loading">
+    <div
+      className="mx-auto w-full max-w-[1040px] px-4 pt-5 md:px-6 md:pt-8"
+      aria-busy="true"
+      aria-label="Loading"
+    >
       <Skeleton className="h-8 w-20" />
       <div className="mt-6 flex items-center gap-4">
         <Skeleton className="size-14 rounded-full" />

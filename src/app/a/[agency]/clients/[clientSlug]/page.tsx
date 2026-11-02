@@ -43,7 +43,7 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
             <ClientStatus status={org.status === "active" && !active ? "no plan" : org.status} />
           </div>
           <p className="mt-0.5 text-[14px] text-ink-3">
-            {[org.industry, org.website?.replace(/^https?:\/\//, "").replace(/\/$/, ""), customers.length ? `${customers.length} resale customer${customers.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Client"}
+            {[org.industry, org.website?.replace(/^https?:\/\//, "").replace(/\/$/, ""), tzLabel(org.timezone), customers.length ? `${customers.length} resale customer${customers.length === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Client"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -166,4 +166,16 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
       </div>
     </div>
   );
+}
+
+/** "Central time · 2:14 PM" — the client's timezone, as a person would say it. */
+function tzLabel(tz: string) {
+  try {
+    const now = new Date();
+    const name = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "long" }).formatToParts(now).find((p) => p.type === "timeZoneName")?.value;
+    const time = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(now);
+    return `${(name ?? tz).replace(/ (Standard|Daylight) Time$/, " time")} · ${time} there`;
+  } catch {
+    return tz;
+  }
 }

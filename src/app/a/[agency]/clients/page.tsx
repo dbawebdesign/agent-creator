@@ -32,7 +32,7 @@ export default async function ClientsPage({ params }: { params: Promise<{ agency
           </p>
         </div>
         <Suspense>
-          <NewClientButton agency={slug} plans={planOpts} />
+          <NewClientButton agency={slug} plans={planOpts} defaultTimezone={org.timezone} />
         </Suspense>
       </header>
 

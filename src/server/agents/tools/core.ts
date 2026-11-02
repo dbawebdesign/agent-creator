@@ -99,7 +99,7 @@ export const createDeliverable = defineTool({
       return ok({ delivered: true, deliverableId: dupe[0].id, duplicate: true });
     }
     const kind = input.kind ?? (ctx.workflow?.outputKind && (DELIVERABLE_KINDS as readonly string[]).includes(ctx.workflow.outputKind) ? (ctx.workflow.outputKind as (typeof DELIVERABLE_KINDS)[number]) : "report");
-    const hoursSaved = ctx.state.deliverableIds.length === 0 ? (ctx.workflow?.hoursSavedPerRun ?? Number(run.input?.hoursSaved ?? 0) ?? 0) : 0;
+    const hoursSaved = hoursCreditFor(run, ctx.workflow, ctx.state.deliverableIds.length);
     const draft: DeliverableDraft = {
       id,
       title: input.title,
@@ -124,6 +124,23 @@ export const createDeliverable = defineTool({
     return ok({ delivered: true, deliverableId: out.id, channels: ["portal", ...out.channels] });
   },
 });
+
+/**
+ * Hours saved are credited once per piece of real recurring work: the first new deliverable of a scheduled or
+ * event-triggered workflow run, or of the setup (first overnight) run. Manual re-runs, revisions, follow-ups and
+ * chat requests add 0, so "Run now" and "request changes" can't inflate the number.
+ */
+export function hoursCreditFor(run: ToolContext["run"], workflow: ToolContext["workflow"], deliverablesSoFar: number): number {
+  if (deliverablesSoFar > 0) return 0;
+  const kind = typeof run.input?.kind === "string" ? run.input.kind : "workflow";
+  if (kind === "revision" || kind === "followup" || kind === "message") return 0;
+  if (run.trigger === "setup") {
+    const h = Number(run.input?.hoursSaved ?? 0);
+    return Number.isFinite(h) && h > 0 ? h : 0;
+  }
+  if (run.trigger !== "schedule" && run.trigger !== "event") return 0;
+  return workflow?.hoursSavedPerRun ?? 0;
+}
 
 export type DeliverableDraft = {
   id: string;

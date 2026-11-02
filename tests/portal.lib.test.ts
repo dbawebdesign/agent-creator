@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { feedBucket, greeting, hoursPhrase, humanizeCron, humanizeTrigger } from "@/components/portal/lib";
-import { softBreaks } from "@/components/portal/markdown";
+import {
+  feedBucket,
+  greeting,
+  hoursPhrase,
+  humanizeCron,
+  humanizeTrigger,
+} from "@/components/portal/lib";
+import { dropLeadingTitle, softBreaks } from "@/components/portal/markdown";
+import {
+  brandVars,
+  contrast,
+  readableOn,
+} from "@/components/portal/brand-color";
 import { resolveBrand } from "@/server/queries/portal";
 import type { Org } from "@/server/auth/access";
 
@@ -17,7 +28,9 @@ describe("portal: plain-English schedules", () => {
   ])("%s → %s", (cron, words) => expect(humanizeCron(cron)).toBe(words));
 
   it("describes events and manual triggers", () => {
-    expect(humanizeTrigger({ type: "event", event: "email.received" })).toBe("whenever an email comes in");
+    expect(humanizeTrigger({ type: "event", event: "email.received" })).toBe(
+      "whenever an email comes in",
+    );
     expect(humanizeTrigger({ type: "manual" })).toBe("whenever you ask");
   });
 });
@@ -30,8 +43,12 @@ describe("portal: time words", () => {
   });
   it("buckets the feed", () => {
     const now = new Date("2026-11-02T15:00:00Z");
-    expect(feedBucket(new Date("2026-11-02T12:00:00Z"), "America/New_York", now)).toBe("This morning");
-    expect(feedBucket(new Date("2026-11-01T12:00:00Z"), "America/New_York", now)).toBe("Yesterday");
+    expect(
+      feedBucket(new Date("2026-11-02T12:00:00Z"), "America/New_York", now),
+    ).toBe("This morning");
+    expect(
+      feedBucket(new Date("2026-11-01T12:00:00Z"), "America/New_York", now),
+    ).toBe("Yesterday");
   });
   it("rounds hours saved", () => {
     expect(hoursPhrase(0.4)).toBe("about 25 minutes");
@@ -51,21 +68,103 @@ describe("portal: markdown soft breaks", () => {
 
 describe("portal: branding cascade", () => {
   const org = (o: Partial<Org>): Org =>
-    ({ id: "x", parentId: null, agencyId: null, kind: "client", name: "Org", slug: "org", industry: null, website: null, timezone: "UTC", branding: {}, customDomain: null, status: "active", settings: {}, createdAt: new Date(), updatedAt: new Date(), deletedAt: null, ...o }) as Org;
-  const agency = org({ kind: "agency", name: "Northbeam AI", branding: { accent: "#4f46e5", displayName: "Northbeam", whiteLabel: true } });
-  const client = org({ kind: "client", name: "Brandlord", branding: { accent: "#e11d48" } });
-  const customer = org({ kind: "customer", name: "Four Corners", branding: {} });
+    ({
+      id: "x",
+      parentId: null,
+      agencyId: null,
+      kind: "client",
+      name: "Org",
+      slug: "org",
+      industry: null,
+      website: null,
+      timezone: "UTC",
+      branding: {},
+      customDomain: null,
+      status: "active",
+      settings: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+      ...o,
+    }) as Org;
+  const agency = org({
+    kind: "agency",
+    name: "Northbeam AI",
+    branding: { accent: "#4f46e5", displayName: "Northbeam", whiteLabel: true },
+  });
+  const client = org({
+    kind: "client",
+    name: "Brandlord",
+    branding: { accent: "#e11d48" },
+  });
+  const customer = org({
+    kind: "customer",
+    name: "Four Corners",
+    branding: {},
+  });
 
   it("customers see their provider's brand", () => {
     const b = resolveBrand([customer, client, agency]);
-    expect(b).toMatchObject({ name: "Brandlord", accent: "#e11d48", whiteLabel: true });
+    expect(b).toMatchObject({
+      name: "Brandlord",
+      accent: "#e11d48",
+      whiteLabel: true,
+    });
+  });
+  it("hides Powered by Roster unless an org opts in", () => {
+    expect(resolveBrand([client]).whiteLabel).toBe(true);
+    const shown = org({
+      kind: "agency",
+      branding: { showPoweredBy: true } as Org["branding"],
+    });
+    expect(resolveBrand([client, shown]).whiteLabel).toBe(false);
   });
   it("falls back field by field to the agency", () => {
-    expect(resolveBrand([org({ name: "Harbor" }), agency])).toMatchObject({ name: "Harbor", accent: "#4f46e5" });
+    expect(resolveBrand([org({ name: "Harbor" }), agency])).toMatchObject({
+      name: "Harbor",
+      accent: "#4f46e5",
+    });
   });
   it("ignores unsafe values", () => {
-    const b = resolveBrand([org({ branding: { accent: "red;}", logoUrl: "javascript:alert(1)" } })]);
+    const b = resolveBrand([
+      org({ branding: { accent: "red;}", logoUrl: "javascript:alert(1)" } }),
+    ]);
     expect(b.accent).toBeNull();
     expect(b.logoUrl).toBeNull();
+  });
+});
+
+describe("dropLeadingTitle", () => {
+  it("drops a heading that restates the title, in any order", () => {
+    const md = "## November social pack · Four Corners Coffee\n\nTwelve posts.";
+    expect(dropLeadingTitle(md, "Four Corners — November social pack")).toBe(
+      "Twelve posts.",
+    );
+    expect(
+      dropLeadingTitle("# Your Monday briefing\nHi", "Your Monday briefing"),
+    ).toBe("Hi");
+  });
+  it("keeps headings that say something else", () => {
+    const md = "## Highlights\n\nText";
+    expect(dropLeadingTitle(md, "Four Corners — November social pack")).toBe(
+      md,
+    );
+    expect(
+      dropLeadingTitle("Plain start\n## Four Corners", "Four Corners"),
+    ).toBe("Plain start\n## Four Corners");
+  });
+});
+
+describe("brand colours", () => {
+  it("keeps accent text readable for light brand colours", () => {
+    const amber = readableOn("#f5b301", "#f2f2ef", "black");
+    expect(contrast(amber, "#f2f2ef")).toBeGreaterThanOrEqual(4.5);
+    const navy = readableOn("#1e3a8a", "#1e1e22", "white");
+    expect(contrast(navy, "#1e1e22")).toBeGreaterThanOrEqual(4.5);
+  });
+  it("emits only hex values", () => {
+    expect(brandVars("#e11d48")).toMatch(
+      /^:root\{--brand:#e11d48;--brand-ink:#[0-9a-f]{6};--brand-text:#[0-9a-f]{6};--brand-text-dark:#[0-9a-f]{6}\}$/,
+    );
   });
 });

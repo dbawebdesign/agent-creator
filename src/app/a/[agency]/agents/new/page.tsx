@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import type { AgentSpec } from "@/server/agents/spec";
 import { agentSpec } from "@/server/agents/spec";
 import { requireOrg } from "@/server/auth/access";
@@ -20,7 +20,16 @@ export default async function NewAgentPage({
   const [{ agency: slug }, sp] = await Promise.all([params, searchParams]);
   const { org: agency } = await requireOrg(slug, "member");
   const orgs = await agencyOrgs(agency.id);
-  const clients = orgs.filter((o) => o.kind === "client").map((o) => ({ id: o.id, name: o.name, slug: o.slug }));
+  const clientOrgs = orgs.filter((o) => o.kind === "client");
+  const subs = clientOrgs.length
+    ? await db()
+        .select({ orgId: schema.subscriptions.orgId, priceCents: schema.plans.priceCents, planName: schema.plans.name })
+        .from(schema.subscriptions)
+        .innerJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId))
+        .where(and(inArray(schema.subscriptions.orgId, clientOrgs.map((o) => o.id)), eq(schema.plans.orgId, agency.id), ne(schema.subscriptions.status, "canceled")))
+    : [];
+  const priceFor = new Map(subs.map((x) => [x.orgId, `${money(x.priceCents)} / mo · ${x.planName}`] as const));
+  const clients = clientOrgs.map((o) => ({ id: o.id, name: o.name, slug: o.slug, price: priceFor.get(o.id) ?? null }));
 
   let resume: { discoveryId: string; clientId: string; clientName: string; transcript: string; proposal: AgentSpec | null } | null = null;
   if (sp.d) {
@@ -56,7 +65,7 @@ export default async function NewAgentPage({
         initialClientId={initialClientId}
         resume={resume}
         blueprint={blueprint}
-        priceLabel={plan ? `${money(plan.priceCents)} / mo flat` : null}
+        priceLabel={plan ? `${money(plan.priceCents)} / mo · default plan` : null}
       />
     </div>
   );

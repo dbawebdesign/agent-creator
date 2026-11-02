@@ -22,6 +22,20 @@ const clientInput = z.object({
   industry: z.string().trim().max(80).optional(),
   website: z.string().trim().max(200).optional(),
   planId: uuid.optional().or(z.literal("")),
+  timezone: z
+    .string()
+    .trim()
+    .max(64)
+    .refine((tz) => {
+      if (!tz) return true;
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, "Pick a timezone from the list")
+    .optional(),
 });
 
 export async function createClient(slug: string, raw: z.input<typeof clientInput>): Promise<Result<{ id: string; slug: string }>> {

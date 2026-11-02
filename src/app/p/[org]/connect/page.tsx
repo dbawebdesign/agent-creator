@@ -5,8 +5,8 @@ import { ConnectKeys } from "@/components/portal/connect-keys";
 import { CopyField } from "@/components/portal/copy";
 import { SlackMark } from "@/components/portal/icons";
 import { getConnect, getPortal } from "@/server/queries/portal";
-import { env } from "@/server/env";
 import { timeAgo } from "@/lib/utils";
+import { providerStatus } from "@/server/channels/service";
 
 export const metadata = { title: "Connect" };
 
@@ -79,7 +79,7 @@ export default async function ConnectPage({
     }
   }
   const withPhone = c.agents.filter((a) => a.phone);
-  const slackReady = Boolean(env().SLACK_CLIENT_ID);
+  const slackReady = providerStatus().slack;
   const provider = p.org.kind === "customer" ? p.brand.name : "your provider";
   const first = c.agents[0]?.name ?? "your team";
 
@@ -185,23 +185,12 @@ export default async function ConnectPage({
               <SlackMark /> Add to Slack
             </a>
           ) : (
-            <div className="flex flex-wrap items-center gap-3">
-              <span
-                className={buttonClass(
-                  "secondary",
-                  "lg",
-                  "pointer-events-none gap-2.5 opacity-60",
-                )}
-                aria-disabled
-              >
-                <SlackMark /> Add to Slack
-              </span>
-              <span className="text-[13px] text-ink-3">
-                {p.isAdmin
-                  ? `Ask ${provider} to switch on Slack for your workspace.`
-                  : "A workspace admin can add your team to Slack."}
-              </span>
-            </div>
+            // No dead buttons: say who can switch it on.
+            <p className="rounded-lg bg-surface-2/70 px-3.5 py-3 text-[13px] text-ink-3">
+              {!slackReady
+                ? `Slack isn’t switched on yet. Ask ${p.org.kind === "customer" ? provider : "your agency"} to enable Slack.`
+                : "A workspace admin can add your team to Slack."}
+            </p>
           )}
         </Section>
 

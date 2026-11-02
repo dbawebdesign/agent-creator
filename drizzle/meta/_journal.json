@@ -15,6 +15,20 @@
       "when": 1793595882364,
       "tag": "0001_engine_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793596820730,
+      "tag": "0002_files",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793596857540,
+      "tag": "0003_billing",
+      "breakpoints": true
     }
   ]
 }

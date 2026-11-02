@@ -17,7 +17,7 @@ import { fromDraft, ProposalReview, toDraft, type Draft } from "./proposal";
 import { Provisioning } from "./provisioning";
 import { SAMPLE_TRANSCRIPT } from "./sample";
 
-type Client = { id: string; name: string; slug: string };
+type Client = { id: string; name: string; slug: string; price?: string | null };
 type Phase = "compose" | "reading" | "review" | "hiring";
 
 export function NewAgentFlow({
@@ -223,7 +223,7 @@ export function NewAgentFlow({
           clientName={clientName === "the client" ? "your client" : clientName}
           onHire={() => void doHire()}
           hiring={hiring}
-          priceLabel={priceLabel}
+          priceLabel={clients.find((c) => c.id === (resolvedClient?.id ?? clientId))?.price ?? priceLabel}
           onStartOver={() => {
             setDraftState(null);
             setDiscoveryId(null);
@@ -360,7 +360,7 @@ export function NewAgentFlow({
             <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
             <Kbd>↵</Kbd>
           </span>
-          <Button variant="primary" size="lg" onClick={begin} disabled={starting} aria-disabled={!canStart || undefined} className={cn(!canStart && "opacity-60")}>
+          <Button variant="primary" size="lg" onClick={begin} disabled={starting}>
             {starting ? <span className="size-3.5 animate-spin rounded-full border-2 border-canvas/30 border-t-canvas" /> : null}
             Read the call
           </Button>

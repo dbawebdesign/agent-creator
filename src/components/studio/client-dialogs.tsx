@@ -8,13 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Select } from "@/components/ui/field";
 import { createClient, inviteClientOwner, setClientPlan } from "@/app/a/_actions/org";
+import { isTimezone, TimezoneField } from "./timezone-field";
 
-export function NewClientButton({ agency, plans }: { agency: string; plans: { id: string; name: string; price: string }[] }) {
+export function NewClientButton({ agency, plans, defaultTimezone = "America/New_York" }: { agency: string; plans: { id: string; name: string; price: string }[]; defaultTimezone?: string }) {
   const sp = useSearchParams();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
-  const [form, setForm] = useState({ name: "", industry: "", website: "", planId: plans[0]?.id ?? "" });
+  const [form, setForm] = useState({ name: "", industry: "", website: "", planId: plans[0]?.id ?? "", timezone: defaultTimezone });
   useEffect(() => {
     if (sp.get("new") === "1") setOpen(true);
   }, [sp]);
@@ -54,6 +55,9 @@ export function NewClientButton({ agency, plans }: { agency: string; plans: { id
               <Input id="c-web" value={form.website} onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))} placeholder="brandlord.co" />
             </Field>
           </div>
+          <Field label="Timezone" htmlFor="c-tz">
+            <TimezoneField id="c-tz" value={form.timezone} onChange={(v) => setForm((f) => ({ ...f, timezone: v }))} />
+          </Field>
           <Field label="Plan" htmlFor="c-plan">
             <Select id="c-plan" value={form.planId} onChange={(e) => setForm((f) => ({ ...f, planId: e.target.value }))}>
               <option value="">No plan yet</option>
@@ -68,7 +72,7 @@ export function NewClientButton({ agency, plans }: { agency: string; plans: { id
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={pending || form.name.trim().length < 2}>
+            <Button type="submit" variant="primary" disabled={pending || form.name.trim().length < 2 || !isTimezone(form.timezone)}>
               {pending ? "Adding…" : "Add client"}
             </Button>
           </div>

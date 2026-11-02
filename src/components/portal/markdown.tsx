@@ -28,14 +28,24 @@ const norm = (t: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 
-/** Agents often open with the same heading the page already shows as its title. Drop that repeat. */
+/**
+ * Agents often open with the same heading the page already shows as its title ("November social pack ·
+ * Four Corners Coffee" under "Four Corners — November social pack"). Drop that repeat, by word overlap.
+ */
 export function dropLeadingTitle(md: string, title?: string): string {
   if (!title) return md;
   const m = md.match(/^\s*#{1,3}\s+(.+?)\s*#*\s*(?:\n|$)/);
   if (!m) return md;
-  const h = norm((m[1] ?? "").replace(/[*_`]/g, ""));
-  const t = norm(title);
-  if (!h || (h !== t && !t.endsWith(h) && !h.endsWith(t))) return md;
+  const words = (t: string) => new Set(norm(t).split(" ").filter(Boolean));
+  const hw = words((m[1] ?? "").replace(/[*_`]/g, ""));
+  const tw = words(title);
+  if (!hw.size || !tw.size) return md;
+  const inTitle = [...hw].filter((w) => tw.has(w)).length;
+  const titleCovered =
+    [...tw].every((w) => hw.has(w)) && hw.size - inTitle <= 2;
+  const restates =
+    inTitle === hw.size && hw.size >= Math.max(2, Math.ceil(tw.size * 0.6));
+  if (!titleCovered && !restates) return md;
   return md.slice(m[0].length).replace(/^\s+/, "");
 }
 

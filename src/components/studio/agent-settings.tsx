@@ -10,14 +10,27 @@ import { Field, Input, Textarea } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { changeAgentStatus, updateAgent } from "@/app/a/_actions/agents";
 import { SaveBlueprintDialog } from "./agent-dialogs";
+import { APPROVAL_ACTIONS, DEFAULT_APPROVALS, type ApprovalAction } from "@/server/agents/spec";
 
-const APPROVALS = [
-  { id: "send_external_email", label: "Sending email outside the company" },
-  { id: "send_sms", label: "Sending text messages" },
-  { id: "spend_money", label: "Spending money or placing orders" },
-  { id: "post_publicly", label: "Posting publicly" },
-  { id: "delete_data", label: "Deleting records" },
+/** Exactly the actions the runtime enforces (APPROVAL_ACTIONS), in plain words. */
+const APPROVALS: { id: ApprovalAction; label: string; hint: string }[] = [
+  { id: "send_external_email", label: "Emailing anyone outside the business", hint: "Drafts wait for a yes before they’re sent." },
+  { id: "send_external_sms", label: "Sending text messages", hint: "Texts to customers or vendors." },
+  { id: "send_external_slack", label: "Posting in Slack", hint: "Messages to shared or external channels." },
+  { id: "write_client_system", label: "Changing records in the client’s systems", hint: "Clicking, typing or saving in their tools." },
+  { id: "computer_bash", label: "Running commands on its computer", hint: "Shell commands on the cloud computer." },
 ];
+const LEGACY: Record<string, ApprovalAction> = { send_email: "send_external_email", send_sms: "send_external_sms", send_text: "send_external_sms", send_slack: "send_external_slack" };
+function initialApprovals(list: string[] | undefined): ApprovalAction[] {
+  if (!list) return [...DEFAULT_APPROVALS];
+  const set = new Set<ApprovalAction>();
+  for (const raw of list) {
+    const k = raw.trim().toLowerCase();
+    if ((APPROVAL_ACTIONS as readonly string[]).includes(k)) set.add(k as ApprovalAction);
+    else if (LEGACY[k]) set.add(LEGACY[k]);
+  }
+  return APPROVAL_ACTIONS.filter((a) => set.has(a));
+}
 
 type Agent = { id: string; name: string; role: string; summary: string | null; instructions: string; status: string; config: { voice?: string; requireApprovalFor?: string[] } };
 
@@ -29,13 +42,12 @@ export function AgentSettings({ agency, agent, canAdmin }: { agency: string; age
     summary: agent.summary ?? "",
     instructions: agent.instructions,
     voice: agent.config.voice ?? "",
-    requireApprovalFor: agent.config.requireApprovalFor ?? [],
+    requireApprovalFor: initialApprovals(agent.config.requireApprovalFor),
   });
   const [pending, start] = useTransition();
   const [statusPending, startStatus] = useTransition();
   const [bpOpen, setBpOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  const custom = form.requireApprovalFor.filter((a) => !APPROVALS.some((x) => x.id === a));
   const paused = agent.status === "paused";
 
   const status = (s: "active" | "paused" | "archived") =>
@@ -80,17 +92,18 @@ export function AgentSettings({ agency, agent, canAdmin }: { agency: string; age
           <legend className="mb-1 text-[13px] font-medium text-ink-2">Ask for approval before</legend>
           <p className="mb-3 text-[12.5px] text-ink-3">These actions wait in the client’s portal until someone approves.</p>
           <ul className="divide-y divide-line rounded-xl border border-line bg-surface">
-            {[...APPROVALS, ...custom.map((c) => ({ id: c, label: c.replace(/_/g, " ") }))].map((a) => {
+            {APPROVALS.map((a) => {
               const on = form.requireApprovalFor.includes(a.id);
               return (
                 <li key={a.id} className="flex items-center justify-between gap-4 px-4 py-3">
-                  <label htmlFor={`ap-${a.id}`} className="text-[13.5px] text-ink-2">
-                    {a.label}
+                  <label htmlFor={`ap-${a.id}`} className="min-w-0">
+                    <span className="block text-[13.5px] text-ink-2">{a.label}</span>
+                    <span className="block text-[12px] text-ink-3">{a.hint}</span>
                   </label>
                   <Switch
                     id={`ap-${a.id}`}
                     checked={on}
-                    onCheckedChange={(v) => setForm((f) => ({ ...f, requireApprovalFor: v ? [...f.requireApprovalFor, a.id] : f.requireApprovalFor.filter((x) => x !== a.id) }))}
+                    onCheckedChange={(v) => setForm((f) => ({ ...f, requireApprovalFor: v ? APPROVAL_ACTIONS.filter((x) => x === a.id || f.requireApprovalFor.includes(x)) : f.requireApprovalFor.filter((x) => x !== a.id) }))}
                   />
                 </li>
               );

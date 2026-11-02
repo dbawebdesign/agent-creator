@@ -88,6 +88,7 @@ export async function getHome(agencyId: string) {
   const empty = {
     delivered: [],
     approvals: [],
+    changes: [],
     failed: [],
     provisioning: [],
     waiting: [],
@@ -98,7 +99,7 @@ export async function getHome(agencyId: string) {
   const since = new Date(Date.now() - DAY);
   const week = new Date(Date.now() - 7 * DAY);
 
-  const [delivered, approvals, failed, agents, firstDeliveries, week7, mrr] = await Promise.all([
+  const [delivered, approvals, failed, agents, firstDeliveries, week7, mrr, changes] = await Promise.all([
     db()
       .select({
         id: s.deliverables.id,
@@ -176,6 +177,24 @@ export async function getHome(agencyId: string) {
       .from(s.deliverables)
       .where(and(inArray(s.deliverables.orgId, ids), gte(s.deliverables.createdAt, week))),
     mrrCents(agencyId, ids),
+    db()
+      .select({
+        id: s.deliverables.id,
+        title: s.deliverables.title,
+        feedback: s.deliverables.feedback,
+        createdAt: s.deliverables.createdAt,
+        seenAt: s.deliverables.seenAt,
+        agentId: s.agents.id,
+        agentName: s.agents.name,
+        agentSeed: s.agents.avatarSeed,
+        orgName: s.organizations.name,
+      })
+      .from(s.deliverables)
+      .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
+      .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
+      .where(and(inArray(s.deliverables.orgId, ids), eq(s.deliverables.status, "changes_requested")))
+      .orderBy(desc(s.deliverables.createdAt))
+      .limit(6),
   ]);
 
   const delivering = new Set(firstDeliveries.map((d) => d.agentId));
@@ -183,6 +202,7 @@ export async function getHome(agencyId: string) {
   return {
     delivered,
     approvals,
+    changes,
     failed,
     provisioning: agents.filter((a) => a.status === "provisioning"),
     waiting: live.filter((a) => a.status === "active" && !delivering.has(a.id)),

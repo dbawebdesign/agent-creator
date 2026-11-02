@@ -52,8 +52,13 @@ async function uniqueSlug(base: string) {
   return `${root}-${randomUUID().slice(0, 6)}`;
 }
 
-export async function insertClientOrg(agencyId: string, input: { name: string; industry?: string; website?: string }) {
+export async function insertClientOrg(agencyId: string, input: { name: string; industry?: string; website?: string; timezone?: string }) {
   const slug = await uniqueSlug(input.name);
+  let timezone = input.timezone || null;
+  if (!timezone) {
+    const [agency] = await db().select({ timezone: schema.organizations.timezone }).from(schema.organizations).where(eq(schema.organizations.id, agencyId)).limit(1);
+    timezone = agency?.timezone ?? null;
+  }
   const [org] = await db()
     .insert(schema.organizations)
     .values({
@@ -65,6 +70,7 @@ export async function insertClientOrg(agencyId: string, input: { name: string; i
       industry: input.industry || null,
       website: input.website || null,
       branding: { displayName: input.name },
+      ...(timezone ? { timezone } : {}),
     })
     .returning();
   return org!;
