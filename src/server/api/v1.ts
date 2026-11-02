@@ -1,0 +1,284 @@
+/**
+ * Public API v1 operations. Shared by the REST routes (/api/v1/...) and the MCP server (/api/mcp).
+ *
+ * Every query is scoped by the key's org (and pinned agent, when set). Anything outside that scope is a 404 —
+ * existence is never leaked. Token usage / cost is never returned.
+ */
+import "server-only";
+import { and, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
+import { db, schema } from "@/server/db/client";
+import { env } from "@/server/env";
+import * as engine from "@/server/services/engine";
+import { ApiError, decodeCursor, encodeCursor, listQuery, parseWith } from "./http";
+import type { ApiPrincipal } from "./keys";
+
+const VISIBLE_AGENT_STATUSES = ["provisioning", "active", "paused"] as const;
+
+type AgentRow = typeof schema.agents.$inferSelect;
+type DeliverableRow = typeof schema.deliverables.$inferSelect;
+
+export type ApiAgent = {
+  id: string;
+  name: string;
+  role: string;
+  summary: string | null;
+  status: AgentRow["status"];
+  email: string | null;
+  phone: string | null;
+  createdAt: string;
+};
+
+export type ApiWorkflow = {
+  id: string;
+  name: string;
+  trigger: "schedule" | "event" | "manual";
+  outputKind: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+};
+
+export type ApiDeliverable = {
+  id: string;
+  agentId: string;
+  workflowId: string | null;
+  title: string;
+  kind: string;
+  preview: string | null;
+  body: string;
+  data: Record<string, unknown> | null;
+  status: DeliverableRow["status"];
+  needsReview: boolean;
+  deliveredVia: string[];
+  hoursSaved: number;
+  createdAt: string;
+  portalUrl: string;
+};
+
+export function agentEmail(handle: string | null): string | null {
+  return handle ? `${handle}@${env().EMAIL_DOMAIN}` : null;
+}
+
+function serializeAgent(a: AgentRow): ApiAgent {
+  return {
+    id: a.id,
+    name: a.name,
+    role: a.role,
+    summary: a.summary,
+    status: a.status,
+    email: agentEmail(a.emailHandle),
+    phone: a.phoneNumber,
+    createdAt: a.createdAt.toISOString(),
+  };
+}
+
+function serializeWorkflow(w: typeof schema.workflows.$inferSelect): ApiWorkflow {
+  return {
+    id: w.id,
+    name: w.name,
+    trigger: w.trigger.type,
+    outputKind: w.outputKind,
+    enabled: w.enabled,
+    nextRunAt: w.nextRunAt?.toISOString() ?? null,
+    lastRunAt: w.lastRunAt?.toISOString() ?? null,
+  };
+}
+
+export function portalDeliverableUrl(orgSlug: string, deliverableId: string): string {
+  return `${env().APP_URL.replace(/\/+$/, "")}/p/${encodeURIComponent(orgSlug)}/d/${deliverableId}`;
+}
+
+function serializeDeliverable(d: DeliverableRow, orgSlug: string): ApiDeliverable {
+  return {
+    id: d.id,
+    agentId: d.agentId,
+    workflowId: d.workflowId,
+    title: d.title,
+    kind: d.kind,
+    preview: d.preview,
+    body: d.body,
+    data: d.data ?? null,
+    status: d.status,
+    needsReview: d.needsReview,
+    deliveredVia: d.deliveredVia,
+    hoursSaved: d.hoursSaved,
+    createdAt: d.createdAt.toISOString(),
+    portalUrl: portalDeliverableUrl(orgSlug, d.id),
+  };
+}
+
+/** Millisecond-truncated created_at so cursors round-trip exactly through JS Dates. */
+function createdMs(col: typeof schema.agents.createdAt | typeof schema.deliverables.createdAt) {
+  return sql`date_trunc('milliseconds', ${col})`;
+}
+
+function afterCursor(
+  col: typeof schema.agents.createdAt | typeof schema.deliverables.createdAt,
+  idCol: typeof schema.agents.id | typeof schema.deliverables.id,
+  raw: string | undefined,
+): SQL | undefined {
+  const c = decodeCursor(raw);
+  if (!c) return undefined;
+  const t = new Date(c.t);
+  return or(lt(createdMs(col), t), and(eq(createdMs(col), t), lt(idCol, c.id)));
+}
+
+function page<T extends { createdAt: Date; id: string }, O>(rows: T[], limit: number, map: (r: T) => O) {
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  return { data: items.map(map), nextCursor: hasMore && last ? encodeCursor(last) : null, hasMore };
+}
+
+function agentScope(p: ApiPrincipal): SQL {
+  const conds: SQL[] = [eq(schema.agents.orgId, p.orgId), inArray(schema.agents.status, [...VISIBLE_AGENT_STATUSES])];
+  if (p.agentId) conds.push(eq(schema.agents.id, p.agentId));
+  return and(...conds)!;
+}
+
+/** Load an agent visible to this key, or 404. */
+export async function loadAgent(p: ApiPrincipal, agentId: string): Promise<AgentRow> {
+  const [a] = await db()
+    .select()
+    .from(schema.agents)
+    .where(and(agentScope(p), eq(schema.agents.id, agentId)))
+    .limit(1);
+  if (!a) throw new ApiError("not_found", "Agent not found.");
+  return a;
+}
+
+export async function listAgents(p: ApiPrincipal, query: unknown) {
+  const q = parseWith(listQuery, query);
+  const rows = await db()
+    .select()
+    .from(schema.agents)
+    .where(and(agentScope(p), afterCursor(schema.agents.createdAt, schema.agents.id, q.cursor)))
+    .orderBy(desc(createdMs(schema.agents.createdAt)), desc(schema.agents.id))
+    .limit(q.limit + 1);
+  return page(rows, q.limit, serializeAgent);
+}
+
+export async function getAgent(p: ApiPrincipal, agentId: string): Promise<ApiAgent & { workflows: ApiWorkflow[] }> {
+  const a = await loadAgent(p, agentId);
+  const wfs = await db()
+    .select()
+    .from(schema.workflows)
+    .where(and(eq(schema.workflows.orgId, p.orgId), eq(schema.workflows.agentId, a.id)))
+    .orderBy(schema.workflows.createdAt);
+  return { ...serializeAgent(a), workflows: wfs.map(serializeWorkflow) };
+}
+
+/** Workflows for several agents in one query (MCP list_agents). */
+export async function workflowsFor(p: ApiPrincipal, agentIds: string[]): Promise<Map<string, ApiWorkflow[]>> {
+  const out = new Map<string, ApiWorkflow[]>();
+  if (!agentIds.length) return out;
+  const wfs = await db()
+    .select()
+    .from(schema.workflows)
+    .where(and(eq(schema.workflows.orgId, p.orgId), inArray(schema.workflows.agentId, agentIds)))
+    .orderBy(schema.workflows.createdAt);
+  for (const w of wfs) {
+    const list = out.get(w.agentId) ?? [];
+    list.push(serializeWorkflow(w));
+    out.set(w.agentId, list);
+  }
+  return out;
+}
+
+export const messageBody = z.object({
+  text: z.string().trim().min(1, "text is required").max(20_000),
+  conversationId: z.uuid().optional(),
+  wait: z.boolean().optional().default(false),
+});
+
+export async function sendMessage(
+  p: ApiPrincipal,
+  agentId: string,
+  body: unknown,
+  channel: "api" | "mcp" = "api",
+): Promise<{ status: number; body: { conversationId: string; runId: string; reply: string | null; status: "completed" | "queued" } }> {
+  const input = parseWith(messageBody, body);
+  const agent = await loadAgent(p, agentId);
+  if (agent.status !== "active") throw new ApiError("conflict", `Agent is ${agent.status}; it can't take messages right now.`);
+  if (input.conversationId) {
+    const [conv] = await db()
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(
+        and(
+          eq(schema.conversations.id, input.conversationId),
+          eq(schema.conversations.orgId, p.orgId),
+          eq(schema.conversations.agentId, agent.id),
+        ),
+      )
+      .limit(1);
+    if (!conv) throw new ApiError("not_found", "Conversation not found.");
+  }
+  const res = await engine.messageAgent({
+    orgId: p.orgId,
+    agentId: agent.id,
+    text: input.text,
+    conversationId: input.conversationId,
+    channel,
+    actor: { type: "api_key", keyId: p.keyId },
+    wait: input.wait,
+  });
+  const done = input.wait && typeof res.reply === "string";
+  return {
+    status: done ? 200 : 202,
+    body: { conversationId: res.conversationId, runId: res.runId, reply: res.reply ?? null, status: done ? "completed" : "queued" },
+  };
+}
+
+export const deliverablesQuery = listQuery.extend({
+  agentId: z.uuid().optional(),
+  since: z.iso.datetime({ offset: true }).optional(),
+  status: z.enum(["new", "seen", "approved", "changes_requested", "archived"]).optional(),
+});
+
+export async function listDeliverables(p: ApiPrincipal, query: unknown) {
+  const q = parseWith(deliverablesQuery, query);
+  const conds: (SQL | undefined)[] = [eq(schema.deliverables.orgId, p.orgId)];
+  if (p.agentId) conds.push(eq(schema.deliverables.agentId, p.agentId));
+  if (q.agentId) conds.push(eq(schema.deliverables.agentId, q.agentId));
+  if (q.since) conds.push(gte(schema.deliverables.createdAt, new Date(q.since)));
+  if (q.status) conds.push(eq(schema.deliverables.status, q.status));
+  conds.push(afterCursor(schema.deliverables.createdAt, schema.deliverables.id, q.cursor));
+  const rows = await db()
+    .select()
+    .from(schema.deliverables)
+    .where(and(...conds))
+    .orderBy(desc(createdMs(schema.deliverables.createdAt)), desc(schema.deliverables.id))
+    .limit(q.limit + 1);
+  return page(rows, q.limit, (d) => serializeDeliverable(d, p.orgSlug));
+}
+
+export async function getDeliverable(p: ApiPrincipal, deliverableId: string): Promise<ApiDeliverable> {
+  const conds = [eq(schema.deliverables.orgId, p.orgId), eq(schema.deliverables.id, deliverableId)];
+  if (p.agentId) conds.push(eq(schema.deliverables.agentId, p.agentId));
+  const [d] = await db()
+    .select()
+    .from(schema.deliverables)
+    .where(and(...conds))
+    .limit(1);
+  if (!d) throw new ApiError("not_found", "Deliverable not found.");
+  return serializeDeliverable(d, p.orgSlug);
+}
+
+export async function runWorkflow(p: ApiPrincipal, workflowId: string): Promise<{ runId: string; workflowId: string; status: "queued" }> {
+  const conds = [eq(schema.workflows.orgId, p.orgId), eq(schema.workflows.id, workflowId)];
+  if (p.agentId) conds.push(eq(schema.workflows.agentId, p.agentId));
+  const [w] = await db()
+    .select({ id: schema.workflows.id, agentId: schema.workflows.agentId, enabled: schema.workflows.enabled })
+    .from(schema.workflows)
+    .where(and(...conds))
+    .limit(1);
+  if (!w) throw new ApiError("not_found", "Workflow not found.");
+  const agent = await loadAgent(p, w.agentId).catch(() => null);
+  if (!agent) throw new ApiError("not_found", "Workflow not found.");
+  if (agent.status !== "active") throw new ApiError("conflict", `Agent is ${agent.status}; workflows can't run right now.`);
+  if (!w.enabled) throw new ApiError("conflict", "Workflow is disabled.");
+  const { runId } = await engine.runWorkflowNow({ orgId: p.orgId, workflowId: w.id, actor: { type: "api_key", keyId: p.keyId } });
+  return { runId, workflowId: w.id, status: "queued" };
+}

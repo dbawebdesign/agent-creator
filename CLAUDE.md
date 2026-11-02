@@ -39,3 +39,4 @@ Product spec: `docs/SPEC.md`. Live progress: `.workbench/WORKBENCH.md`.
   `dana@brandlord.co` / `roster-demo` (client owner).
 - Scripts outside Next (worker, seed, one-off tsx) must run with `tsx --conditions=react-server …` so `server-only`
   imports resolve (the npm scripts already do this). Vitest aliases `server-only` to a shim.
+Screens: `node scripts/screens.mjs --as <email> --out <dir> [--themes light,dark] [--viewports desktop,mobile] [--full] <routes…>` (creates a DB session; prints HTTP status and console errors per page).

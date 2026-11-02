@@ -1,0 +1,614 @@
+/**
+ * Portal read models (owner: portal slice). Every query takes an orgId that the caller has already
+ * authorized with requireOrg(slug). Nothing here returns tokens, cost, model names or run traces.
+ */
+import "server-only";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { cache } from "react";
+import { requireOrg, orgChain, hasRole, type Org, type OrgAccess, type Role } from "@/server/auth/access";
+import { db, schema } from "@/server/db/client";
+import type { ChannelKind, WorkflowTrigger } from "@/server/db/schema";
+import { env } from "@/server/env";
+
+export type PortalBrand = {
+  /** Name shown in the header: the provider brand (client branding for customers). */
+  name: string;
+  accent: string | null;
+  logoUrl: string | null;
+  whiteLabel: boolean;
+};
+
+export type PortalContext = {
+  access: OrgAccess;
+  org: Org;
+  brand: PortalBrand;
+  /** Client orgs can resell to customers. */
+  canResell: boolean;
+  /** member+ (viewers can only look). */
+  canAct: boolean;
+  isAdmin: boolean;
+  /** Agency staff (or a parent client) looking at this portal. */
+  viewingAs: { name: string; href: string | null } | null;
+  user: { id: string; name: string | null; email: string; firstName: string };
+  needsYouCount: number;
+};
+
+function firstOf<T>(chain: Org[], pick: (o: Org) => T | undefined | null): T | null {
+  for (const o of chain) {
+    const v = pick(o);
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return null;
+}
+
+/** Branding cascade: self → parent → grandparent, field by field. */
+export function resolveBrand(chain: Org[]): PortalBrand {
+  const org = chain[0]!;
+  // Customers see their provider (the client) as the brand; clients see themselves.
+  const provider = org.kind === "customer" ? (chain[1] ?? org) : org;
+  const fromProvider = org.kind === "customer" ? chain.slice(1) : chain;
+  return {
+    name: provider.branding?.displayName?.trim() || provider.name,
+    accent: firstOf(fromProvider, (o) => (isHex(o.branding?.accent) ? o.branding.accent : null)),
+    logoUrl: firstOf(fromProvider, (o) => (isSafeUrl(o.branding?.logoUrl) ? o.branding.logoUrl : null)),
+    whiteLabel: chain.some((o) => o.branding?.whiteLabel === true),
+  };
+}
+
+function isHex(v: unknown): v is string {
+  return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
+}
+function isSafeUrl(v: unknown): v is string {
+  return typeof v === "string" && /^https:\/\/[^\s"'<>]+$/.test(v);
+}
+
+export const getPortal = cache(async (slug: string): Promise<PortalContext> => {
+  const access = await requireOrg(slug, "viewer");
+  const { org, user } = access;
+  // Portals are for clients and customers. Agencies have the Studio.
+  if (org.kind === "agency") {
+    const { notFound } = await import("next/navigation");
+    notFound();
+  }
+  const chain = await orgChain(org.id);
+  const brand = resolveBrand(chain);
+  const viewingAs = access.inherited
+    ? { name: access.via.name, href: access.via.kind === "agency" ? `/a/${access.via.slug}` : `/p/${access.via.slug}` }
+    : null;
+  const needsYouCount = await countNeedsYou(org.id);
+  const name = user.name?.trim() || null;
+  return {
+    access,
+    org,
+    brand,
+    canResell: org.kind === "client",
+    canAct: hasRole(access, "member"),
+    isAdmin: hasRole(access, "admin"),
+    viewingAs,
+    user: { id: user.id, name, email: user.email, firstName: name?.split(/\s+/)[0] ?? user.email.split("@")[0]! },
+    needsYouCount,
+  };
+});
+
+async function countNeedsYou(orgId: string): Promise<number> {
+  const [d] = await db()
+    .select({ n: sql<number>`count(*)::int` })
+    .from(schema.deliverables)
+    .where(
+      and(
+        eq(schema.deliverables.orgId, orgId),
+        eq(schema.deliverables.needsReview, true),
+        inArray(schema.deliverables.status, ["new", "seen"]),
+      ),
+    );
+  const [a] = await db()
+    .select({ n: sql<number>`count(*)::int` })
+    .from(schema.approvals)
+    .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.status, "pending")));
+  return (d?.n ?? 0) + (a?.n ?? 0);
+}
+
+/* ------------------------------------------------------------------ Today */
+
+export type AgentLite = { id: string; name: string; role: string; seed: string; status: string };
+
+const agentLite = {
+  id: schema.agents.id,
+  name: schema.agents.name,
+  role: schema.agents.role,
+  seed: sql<string>`coalesce(${schema.agents.avatarSeed}, ${schema.agents.id}::text)`,
+  status: schema.agents.status,
+};
+
+export type DeliverableCard = {
+  id: string;
+  title: string;
+  kind: string;
+  preview: string | null;
+  status: string;
+  needsReview: boolean;
+  deliveredVia: ChannelKind[];
+  hoursSaved: number;
+  createdAt: Date;
+  agent: AgentLite;
+};
+
+const deliverableCard = {
+  id: schema.deliverables.id,
+  title: schema.deliverables.title,
+  kind: schema.deliverables.kind,
+  preview: schema.deliverables.preview,
+  status: schema.deliverables.status,
+  needsReview: schema.deliverables.needsReview,
+  deliveredVia: schema.deliverables.deliveredVia,
+  hoursSaved: schema.deliverables.hoursSaved,
+  createdAt: schema.deliverables.createdAt,
+  agent: agentLite,
+};
+
+export type ApprovalCard = {
+  id: string;
+  action: string;
+  description: string;
+  createdAt: Date;
+  agent: AgentLite;
+};
+
+export async function getToday(orgId: string) {
+  const since = new Date(Date.now() - 1000 * 60 * 60 * 24);
+  const [recent, approvals, overnight, agents, nextRun] = await Promise.all([
+    db()
+      .select(deliverableCard)
+      .from(schema.deliverables)
+      .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
+      .where(and(eq(schema.deliverables.orgId, orgId), ne(schema.deliverables.status, "archived")))
+      .orderBy(desc(schema.deliverables.createdAt))
+      .limit(30),
+    db()
+      .select({
+        id: schema.approvals.id,
+        action: schema.approvals.action,
+        description: schema.approvals.description,
+        createdAt: schema.approvals.createdAt,
+        agent: agentLite,
+      })
+      .from(schema.approvals)
+      .innerJoin(schema.agents, eq(schema.agents.id, schema.approvals.agentId))
+      .where(and(eq(schema.approvals.orgId, orgId), eq(schema.approvals.status, "pending")))
+      .orderBy(desc(schema.approvals.createdAt))
+      .limit(20),
+    db()
+      .select({
+        n: sql<number>`count(*)::int`,
+        hours: sql<number>`coalesce(sum(${schema.deliverables.hoursSaved}), 0)::float`,
+      })
+      .from(schema.deliverables)
+      .where(and(eq(schema.deliverables.orgId, orgId), gte(schema.deliverables.createdAt, since))),
+    listAgentsLite(orgId),
+    db()
+      .select({ nextRunAt: schema.workflows.nextRunAt, name: schema.workflows.name, agentName: schema.agents.name })
+      .from(schema.workflows)
+      .innerJoin(schema.agents, eq(schema.agents.id, schema.workflows.agentId))
+      .where(
+        and(
+          eq(schema.workflows.orgId, orgId),
+          eq(schema.workflows.enabled, true),
+          sql`${schema.workflows.nextRunAt} is not null`,
+          inArray(schema.agents.status, ["active", "provisioning"]),
+        ),
+      )
+      .orderBy(asc(schema.workflows.nextRunAt))
+      .limit(1),
+  ]);
+  const needsReview = recent.filter((d) => d.needsReview && (d.status === "new" || d.status === "seen"));
+  const feed = recent.filter((d) => !needsReview.includes(d));
+  return {
+    needsReview,
+    approvals: approvals as ApprovalCard[],
+    feed: feed as DeliverableCard[],
+    overnight: { count: overnight[0]?.n ?? 0, hours: overnight[0]?.hours ?? 0 },
+    agents,
+    nextRun: nextRun[0] ?? null,
+  };
+}
+
+export async function listAgentsLite(orgId: string): Promise<AgentLite[]> {
+  return db()
+    .select(agentLite)
+    .from(schema.agents)
+    .where(and(eq(schema.agents.orgId, orgId), inArray(schema.agents.status, ["active", "paused", "provisioning"])))
+    .orderBy(asc(schema.agents.createdAt));
+}
+
+/* ------------------------------------------------------------ Deliverable */
+
+export async function getDeliverable(orgId: string, id: string) {
+  if (!isUuid(id)) return null;
+  const rows = await db()
+    .select({
+      d: schema.deliverables,
+      agent: agentLite,
+      workflowName: schema.workflows.name,
+    })
+    .from(schema.deliverables)
+    .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
+    .leftJoin(schema.workflows, eq(schema.workflows.id, schema.deliverables.workflowId))
+    .where(and(eq(schema.deliverables.orgId, orgId), eq(schema.deliverables.id, id)))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const { d } = row;
+  return {
+    id: d.id,
+    title: d.title,
+    kind: d.kind,
+    preview: d.preview,
+    body: d.body,
+    status: d.status,
+    needsReview: d.needsReview,
+    deliveredVia: d.deliveredVia,
+    hoursSaved: d.hoursSaved,
+    feedback: d.feedback,
+    createdAt: d.createdAt,
+    seenAt: d.seenAt,
+    agent: row.agent as AgentLite,
+    workflowName: row.workflowName,
+  };
+}
+
+/* ------------------------------------------------------------------- Team */
+
+export type WorkflowLite = {
+  id: string;
+  name: string;
+  trigger: WorkflowTrigger;
+  outputKind: string;
+  deliverTo: ChannelKind[];
+  enabled: boolean;
+  nextRunAt: Date | null;
+  lastRunAt: Date | null;
+  hoursSavedPerRun: number;
+};
+
+export type TeamMember = AgentLite & {
+  summary: string | null;
+  email: string | null;
+  phone: string | null;
+  workflows: WorkflowLite[];
+  delivered30d: number;
+  hours30d: number;
+};
+
+export function agentEmail(handle: string | null): string | null {
+  return handle ? `${handle}@${env().EMAIL_DOMAIN}` : null;
+}
+
+export async function getTeam(orgId: string): Promise<TeamMember[]> {
+  const agents = await db()
+    .select({ ...agentLite, summary: schema.agents.summary, emailHandle: schema.agents.emailHandle, phone: schema.agents.phoneNumber })
+    .from(schema.agents)
+    .where(and(eq(schema.agents.orgId, orgId), inArray(schema.agents.status, ["active", "paused", "provisioning"])))
+    .orderBy(asc(schema.agents.createdAt));
+  if (!agents.length) return [];
+  const ids = agents.map((a) => a.id);
+  const since = new Date(Date.now() - 1000 * 60 * 60 * 24 * 30);
+  const [wfs, stats] = await Promise.all([
+    db()
+      .select({
+        id: schema.workflows.id,
+        agentId: schema.workflows.agentId,
+        name: schema.workflows.name,
+        trigger: schema.workflows.trigger,
+        outputKind: schema.workflows.outputKind,
+        deliverTo: schema.workflows.deliverTo,
+        enabled: schema.workflows.enabled,
+        nextRunAt: schema.workflows.nextRunAt,
+        lastRunAt: schema.workflows.lastRunAt,
+        hoursSavedPerRun: schema.workflows.hoursSavedPerRun,
+      })
+      .from(schema.workflows)
+      .where(and(eq(schema.workflows.orgId, orgId), inArray(schema.workflows.agentId, ids)))
+      .orderBy(asc(schema.workflows.createdAt)),
+    db()
+      .select({
+        agentId: schema.deliverables.agentId,
+        n: sql<number>`count(*)::int`,
+        hours: sql<number>`coalesce(sum(${schema.deliverables.hoursSaved}), 0)::float`,
+      })
+      .from(schema.deliverables)
+      .where(and(eq(schema.deliverables.orgId, orgId), gte(schema.deliverables.createdAt, since)))
+      .groupBy(schema.deliverables.agentId),
+  ]);
+  return agents.map((a) => {
+    const s = stats.find((x) => x.agentId === a.id);
+    return {
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      seed: a.seed,
+      status: a.status,
+      summary: a.summary,
+      email: agentEmail(a.emailHandle),
+      phone: a.phone,
+      workflows: wfs.filter((w) => w.agentId === a.id),
+      delivered30d: s?.n ?? 0,
+      hours30d: s?.hours ?? 0,
+    };
+  });
+}
+
+export async function getAgentPage(orgId: string, agentId: string, userId: string) {
+  if (!isUuid(agentId)) return null;
+  const team = await getTeam(orgId);
+  const agent = team.find((a) => a.id === agentId);
+  if (!agent) return null;
+  const [work, convo] = await Promise.all([
+    db()
+      .select(deliverableCard)
+      .from(schema.deliverables)
+      .innerJoin(schema.agents, eq(schema.agents.id, schema.deliverables.agentId))
+      .where(
+        and(
+          eq(schema.deliverables.orgId, orgId),
+          eq(schema.deliverables.agentId, agentId),
+          ne(schema.deliverables.status, "archived"),
+        ),
+      )
+      .orderBy(desc(schema.deliverables.createdAt))
+      .limit(6),
+    db()
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(
+        and(
+          eq(schema.conversations.orgId, orgId),
+          eq(schema.conversations.agentId, agentId),
+          eq(schema.conversations.channel, "portal"),
+          or(eq(schema.conversations.userId, userId), isNull(schema.conversations.userId)),
+        ),
+      )
+      .orderBy(desc(schema.conversations.lastMessageAt))
+      .limit(1),
+  ]);
+  const conversationId = convo[0]?.id ?? null;
+  const messages = conversationId ? await getMessages(orgId, conversationId, 40) : [];
+  return { agent, work: work as DeliverableCard[], conversationId, messages };
+}
+
+/* --------------------------------------------------------------- Requests */
+
+export type ThreadMessage = {
+  id: string;
+  author: "agent" | "user" | "contact" | "system";
+  body: string;
+  createdAt: Date;
+  deliveryStatus: string;
+  authorName: string | null;
+};
+
+async function getMessages(orgId: string, conversationId: string, limit = 200): Promise<ThreadMessage[]> {
+  const rows = await db()
+    .select({
+      id: schema.messages.id,
+      author: schema.messages.author,
+      body: schema.messages.body,
+      createdAt: schema.messages.createdAt,
+      deliveryStatus: schema.messages.deliveryStatus,
+      meta: schema.messages.meta,
+    })
+    .from(schema.messages)
+    .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.conversationId, conversationId)))
+    .orderBy(desc(schema.messages.createdAt))
+    .limit(limit);
+  return rows.reverse().map((m) => ({
+    id: m.id,
+    author: m.author,
+    body: m.body,
+    createdAt: m.createdAt,
+    deliveryStatus: m.deliveryStatus,
+    authorName: typeof m.meta?.authorName === "string" ? m.meta.authorName : null,
+  }));
+}
+
+export type RequestRow = {
+  id: string;
+  channel: ChannelKind;
+  subject: string | null;
+  lastMessageAt: Date;
+  agent: AgentLite;
+  lastBody: string | null;
+  lastAuthor: string | null;
+  who: string | null;
+  count: number;
+};
+
+export async function listRequests(orgId: string): Promise<RequestRow[]> {
+  const rows = await db()
+    .select({
+      id: schema.conversations.id,
+      channel: schema.conversations.channel,
+      subject: schema.conversations.subject,
+      lastMessageAt: schema.conversations.lastMessageAt,
+      agent: agentLite,
+      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone})`,
+      lastBody: sql<string | null>`(select m.body from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
+      lastAuthor: sql<string | null>`(select m.author from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId} order by m.created_at desc limit 1)`,
+      count: sql<number>`(select count(*)::int from messages m where m.conversation_id = ${schema.conversations.id} and m.org_id = ${orgId})`,
+    })
+    .from(schema.conversations)
+    .innerJoin(schema.agents, eq(schema.agents.id, schema.conversations.agentId))
+    .leftJoin(schema.users, eq(schema.users.id, schema.conversations.userId))
+    .leftJoin(schema.contacts, eq(schema.contacts.id, schema.conversations.contactId))
+    .where(and(eq(schema.conversations.orgId, orgId), inArray(schema.conversations.channel, ["portal", "email", "sms", "slack", "api", "mcp"])))
+    .orderBy(desc(schema.conversations.lastMessageAt))
+    .limit(100);
+  return rows.filter((r) => r.count > 0) as RequestRow[];
+}
+
+export async function getRequest(orgId: string, id: string) {
+  if (!isUuid(id)) return null;
+  const rows = await db()
+    .select({
+      id: schema.conversations.id,
+      channel: schema.conversations.channel,
+      subject: schema.conversations.subject,
+      lastMessageAt: schema.conversations.lastMessageAt,
+      agent: agentLite,
+      who: sql<string | null>`coalesce(${schema.users.name}, ${schema.contacts.name}, ${schema.contacts.email}, ${schema.contacts.phone})`,
+    })
+    .from(schema.conversations)
+    .innerJoin(schema.agents, eq(schema.agents.id, schema.conversations.agentId))
+    .leftJoin(schema.users, eq(schema.users.id, schema.conversations.userId))
+    .leftJoin(schema.contacts, eq(schema.contacts.id, schema.conversations.contactId))
+    .where(and(eq(schema.conversations.orgId, orgId), eq(schema.conversations.id, id)))
+    .limit(1);
+  const c = rows[0];
+  if (!c) return null;
+  return { ...c, agent: c.agent as AgentLite, messages: await getMessages(orgId, id) };
+}
+
+/* ---------------------------------------------------------------- Connect */
+
+export async function getConnect(orgId: string) {
+  const [team, slack] = await Promise.all([
+    getTeam(orgId),
+    db()
+      .select({ status: schema.channelConnections.status, config: schema.channelConnections.config })
+      .from(schema.channelConnections)
+      .where(and(eq(schema.channelConnections.orgId, orgId), eq(schema.channelConnections.kind, "slack")))
+      .limit(1),
+  ]);
+  const s = slack[0];
+  const teamName = typeof s?.config?.teamName === "string" ? s.config.teamName : null;
+  return {
+    agents: team.map((a) => ({ id: a.id, name: a.name, role: a.role, seed: a.seed, email: a.email, phone: a.phone })),
+    slack: s ? { status: s.status, teamName } : null,
+    appUrl: env().APP_URL,
+  };
+}
+
+/* ----------------------------------------------------------------- Resell */
+
+export async function getResell(orgId: string) {
+  const [customers, plans, agents] = await Promise.all([
+    db()
+      .select({
+        id: schema.organizations.id,
+        name: schema.organizations.name,
+        slug: schema.organizations.slug,
+        status: schema.organizations.status,
+        createdAt: schema.organizations.createdAt,
+      })
+      .from(schema.organizations)
+      .where(
+        and(
+          eq(schema.organizations.parentId, orgId),
+          eq(schema.organizations.kind, "customer"),
+          isNull(schema.organizations.deletedAt),
+        ),
+      )
+      .orderBy(asc(schema.organizations.createdAt)),
+    db()
+      .select()
+      .from(schema.plans)
+      .where(and(eq(schema.plans.orgId, orgId), eq(schema.plans.active, true)))
+      .orderBy(asc(schema.plans.priceCents)),
+    listAgentsLite(orgId),
+  ]);
+  const customerIds = customers.map((c) => c.id);
+  const [subs, theirAgents] = customerIds.length
+    ? await Promise.all([
+        db()
+          .select({
+            id: schema.subscriptions.id,
+            orgId: schema.subscriptions.orgId,
+            status: schema.subscriptions.status,
+            planName: schema.plans.name,
+            priceCents: schema.plans.priceCents,
+            currency: schema.plans.currency,
+          })
+          .from(schema.subscriptions)
+          .innerJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId))
+          .where(
+            and(
+              inArray(schema.subscriptions.orgId, customerIds),
+              eq(schema.plans.orgId, orgId),
+              inArray(schema.subscriptions.status, ["active", "trialing", "past_due"]),
+            ),
+          ),
+        db()
+          .select({ ...agentLite, orgId: schema.agents.orgId, sourceAgentId: schema.agents.sourceAgentId })
+          .from(schema.agents)
+          .where(and(inArray(schema.agents.orgId, customerIds), ne(schema.agents.status, "archived"))),
+      ])
+    : [[], []];
+  const rows = customers.map((c) => {
+    const mine = subs.filter((s) => s.orgId === c.id);
+    return {
+      ...c,
+      plans: mine.map((s) => ({ id: s.id, name: s.planName, priceCents: s.priceCents, status: s.status })),
+      monthlyCents: mine.filter((s) => s.status !== "past_due").reduce((n, s) => n + s.priceCents, 0),
+      agents: theirAgents.filter((a) => a.orgId === c.id).map((a) => ({ id: a.id, name: a.name, seed: a.seed, role: a.role })),
+    };
+  });
+  const monthlyCents = rows.reduce((n, r) => n + r.monthlyCents, 0);
+  return { customers: rows, plans, agents, monthlyCents };
+}
+
+/* --------------------------------------------------------------- Settings */
+
+export type NotifyPrefs = { channels: ChannelKind[]; cadence: "instant" | "digest" };
+export const DEFAULT_PREFS: NotifyPrefs = { channels: ["email"], cadence: "instant" };
+
+export function readPrefs(org: Org, userId: string): NotifyPrefs {
+  const all = (org.settings?.notificationPrefs ?? {}) as Record<string, Partial<NotifyPrefs>>;
+  const p = all[userId];
+  return {
+    channels: Array.isArray(p?.channels) ? (p.channels as ChannelKind[]) : DEFAULT_PREFS.channels,
+    cadence: p?.cadence === "digest" ? "digest" : "instant",
+  };
+}
+
+export async function getSettings(orgId: string) {
+  const [members, invites] = await Promise.all([
+    db()
+      .select({
+        id: schema.memberships.id,
+        userId: schema.users.id,
+        role: schema.memberships.role,
+        name: schema.users.name,
+        email: schema.users.email,
+        createdAt: schema.memberships.createdAt,
+      })
+      .from(schema.memberships)
+      .innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId))
+      .where(eq(schema.memberships.orgId, orgId))
+      .orderBy(asc(schema.memberships.createdAt)),
+    db()
+      .select({
+        id: schema.invitations.id,
+        email: schema.invitations.email,
+        role: schema.invitations.role,
+        expiresAt: schema.invitations.expiresAt,
+        createdAt: schema.invitations.createdAt,
+      })
+      .from(schema.invitations)
+      .where(
+        and(
+          eq(schema.invitations.orgId, orgId),
+          isNull(schema.invitations.acceptedAt),
+          gte(schema.invitations.expiresAt, new Date()),
+        ),
+      )
+      .orderBy(desc(schema.invitations.createdAt)),
+  ]);
+  return { members, invites };
+}
+
+/* ---------------------------------------------------------------- helpers */
+
+export function isUuid(v: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+
+export type { Role };

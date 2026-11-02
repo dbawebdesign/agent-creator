@@ -1,0 +1,42 @@
+# Local production-like stack: Postgres (pgvector) + migrations + web + 2 workers.
+#   docker compose up --build
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: roster
+      POSTGRES_PASSWORD: roster
+      POSTGRES_DB: roster
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U roster"]
+      interval: 5s
+      retries: 20
+
+  migrate:
+    build: { context: ., target: worker }
+    command: ["npm", "run", "db:migrate"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://roster:roster@db:5432/roster
+    depends_on: { db: { condition: service_healthy } }
+
+  web:
+    build: { context: ., target: web }
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://roster:roster@db:5432/roster
+    ports: ["3000:3000"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+  worker:
+    build: { context: ., target: worker }
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://roster:roster@db:5432/roster
+    deploy: { replicas: 2 }
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+volumes:
+  pgdata:
