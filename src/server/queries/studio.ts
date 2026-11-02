@@ -247,6 +247,10 @@ export async function getHome(agencyId: string) {
         requestedAt: sql<Date | null>`(select max(n.created_at) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql})`.mapWith(
           (v) => (v ? new Date(v) : null),
         ),
+        // Still open: the alert hasn't been closed (all copies read) …
+        open: sql<boolean>`coalesce((select bool_or(n.read_at is null) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql}), true)`,
+        // … and no revision has been delivered since (walks this agent's later deliverables via (agent_id, created_at)).
+        revised: sql<boolean>`exists (select 1 from deliverables r join runs ru on ru.id = r.run_id where r.agent_id = ${s.deliverables.agentId} and r.created_at > ${s.deliverables.createdAt} and ru.input->>'kind' = 'revision' and ru.input->>'deliverableId' = ${s.deliverables.id}::text)`,
         agentId: s.agents.id,
         agentName: s.agents.name,
         agentSeed: s.agents.avatarSeed,
@@ -255,18 +259,10 @@ export async function getHome(agencyId: string) {
       .from(s.deliverables)
       .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
       .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
-      .where(
-        and(
-          inArray(s.deliverables.orgId, ids),
-          eq(s.deliverables.status, "changes_requested"),
-          // Still open: the alert hasn't been closed (all copies read) …
-          sql`coalesce((select bool_or(n.read_at is null) from notifications n where n.org_id = ${agencyId} and n.kind = 'deliverable.changes_requested' and n.href = ${changesHrefSql}), true)`,
-          // … and no revision has been delivered yet.
-          sql`not exists (select 1 from deliverables r join runs ru on ru.id = r.run_id where ru.org_id = ${s.deliverables.orgId} and ru.input->>'kind' = 'revision' and ru.input->>'deliverableId' = ${s.deliverables.id}::text)`,
-        ),
-      )
+      // Select-list subqueries run only for these few rows (LIMIT first); open/revised are filtered below.
+      .where(and(inAgency(s.deliverables.orgId, agencyId), eq(s.deliverables.status, "changes_requested")))
       .orderBy(desc(s.deliverables.createdAt))
-      .limit(6),
+      .limit(20),
   ]);
 
   const delivering = new Set(firstDeliveries.map((d) => d.agentId));
@@ -274,7 +270,7 @@ export async function getHome(agencyId: string) {
   return {
     delivered,
     approvals,
-    changes,
+    changes: changes.filter((c) => c.open && !c.revised).slice(0, 6),
     failed,
     provisioning: agents.filter((a) => a.status === "provisioning"),
     waiting: live.filter((a) => a.status === "active" && !delivering.has(a.id)),
@@ -292,7 +288,7 @@ export async function listClients(agencyId: string, opts: { page?: number; q?: s
   const page = Math.max(0, Math.floor(opts.page ?? 0));
   const q = opts.q?.trim().toLowerCase();
   const rows = await db()
-    .select({ id: s.organizations.id, name: s.organizations.name, slug: s.organizations.slug, status: s.organizations.status, industry: s.organizations.industry })
+    .select({ id: s.organizations.id, name: s.organizations.name, slug: s.organizations.slug, status: s.organizations.status, industry: s.organizations.industry, website: s.organizations.website })
     .from(s.organizations)
     .where(
       and(

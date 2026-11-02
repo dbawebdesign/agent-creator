@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Building2,
@@ -23,6 +23,7 @@ import { AgentOrb, Avatar } from "@/components/ui/agent-orb";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { CommandPalette, useCommandPalette, type PaletteItem } from "@/components/shared/command-palette";
 import { LogoMark } from "@/components/shared/logo";
+import { paletteSearch } from "@/app/a/_actions/search";
 import { cn } from "@/lib/utils";
 
 export type ShellProps = {
@@ -31,6 +32,8 @@ export type ShellProps = {
   user: { name: string | null; email: string };
   clients: { id: string; name: string; slug: string }[];
   agents: { id: string; name: string; role: string; seed: string; orgName: string; status: string }[];
+  /** Totals: the shell only carries a few recent items. */
+  counts: { agents: number; clients: number };
   signOut: () => Promise<void>;
   children: React.ReactNode;
 };
@@ -67,8 +70,28 @@ export function StudioShell(props: ShellProps) {
     [base, props.agents, props.clients],
   );
 
+  const slug = props.agency.slug;
+  const search = useCallback(
+    async (q: string): Promise<PaletteItem[]> => {
+      const r = await paletteSearch(slug, q);
+      return [
+        ...r.agents.map((a) => ({
+          id: `agent-${a.id}`,
+          group: "Agents",
+          label: a.name,
+          hint: `${a.role} · ${a.orgName}`,
+          href: `${base}/agents/${a.id}`,
+          icon: <AgentOrb seed={a.seed} name={a.name} size={16} />,
+          keywords: [a.role, a.orgName],
+        })),
+        ...r.clients.map((c) => ({ id: `client-${c.id}`, group: "Clients", label: c.name, href: `${base}/clients/${c.slug}`, icon: <Building2 /> })),
+      ];
+    },
+    [slug, base],
+  );
+
   return (
-    <CommandPalette items={items} placeholder="Search agents, clients, or type a command…">
+    <CommandPalette items={items} search={search} placeholder="Search agents, clients, or type a command…">
       <ShellFrame {...props} base={base} />
     </CommandPalette>
   );
@@ -186,7 +209,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
           <div className="mt-6 min-h-0 flex-1 overflow-y-auto px-3">
             <div className="px-2.5 pb-1.5 text-[11.5px] font-medium text-ink-3">Your roster</div>
             <ul className="space-y-px">
-              {props.agents.slice(0, 12).map((a) => {
+              {props.agents.slice(0, 8).map((a) => {
                 const href = `${base}/agents/${a.id}`;
                 const active = pathname.startsWith(href);
                 return (
@@ -206,6 +229,11 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
                 );
               })}
             </ul>
+            {props.counts.agents > props.agents.length ? (
+              <Link href={`${base}/agents`} className="mt-1 flex h-8 items-center rounded-md px-2.5 text-[12.5px] font-medium text-ink-3 hover:bg-surface-2/70 hover:text-ink">
+                View all {props.counts.agents.toLocaleString()}
+              </Link>
+            ) : null}
           </div>
         ) : (
           <div className="flex-1" />

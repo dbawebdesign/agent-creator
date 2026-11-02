@@ -21,6 +21,7 @@ export default async function StudioLayout({ children, params }: { children: Rea
         user={{ name: access.user.name, email: access.user.email }}
         clients={shell.clients}
         agents={shell.agents}
+        counts={shell.counts}
         signOut={signOut}
       >
         {!access.user.emailVerifiedAt ? (

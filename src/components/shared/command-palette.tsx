@@ -47,9 +47,43 @@ export const useCommandPalette = () => useContext(Ctx);
  * Generic âŒ˜K palette. Pass items; groups render in the order first seen.
  * Wrap a layout with it; call useCommandPalette().open() from a button.
  */
-export function CommandPalette({ items, placeholder = "Type a command or searchâ€¦", children }: { items: PaletteItem[]; placeholder?: string; children?: React.ReactNode }) {
+export function CommandPalette({
+  items,
+  search: remoteSearch,
+  placeholder = "Type a command or searchâ€¦",
+  children,
+}: {
+  items: PaletteItem[];
+  /** Optional server search (debounced, capped by the caller). Results merge into the local items. */
+  search?: (q: string) => Promise<PaletteItem[]>;
+  placeholder?: string;
+  children?: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [remote, setRemote] = useState<PaletteItem[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const q = search.trim();
+    if (!remoteSearch || q.length < 1) {
+      setRemote([]);
+      setLoading(false);
+      return;
+    }
+    let alive = true;
+    setLoading(true);
+    const t = setTimeout(() => {
+      remoteSearch(q)
+        .then((r) => alive && setRemote(r))
+        .catch(() => alive && setRemote([]))
+        .finally(() => alive && setLoading(false));
+    }, 160);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [search, remoteSearch]);
   const router = useRouter();
 
   useEffect(() => {
@@ -65,7 +99,10 @@ export function CommandPalette({ items, placeholder = "Type a command or searchâ
 
   const groups = useMemo(() => {
     const map = new Map<string, PaletteItem[]>();
-    for (const it of items) {
+    const seen = new Set<string>();
+    for (const it of [...items, ...remote]) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
       const list = map.get(it.group) ?? [];
       list.push(it);
       map.set(it.group, list);
@@ -77,7 +114,7 @@ export function CommandPalette({ items, placeholder = "Type a command or searchâ
     return entries
       .map(([g, list]) => [g, [...list].sort((a, b) => score(b) - score(a))] as [string, PaletteItem[]])
       .sort((a, b) => Math.max(...b[1].map(score)) - Math.max(...a[1].map(score)));
-  }, [items, search]);
+  }, [items, remote, search]);
 
   const run = useCallback(
     (it: PaletteItem) => {
@@ -115,7 +152,7 @@ export function CommandPalette({ items, placeholder = "Type a command or searchâ
                 />
               </div>
               <Command.List className="max-h-[min(420px,60vh)] overflow-y-auto overscroll-contain p-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[11.5px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-ink-4">
-                <Command.Empty className="px-3 py-8 text-center text-[13px] text-ink-3">No results.</Command.Empty>
+                <Command.Empty className="px-3 py-8 text-center text-[13px] text-ink-3">{loading ? "Searchingâ€¦" : "No results."}</Command.Empty>
                 {groups.map(([group, list]) => (
                   <Command.Group key={group} heading={group}>
                     {list.map((it) => (
