@@ -2,10 +2,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { heuristicSpec } from "@/server/agents/architect";
+import { cleanDeliverableTitle, cleanPreview, titleIsPrompt } from "@/server/agents/tools/core";
 import { db, schema } from "@/server/db/client";
 import { runJobsOnce } from "@/server/jobs/handlers";
+import { setLlmProviderForTests, type LlmMessage, type LlmProvider } from "@/server/llm";
+import { titleFromRequest } from "@/server/llm/offline";
 import { hireAgent, messageAgent, resellAgent, reviewDeliverable, runWorkflowNow } from "@/server/services/engine";
 import { makeCustomer, makeJobsDue, makeOrgs, resetDb, tzAtLocalHour } from "./engine.helpers";
 
@@ -133,5 +136,70 @@ describe("messageAgent", () => {
     expect(r.deliverables[0]).toMatchObject({ id: expect.any(String), title: expect.any(String) });
     const [d] = await db().select().from(schema.deliverables).where(eq(schema.deliverables.id, r.deliverables[0]!.id));
     expect(d!.orgId).toBe(client.id);
+  });
+});
+
+describe("deliverable titles and previews", () => {
+  beforeEach(resetDb);
+  afterEach(() => setLlmProviderForTests(null));
+
+  const ASK = "can you pull together a quick moodboard direction for Kindred Bakery's spring launch? they want pastels, nothing too twee, and it needs to work on instagram";
+
+  it("replaces a pasted request with a clean title of 60 characters or fewer; keeps good titles", () => {
+    expect(titleIsPrompt(ASK, ASK)).toBe(true);
+    expect(titleIsPrompt("Kindred Bakery — spring moodboard", ASK)).toBe(false);
+    expect(cleanDeliverableTitle(ASK, ASK)).toBe(titleFromRequest(ASK));
+    expect(cleanDeliverableTitle(ASK.slice(0, 70), ASK)).toBe(titleFromRequest(ASK));
+    expect(cleanDeliverableTitle("Follow-up: can you check the no-heat call got a tech", "can you check the no-heat call got a tech")).toBe(titleFromRequest("can you check the no-heat call got a tech"));
+    expect(cleanDeliverableTitle("## **Kindred Bakery — spring moodboard**", ASK)).toBe("Kindred Bakery — spring moodboard");
+    const long = cleanDeliverableTitle("Weekly dispatch board for every technician across all three service regions this week", "");
+    expect(long.length).toBeLessThanOrEqual(60);
+    expect(long).toMatch(/^Weekly dispatch board/);
+    expect(cleanDeliverableTitle("Q3 margin review: what changed, why it matters, and the three decisions we need from you", "")).toBe("Q3 margin review");
+    expect(cleanDeliverableTitle("Your quote kit: template + 3 sample quotes for Summit Promo Co (revised)", "")).toBe("Your quote kit (revised)");
+  });
+
+  it("previews are one sentence and never echo the request", () => {
+    expect(cleanPreview("Three directions inside. Each has a palette and type pairing.", "", "T", ASK)).toBe("Three directions inside.");
+    const body = "## Direction\n\n| Palette | Hex |\n|---|---|\n| Butter | #F6E7B4 |\n\nSoft pastels with a hand-drawn wordmark keep it warm without tipping into twee. More below.";
+    expect(cleanPreview(ASK, body, "T", ASK)).toBe("Soft pastels with a hand-drawn wordmark keep it warm without tipping into twee.");
+    expect(cleanPreview(undefined, body, "T", ASK)).toBe("Soft pastels with a hand-drawn wordmark keep it warm without tipping into twee.");
+  });
+
+  it("a model that titles the deliverable with the raw prompt still ships a clean title; the brief never offers the prompt as a title", async () => {
+    const { client, user, agentId } = await hire();
+    const briefs: string[] = [];
+    const text = (m: LlmMessage) => (typeof m.content === "string" ? m.content : m.content.map((b) => (b.type === "text" ? b.text : "")).join(""));
+    const provider: LlmProvider = {
+      id: "offline",
+      async chat(req) {
+        briefs.push(text(req.messages[0]!));
+        const done = req.messages.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === "tool_result"));
+        const U = { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 };
+        if (done) return { model: "roster-offline-1", stopReason: "end_turn", text: "Done.", toolCalls: [], assistantContent: [{ type: "text", text: "Done." }], usage: U };
+        const call = { id: "toolu_t", name: "create_deliverable", input: { title: ASK, body: "Soft pastels, a hand-drawn wordmark, and square crops for Instagram. Details below.", preview: ASK } };
+        return { model: "roster-offline-1", stopReason: "tool_use", text: "", toolCalls: [call], assistantContent: [{ type: "tool_use", ...call }], usage: U };
+      },
+    };
+    setLlmProviderForTests(provider);
+    const r = await messageAgent({ orgId: client.id, agentId, channel: "api", text: ASK, actor: { type: "user", userId: user.id }, wait: true });
+    expect(briefs[0]).toMatch(/^# Message\n/);
+    expect(briefs[0]).not.toContain(`# Message: ${ASK.slice(0, 20)}`);
+    expect(briefs[0]).toMatch(/60 characters or fewer/);
+    const [d] = await db().select().from(schema.deliverables).where(eq(schema.deliverables.id, r.deliverables[0]!.id));
+    expect(d!.title).toBe(titleFromRequest(ASK));
+    expect(d!.title.length).toBeLessThanOrEqual(60);
+    expect(d!.preview).toBe("Soft pastels, a hand-drawn wordmark, and square crops for Instagram.");
+    expect(r.deliverables[0]!.title).toBe(d!.title);
+  });
+
+  it("the offline model titles chat requests by the work, not the request", async () => {
+    const { client, user, agentId } = await hire();
+    const ask = "Hey, can you please write a short report on how we build quotes today for the new sales hires?";
+    const r = await messageAgent({ orgId: client.id, agentId, channel: "api", text: ask, actor: { type: "user", userId: user.id }, wait: true });
+    const t = r.deliverables[0]!.title;
+    expect(t.length).toBeLessThanOrEqual(60);
+    expect(titleIsPrompt(t, ask)).toBe(false);
+    expect(r.reply).toContain(`“${t}”`);
   });
 });

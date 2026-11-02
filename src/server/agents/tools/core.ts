@@ -7,7 +7,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { schema } from "@/server/db/client";
 import { enqueue } from "@/server/jobs/queue";
-import { truncate } from "@/server/llm/text";
+import { titleFromRequest } from "@/server/llm/offline";
+import { normalizeWhitespace, splitSentences, truncate } from "@/server/llm/text";
 import { recallMemories, searchKnowledge } from "@/server/knowledge";
 import { sha256 } from "@/server/security/crypto";
 import { normalizePhone, type Participant } from "../trust";
@@ -96,37 +97,43 @@ export function mentionsPaymentDetails(text: string): boolean {
   return PAYMENT_RE.test(text.slice(0, 5_000));
 }
 
+export const TITLE_MAX = 60;
+const PREVIEW_MAX = 200;
+
 export const createDeliverable = defineTool({
   name: "create_deliverable",
   description:
-    "Deliver finished work to the client (it appears in their portal and is sent to their delivery channels). Body is markdown; GFM tables are allowed. Lead with the result.",
+    "Deliver finished work to the client (it appears in their portal and is sent to their delivery channels). Body is markdown; GFM tables are allowed. Lead with the result. " +
+    `The title is a short, clean name for the work (${TITLE_MAX} characters or fewer, e.g. "Kindred Bakery — spring moodboard"), never the request copied; the preview is one sentence on what is inside.`,
   schema: z.object({
-    title: z.string().min(2).max(160),
+    title: z.string().min(2).max(400).describe(`A short name for the work, ${TITLE_MAX} characters or fewer. Not the request itself.`),
     kind: z.enum(DELIVERABLE_KINDS).optional(),
     body: z.string().min(1).max(200_000),
-    preview: z.string().max(280).optional(),
+    preview: z.string().max(400).optional().describe("One sentence on what is inside, for the client's inbox and portal list."),
     data: z.record(z.string(), z.unknown()).optional(),
   }),
   async run(input, ctx) {
     const { db, run, agent } = ctx;
+    const request = requestTextOf(run);
+    const title = cleanDeliverableTitle(input.title, request);
     // Idempotent per run+title so a retried run never double-delivers (the id is derived from both).
-    const id = deliverableIdFor(run.id, input.title);
+    const id = deliverableIdFor(run.id, title);
     const dupe = await db
       .select({ id: schema.deliverables.id })
       .from(schema.deliverables)
-      .where(and(eq(schema.deliverables.orgId, run.orgId), eq(schema.deliverables.runId, run.id), eq(schema.deliverables.title, input.title)))
+      .where(and(eq(schema.deliverables.orgId, run.orgId), eq(schema.deliverables.runId, run.id), eq(schema.deliverables.title, title)))
       .limit(1);
     if (dupe[0]) {
       if (!ctx.state.deliverableIds.includes(dupe[0].id)) ctx.state.deliverableIds.push(dupe[0].id);
-      return ok({ delivered: true, deliverableId: dupe[0].id, duplicate: true });
+      return ok({ delivered: true, deliverableId: dupe[0].id, title, duplicate: true });
     }
     const kind = input.kind ?? (ctx.workflow?.outputKind && (DELIVERABLE_KINDS as readonly string[]).includes(ctx.workflow.outputKind) ? (ctx.workflow.outputKind as (typeof DELIVERABLE_KINDS)[number]) : "report");
     const hoursSaved = hoursCreditFor(run, ctx.workflow, ctx.state.deliverableIds.length);
     const draft: DeliverableDraft = {
       id,
-      title: input.title,
+      title,
       kind,
-      preview: input.preview ?? truncate(input.body.replace(/[#*_`|>-]/g, " ").replace(/\s+/g, " ").trim(), 200),
+      preview: cleanPreview(input.preview, input.body, title, request),
       body: input.body,
       data: input.data ?? null,
       // Work requested by an unverified sender is never presented as the agent's own finished output.
@@ -139,13 +146,107 @@ export const createDeliverable = defineTool({
     if (releaseAt && releaseAt.getTime() > Date.now()) {
       await enqueue(db, "deliverable.release", { orgId: run.orgId, runId: run.id, deliverable: draft }, { orgId: run.orgId, runAt: releaseAt, idempotencyKey: `release:${id}` });
       if (!ctx.state.deliverableIds.includes(id)) ctx.state.deliverableIds.push(id);
-      return ok({ delivered: false, scheduled: true, deliverableId: id, releaseAt: releaseAt.toISOString(), note: "Saved; it will be handed to the client at the release time." });
+      return ok({ delivered: false, scheduled: true, deliverableId: id, title, releaseAt: releaseAt.toISOString(), note: "Saved; it will be handed to the client at the release time." });
     }
     const out = await publishDeliverable(db, { run, agent, workflow: ctx.workflow }, draft);
     if (!ctx.state.deliverableIds.includes(out.id)) ctx.state.deliverableIds.push(out.id);
-    return ok({ delivered: true, deliverableId: out.id, channels: ["portal", ...out.channels] });
+    return ok({ delivered: true, deliverableId: out.id, title, channels: ["portal", ...out.channels] });
   },
 });
+
+// ───────────────────────────── deliverable titles & previews ─────────────────────────────
+
+/** What the client asked for in their own words (chat messages and follow-ups), if anything. */
+function requestTextOf(run: ToolContext["run"]): string {
+  const input = run.input ?? {};
+  if (input.kind === "message") return String(input.text ?? "");
+  if (input.kind === "followup") return String(input.task ?? "");
+  return "";
+}
+
+/** Markdown and quotes off; one line. */
+function plainText(s: string): string {
+  return normalizeWhitespace(s.replace(/[*_`#>]+/g, " ").replace(/<\/?untrusted_message>/gi, " ")).replace(/^["“”']+|["“”']+$/g, "").trim();
+}
+
+function comparable(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** True when a "title" is really the request (or a verbatim chunk of it) rather than a name for the work. */
+export function titleIsPrompt(title: string, request: string): boolean {
+  const t = comparable(title);
+  if (!t) return true;
+  if (/\?\s*$/.test(title.trim())) return true;
+  if (/^(?:hey|hi|hello|can you|could you|would you|will you|please|i need|i want|i d like|i would like|we need)\b/.test(t)) return true;
+  return copiesRequest(title, request);
+}
+
+/** The text is the request, its opening pasted, or nearly all of it verbatim. */
+function copiesRequest(text: string, request: string): boolean {
+  const t = comparable(text);
+  const r = comparable(request);
+  if (!t || !r) return false;
+  if (t === r) return true;
+  const opening = r.slice(0, 40);
+  if (opening.length >= 16 && t.includes(opening)) return true;
+  return r.includes(t) && t.length >= Math.max(24, r.length * 0.8);
+}
+
+/**
+ * A word-boundary cut, preferring a natural break ("Q3 report: what changed" → "Q3 report"). A version marker
+ * such as "(revised)" survives the cut.
+ */
+function shortenTitle(title: string): string {
+  const suffix = /\s\((?:revised|updated|draft|v\d+)\)$/i.exec(title)?.[0] ?? "";
+  const t = title.slice(0, title.length - suffix.length);
+  const max = TITLE_MAX - suffix.length;
+  for (const sep of [": ", " — ", " – ", " | ", " (", " - "]) {
+    const i = t.indexOf(sep);
+    if (i >= 12 && i <= max) return `${t.slice(0, i).trim()}${suffix}`;
+  }
+  let out = "";
+  for (const w of t.split(" ")) {
+    if ((out ? out.length + 1 : 0) + w.length > max - 1) break;
+    out = out ? `${out} ${w}` : w;
+  }
+  return `${out ? `${out.replace(/[\s,:;—–-]+$/, "")}…` : truncate(t, max)}${suffix}`;
+}
+
+/**
+ * Deliverable titles are short names for the work, ≤60 chars. A model that pastes the request as the title (or
+ * writes a sentence) gets a clean title derived from the request instead.
+ */
+export function cleanDeliverableTitle(raw: string, request: string): string {
+  let t = plainText(raw.split("\n").find((l) => l.trim()) ?? raw);
+  if (titleIsPrompt(t, request)) t = titleFromRequest(request.trim() ? request : t);
+  if (t.length > TITLE_MAX) t = shortenTitle(t);
+  return t.length >= 2 ? t : "Deliverable";
+}
+
+function firstSentence(s: string): string {
+  return truncate(splitSentences(plainText(s))[0] ?? "", PREVIEW_MAX);
+}
+
+/** First prose line of a markdown body (skips headings, tables, rules and field labels). */
+function proseOf(body: string): string {
+  for (const line of body.split("\n")) {
+    const l = line.trim();
+    if (!l || /^(?:#|\||---|```|!\[)/.test(l) || /^\*\*[^*]+:\*\*/.test(l)) continue;
+    const text = l.replace(/^(?:[-*+]|\d+[.)])\s+/, "").replace(/^>\s*/, "");
+    if (/[a-z]{3}/i.test(text)) return text;
+  }
+  return "";
+}
+
+/** One sentence; never the request echoed back or the title repeated. Falls back to the body's first sentence. */
+export function cleanPreview(raw: string | undefined, body: string, title: string, request: string): string {
+  const given = raw ? firstSentence(raw) : "";
+  const echo = (p: string) => !p || comparable(p) === comparable(title) || copiesRequest(p, request);
+  if (!echo(given)) return given;
+  const derived = firstSentence(proseOf(body));
+  return derived || given || `${title} is ready.`;
+}
 
 /**
  * Hours saved are credited once per piece of real recurring work: the first new deliverable of a scheduled or

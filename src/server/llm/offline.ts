@@ -39,10 +39,12 @@ function contentText(content: LlmMessage["content"]): string {
 /** Parse the runtime's task brief (see agents/runtime.ts `buildBrief`). */
 export function parseBrief(first: string): Brief {
   const kind = (/^Kind:\s*(\w+)/m.exec(first)?.[1] ?? "message") as Brief["kind"];
-  const title = /^# (?:Task|Message):?\s*(.+)$/m.exec(first)?.[1]?.trim() ?? "Request";
   const output = /^Output:\s*(\w+)/m.exec(first)?.[1] ?? "report";
   const sep = first.indexOf("\n---\n");
-  const body = sep >= 0 ? first.slice(sep + 5).trim() : first;
+  // An unverified sender's text arrives fenced; the fence is markup for the model, not part of the request.
+  const body = (sep >= 0 ? first.slice(sep + 5) : first).replace(/^\s*<\/?untrusted_message>\s*$/gim, "").trim();
+  // Messages carry no title in the header (it would be the raw request): name the work from the request itself.
+  const title = /^# (?:Task|Message):[ \t]*(.+)$/m.exec(first)?.[1]?.trim() ?? (kind === "message" ? titleFromRequest(body) : "Request");
   return { kind: ["workflow", "message", "revision", "first_deliverable", "followup", "task"].includes(kind) ? kind : "message", title, output, body };
 }
 
@@ -63,6 +65,17 @@ function collectToolEvents(messages: LlmMessage[]): ToolEvent[] {
     }
   }
   return events;
+}
+
+/** The title create_deliverable actually used (it may clean up the one asked for). */
+function deliveredTitle(e: ToolEvent): string | null {
+  try {
+    const t = (JSON.parse(e.result) as { title?: unknown }).title;
+    if (typeof t === "string" && t) return t;
+  } catch {
+    // not JSON: fall through
+  }
+  return typeof e.input.title === "string" ? e.input.title : null;
 }
 
 type Snippet = { title: string; text: string; kind?: string };
@@ -253,7 +266,7 @@ export const offlineProvider: LlmProvider = {
     // 3. Produce finished work.
     const needsDeliverable = brief.kind !== "message" || wantsDocument(brief.body);
     if (needsDeliverable && has("create_deliverable") && !called("create_deliverable")) {
-      const title = brief.kind === "message" ? titleFromRequest(brief.body) : brief.title;
+      const title = brief.title;
       const { trace, ...d } = compose({ kind: brief.kind, title, output: brief.kind === "message" ? (/\b(?:email|letter|reply)\b/i.test(brief.body) ? "email_draft" : "document") : brief.output, body: brief.body, system: req.system, knowledge, memories });
       // The step trace goes in this turn's text (run_steps → agency Activity view), not in the client's deliverable.
       return makeResponse(req, trace ? `Writing it up. How I put this together:\n${trace}` : "Writing it up.", [{ name: "create_deliverable", input: d }]);
@@ -264,7 +277,7 @@ export const offlineProvider: LlmProvider = {
     const sent = events.find((e) => e.name === "send_message");
     const saved = events.find((e) => e.name === "memory_save" && !e.isError);
     const parts: string[] = [];
-    if (deliverable) parts.push(`Done — “${String(deliverable.input.title ?? brief.title)}” is ready for you in the portal.`);
+    if (deliverable) parts.push(`Done — “${deliveredTitle(deliverable) ?? brief.title}” is ready for you in the portal.`);
     if (sent) parts.push(sent.isError ? "I could not send the message." : /approval/i.test(sent.result) ? "The outgoing email is waiting for your approval." : "Message sent.");
     if (saved) parts.push(`Got it — I'll remember that ${String(saved.input.content ?? "").replace(/^I\s/, "you ")}.`);
     if (!parts.length) {
