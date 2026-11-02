@@ -22,10 +22,13 @@ export default async function NewAgentPage({
   const orgs = await agencyOrgs(agency.id);
   const clients = orgs.filter((o) => o.kind === "client").map((o) => ({ id: o.id, name: o.name, slug: o.slug }));
 
-  let resume: { discoveryId: string; clientId: string; clientName: string; transcript: string } | null = null;
+  let resume: { discoveryId: string; clientId: string; clientName: string; transcript: string; proposal: AgentSpec | null } | null = null;
   if (sp.d) {
     const row = await getDiscovery(agency.id, sp.d);
-    if (row) resume = { discoveryId: row.d.id, clientId: row.d.orgId, clientName: row.orgName, transcript: row.d.transcript };
+    if (row) {
+      const ready = row.d.status === "ready" && row.d.proposal ? agentSpec.safeParse(row.d.proposal) : null;
+      resume = { discoveryId: row.d.id, clientId: row.d.orgId, clientName: row.orgName, transcript: row.d.transcript, proposal: ready?.success ? ready.data : null };
+    }
   }
 
   let blueprint: { id: string; name: string; spec: AgentSpec } | null = null;

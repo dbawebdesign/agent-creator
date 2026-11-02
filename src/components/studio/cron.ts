@@ -42,7 +42,7 @@ export function parseCadence(cron: string): { cadence: Cadence; time: string; da
   const [min = "0", hour = "9", dom = "*", mon = "*", dow = "*"] = p;
   const t = /^\d+$/.test(min) && /^\d+$/.test(hour) ? `${hour.padStart(2, "0")}:${min.padStart(2, "0")}` : "09:00";
   if (p.length !== 5 || mon !== "*") return { cadence: "custom", time: t, day: 1 };
-  if (/^\d+$/.test(min) && hour === "*" && dom === "*" && dow === "*") return { cadence: "hourly", time: t, day: 1 };
+  if (/^\d+$/.test(min) && hour === "*" && dom === "*" && dow === "*") return { cadence: "hourly", time: `00:${min.padStart(2, "0")}`, day: 1 };
   if (!/^\d+$/.test(min) || !/^\d+$/.test(hour)) return { cadence: "custom", time: t, day: 1 };
   if (dom === "*" && dow === "*") return { cadence: "daily", time: t, day: 1 };
   if (dom === "*" && dow === "1-5") return { cadence: "weekdays", time: t, day: 1 };

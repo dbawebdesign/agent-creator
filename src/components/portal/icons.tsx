@@ -38,7 +38,7 @@ export function DeliveredVia({ via, className }: { via: ChannelKind[]; className
   const words = shown.map((v) => CHANNEL_LABEL[v] ?? v);
   const text = words.length > 2 ? `${words.slice(0, -1).join(", ")} & ${words.at(-1)}` : words.join(" & ");
   return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5 text-ink-4", className)} title={`Also sent to your ${text}`}>
+    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)} title={`Also sent to your ${text}`}>
       {shown.map((v) => (
         <ChannelIcon key={v} channel={v} />
       ))}

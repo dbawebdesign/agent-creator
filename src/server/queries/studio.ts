@@ -516,3 +516,12 @@ export async function listApiKeys(agencyId: string) {
     .where(eq(s.apiKeys.orgId, agencyId))
     .orderBy(desc(s.apiKeys.createdAt));
 }
+
+export async function agentApprovals(orgId: string, agentId: string) {
+  return db()
+    .select({ id: s.approvals.id, description: s.approvals.description, action: s.approvals.action, createdAt: s.approvals.createdAt })
+    .from(s.approvals)
+    .where(and(eq(s.approvals.orgId, orgId), eq(s.approvals.agentId, agentId), eq(s.approvals.status, "pending")))
+    .orderBy(desc(s.approvals.createdAt))
+    .limit(5);
+}

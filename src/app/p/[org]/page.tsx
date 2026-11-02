@@ -3,7 +3,7 @@ import { CalendarClock } from "lucide-react";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { AskComposer } from "@/components/portal/composer";
 import { DeliverableCardView, whenLabel } from "@/components/portal/deliverable-card";
-import { greeting, longDate, feedBucket, hoursPhrase, numberWord, dayWord, clockTime } from "@/components/portal/lib";
+import { capitalize, greeting, longDate, feedBucket, hoursPhrase, numberWord, dayWord, clockTime } from "@/components/portal/lib";
 import { NeedsYou, type NeedsYouItem } from "@/components/portal/needs-you";
 import { getPortal, getToday } from "@/server/queries/portal";
 
@@ -62,7 +62,7 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
               ))}
             </span>
           ) : null}
-          <p className="text-[13px] font-medium text-ink-4">{longDate(tz)}</p>
+          <p className="text-[13px] font-medium text-ink-3">{longDate(tz)}</p>
         </div>
         <h1 className="mt-1.5 text-[28px] font-semibold tracking-[-0.025em] text-ink md:text-[32px]">
           {greeting(tz)}, {p.user.firstName}
@@ -133,6 +133,30 @@ export default async function TodayPage({ params }: { params: Promise<{ org: str
             Meet your team
           </Link>
         </div>
+      ) : null}
+
+      {t.upcoming.length && (t.feed.length || needs.length) ? (
+        <section aria-labelledby="upcoming" className="mt-12">
+          <h2 id="upcoming" className="mb-3 text-[13px] font-semibold text-ink">
+            Coming up
+          </h2>
+          <ul className="space-y-2.5">
+            {t.upcoming.map((w) => (
+              <li key={w.id} className="flex items-center gap-3 text-[13.5px]">
+                <AgentOrb seed={w.agentSeed} size={18} />
+                <span className="min-w-0 flex-1 truncate text-ink-2">
+                  {w.name}
+                  <span className="text-ink-3"> · {w.agentName}</span>
+                </span>
+                {w.nextRunAt ? (
+                  <time dateTime={w.nextRunAt.toISOString()} className="shrink-0 text-[12.5px] text-ink-3 tabular">
+                    {capitalize(dayWord(w.nextRunAt, tz))}, {clockTime(w.nextRunAt, tz)}
+                  </time>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
     </div>
   );

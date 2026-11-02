@@ -79,7 +79,7 @@ export function Thread({
                       mine ? "rounded-tr-md bg-surface-2 text-ink ring-1 ring-line/60" : "rounded-tl-md border border-line bg-surface text-ink-2",
                     )}
                   >
-                    <Markdown className="text-[14px] leading-relaxed [&_p]:my-1.5 [&>:first-child]:mt-0 [&>:last-child]:mb-0">{m.body}</Markdown>
+                    <Markdown className="portal-bubble">{m.body}</Markdown>
                   </div>
                 </div>
               </li>

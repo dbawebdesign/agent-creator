@@ -17,9 +17,20 @@ export function modelFor(tier: ModelTier): string {
 }
 
 let client: Anthropic | undefined;
+let testFetch: typeof fetch | undefined;
 function anthropic(): Anthropic {
-  if (!client) client = new Anthropic({ apiKey: env().ANTHROPIC_API_KEY, timeout: 180_000, maxRetries: 2 });
+  if (!client) {
+    client = testFetch
+      ? new Anthropic({ apiKey: "test-key", fetch: testFetch, maxRetries: 0 })
+      : new Anthropic({ apiKey: env().ANTHROPIC_API_KEY, timeout: 180_000, maxRetries: 2 });
+  }
   return client;
+}
+
+/** Tests only: route SDK HTTP through a stub so the real request/response mapping is exercised without a key. */
+export function setAnthropicFetchForTests(f: typeof fetch | undefined): void {
+  testFetch = f;
+  client = undefined;
 }
 
 function mapStop(reason: string | null | undefined): LlmStopReason {

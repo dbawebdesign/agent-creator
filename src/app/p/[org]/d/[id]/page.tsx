@@ -11,7 +11,7 @@ import { CHANNEL_LABEL, clockTime, hoursPhrase, longDate } from "@/components/po
 import { ReviewPanel } from "@/components/portal/review-panel";
 import { db, schema } from "@/server/db/client";
 import { logger } from "@/server/lib/logger";
-import { getDeliverable, getPortal } from "@/server/queries/portal";
+import { getDeliverable, getPortal, nextToReview } from "@/server/queries/portal";
 import * as engine from "@/server/services/engine";
 
 export async function generateMetadata({ params }: { params: Promise<{ org: string; id: string }> }) {
@@ -42,6 +42,7 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
   if (d.status === "new" && !p.access.inherited) await markSeen(p.org.id, d.id, p.user.id);
 
   const tz = p.org.timezone;
+  const next = p.canAct ? await nextToReview(p.org.id, d.id) : null;
   const via = d.deliveredVia.length ? d.deliveredVia : ["portal" as const];
   const status =
     d.status === "approved"
@@ -135,6 +136,7 @@ export default async function DeliverablePage({ params }: { params: Promise<{ or
             sendsOnApprove={d.sendsOnApprove}
             feedback={d.feedback}
             canAct={p.canAct}
+            next={next ? { href: `/p/${slug}/d/${next.id}`, title: next.title } : null}
           />
 
           <div className="mt-8 md:hidden">{meta}</div>

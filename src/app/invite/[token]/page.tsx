@@ -13,11 +13,8 @@ export const metadata = { title: "You’re invited", robots: { index: false } };
 
 function Shell({ accent, children }: { accent: string | null; children: React.ReactNode }) {
   return (
-    <div
-      className="portal-root flex min-h-dvh items-start justify-center px-4 pt-[12vh] pb-16"
-      data-brand={accent ? "" : undefined}
-      style={accent ? ({ "--brand": accent, "--brand-ink": "#ffffff" } as React.CSSProperties) : undefined}
-    >
+    <div className="portal-root flex min-h-dvh items-start justify-center px-4 pt-[12vh] pb-16" data-brand={accent ? "" : undefined}>
+      {accent ? <style>{`:root{--brand:${accent};--brand-ink:#ffffff}`}</style> : null}
       <div className="w-full max-w-[400px] animate-rise">{children}</div>
     </div>
   );

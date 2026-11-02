@@ -31,12 +31,12 @@ export function NewAgentFlow({
   agency: string;
   clients: Client[];
   initialClientId?: string;
-  resume?: { discoveryId: string; clientId: string; clientName: string; transcript: string } | null;
+  resume?: { discoveryId: string; clientId: string; clientName: string; transcript: string; proposal?: AgentSpec | null } | null;
   blueprint?: { id: string; name: string; spec: AgentSpec } | null;
   priceLabel: string | null;
 }) {
   const router = useRouter();
-  const [phase, setPhase] = useState<Phase>(resume ? "reading" : blueprint ? "review" : "compose");
+  const [phase, setPhase] = useState<Phase>(resume?.proposal ? "review" : resume ? "reading" : blueprint ? "review" : "compose");
   const [clientId, setClientId] = useState<string | "new" | "">(resume?.clientId ?? initialClientId ?? (clients.length === 1 ? clients[0]!.id : ""));
   const [newClient, setNewClient] = useState({ name: "", industry: "" });
   const [transcript, setTranscript] = useState(resume?.transcript ?? "");
@@ -44,7 +44,7 @@ export function NewAgentFlow({
   const [resolvedClient, setResolvedClient] = useState<{ id: string; name: string } | null>(
     resume ? { id: resume.clientId, name: resume.clientName } : null,
   );
-  const [draft, setDraftState] = useState<Draft | null>(blueprint ? toDraft(blueprint.spec) : null);
+  const [draft, setDraftState] = useState<Draft | null>(resume?.proposal ? toDraft(resume.proposal) : blueprint ? toDraft(blueprint.spec) : null);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [slow, setSlow] = useState(false);

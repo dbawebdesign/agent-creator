@@ -41,7 +41,7 @@ export function DeliverableCardView({ d, slug, tz, compact, hideAgent }: { d: Ca
       </div>
       <h3 className={cn("mt-2.5 font-semibold tracking-[-0.01em] text-ink text-pretty", compact ? "text-[14.5px]" : "text-[15.5px]")}>{d.title}</h3>
       {d.preview ? <p className="mt-1 line-clamp-2 text-[13.5px] leading-relaxed text-ink-3 text-pretty">{d.preview}</p> : null}
-      <div className="mt-3.5 flex items-center gap-3 text-[12px] text-ink-4">
+      <div className="mt-3.5 flex items-center gap-3 text-[12px] text-ink-3">
         <span className="inline-flex items-center gap-1.5">
           <KindIcon kind={d.kind} />
           {kindLabel(d.kind)}

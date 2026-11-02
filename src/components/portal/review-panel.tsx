@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { Check, Loader2, PenLine, RotateCcw } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, Check, Loader2, PenLine, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { reviewDeliverableAction } from "@/app/p/[org]/actions";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ export function ReviewPanel({
   sendsOnApprove,
   feedback,
   canAct,
+  next,
 }: {
   slug: string;
   deliverableId: string;
@@ -27,6 +29,8 @@ export function ReviewPanel({
   sendsOnApprove: boolean;
   feedback: string | null;
   canAct: boolean;
+  /** The next item waiting on you, offered once this one is decided. */
+  next?: { href: string; title: string } | null;
 }) {
   const [mode, setMode] = useState<"idle" | "changes">("idle");
   const [text, setText] = useState("");
@@ -38,14 +42,14 @@ export function ReviewPanel({
 
   if (current === "approved") {
     return (
-      <Done tone="good" icon={<Check className="size-4" aria-hidden />}>
+      <Done tone="good" icon={<Check className="size-4" aria-hidden />} next={local ? next : null}>
         Approved{sendsOnApprove && local ? ` — ${agentName} is sending it now` : ""}.
       </Done>
     );
   }
   if (current === "changes_requested") {
     return (
-      <Done tone="warn" icon={<RotateCcw className="size-4" aria-hidden />}>
+      <Done tone="warn" icon={<RotateCcw className="size-4" aria-hidden />} next={local ? next : null}>
         <span>
           You asked {agentName} for changes{feedback || text ? ":" : "."}
           {feedback || text ? <span className="mt-1 block text-ink-3">&ldquo;{feedback || text}&rdquo;</span> : null}
@@ -145,17 +149,31 @@ export function ReviewPanel({
   );
 }
 
-function Done({ tone, icon, children }: { tone: "good" | "warn"; icon: React.ReactNode; children: React.ReactNode }) {
+function Done({ tone, icon, children, next }: { tone: "good" | "warn"; icon: React.ReactNode; children: React.ReactNode; next?: { href: string; title: string } | null }) {
   return (
-    <div
-      role="status"
-      className={cn(
-        "mt-6 flex items-start gap-2.5 rounded-xl px-4 py-3 text-[13.5px] font-medium animate-fade-in",
-        tone === "good" ? "bg-good-soft text-good" : "bg-warn-soft text-warn",
-      )}
-    >
-      <span className="mt-0.5">{icon}</span>
-      {children}
+    <div className="mt-6 animate-fade-in">
+      <div
+        role="status"
+        className={cn(
+          "flex items-start gap-2.5 rounded-xl px-4 py-3 text-[13.5px] font-medium",
+          tone === "good" ? "bg-good-soft text-good" : "bg-warn-soft text-warn",
+        )}
+      >
+        <span className="mt-0.5">{icon}</span>
+        {children}
+      </div>
+      {next ? (
+        <Link
+          href={next.href}
+          className="group mt-3 flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-sm transition-colors hover:border-line-strong"
+        >
+          <span className="min-w-0">
+            <span className="block text-[12px] text-ink-3">Next up</span>
+            <span className="block truncate text-[14px] font-medium text-ink">{next.title}</span>
+          </span>
+          <ArrowRight className="size-4 shrink-0 text-ink-3 transition-transform group-hover:translate-x-0.5" aria-hidden />
+        </Link>
+      ) : null}
     </div>
   );
 }

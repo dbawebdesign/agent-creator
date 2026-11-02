@@ -21,7 +21,7 @@ export default async function OnboardingPage() {
       </header>
       <main className="flex flex-1 items-start justify-center px-4 pt-[6vh] pb-16">
         <div className="w-full max-w-[400px] animate-rise">
-          <p className="text-[13px] font-medium text-ink-3">Step 1 of 1</p>
+          <p className="text-[13px] font-medium text-ink-3">One last step</p>
           <h1 className="mt-1 text-[24px] font-semibold tracking-[-0.02em] text-ink">
             {first ? `Welcome, ${first}. ` : ""}Name your agency
           </h1>

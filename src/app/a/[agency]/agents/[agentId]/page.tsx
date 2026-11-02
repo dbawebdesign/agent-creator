@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Brain, CalendarClock, Inbox, Library, Mail, Monitor, Radio, Sparkles, Zap } from "lucide-react";
+import { Brain, CalendarClock, Inbox, Library, Mail, Monitor, Radio, ShieldAlert, Sparkles, Zap } from "lucide-react";
+import { ApprovalActions } from "@/components/studio/approval-actions";
 import { requireOrg } from "@/server/auth/access";
-import { agentChannels, agentDeliverables, agentKnowledge, agentMemories, agentValue, agentWorkflows, getAgent } from "@/server/queries/studio";
+import { agentApprovals, agentChannels, agentDeliverables, agentKnowledge, agentMemories, agentValue, agentWorkflows, getAgent } from "@/server/queries/studio";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { DeliverableList } from "@/components/studio/deliverable-list";
 import { CHANNEL_LABEL, hours, microsToDollars, SectionHeading, Stat, TextLink } from "@/components/studio/bits";
@@ -15,13 +16,14 @@ export default async function AgentOverview({ params, searchParams }: { params: 
   const found = await getAgent(agency.id, agentId);
   if (!found) notFound();
   const { agent, inbox } = found;
-  const [deliverables, workflows, value, memories, knowledge, channels] = await Promise.all([
+  const [deliverables, workflows, value, memories, knowledge, channels, approvals] = await Promise.all([
     agentDeliverables(agent.orgId, agent.id, 8),
     agentWorkflows(agent.orgId, agent.id),
     agentValue(agent.orgId, agent.id),
     agentMemories(agent.orgId, agent.id),
     agentKnowledge(agent.orgId, agent.id),
     agentChannels(agent.orgId, agent.id),
+    agentApprovals(agent.orgId, agent.id),
   ]);
   const base = `/a/${slug}/agents/${agent.id}`;
   const enabled = workflows.filter((w) => w.enabled);
@@ -50,6 +52,23 @@ export default async function AgentOverview({ params, searchParams }: { params: 
             <span className="font-medium text-ink">{agent.name} is on the roster.</span> The first overnight deliverable is queued — it lands in the client’s portal by morning. Share the inbox address so the team can email {agent.name} directly.
           </div>
         </div>
+      ) : null}
+
+      {approvals.length ? (
+        <section aria-label="Waiting for approval" className="space-y-2">
+          {approvals.map((a) => (
+            <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3">
+              <ShieldAlert className="size-4 shrink-0 text-warn" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="text-[13.5px] font-medium text-ink">{a.description}</p>
+                <p className="text-[12px] text-ink-3">
+                  Waiting for approval · <RelativeTime date={a.createdAt} />
+                </p>
+              </div>
+              <ApprovalActions agency={slug} approvalId={a.id} />
+            </div>
+          ))}
+        </section>
       ) : null}
 
       <section aria-label="Value delivered" className="grid grid-cols-2 gap-y-6 rounded-xl border border-line bg-surface px-5 py-5 shadow-xs sm:grid-cols-4 sm:divide-x sm:divide-line sm:px-0">

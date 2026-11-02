@@ -20,7 +20,7 @@ import { env } from "@/server/env";
 import { logger } from "@/server/lib/logger";
 import { audit } from "@/server/security/audit";
 import { rateLimit } from "@/server/security/rate-limit";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 export type AuthState = { error?: string; fieldErrors?: Record<string, string>; email?: string; link?: string; sent?: boolean } | undefined;
 
@@ -40,22 +40,35 @@ function fieldErrors(err: z.ZodError): Record<string, string> {
   return out;
 }
 
+/** Returns the reset time when `key` has reached `limit` failures in its window, else null. */
+async function failuresLocked(key: string, limit: number): Promise<Date | null> {
+  try {
+    const res = await db().execute(sql`select count, reset_at from rate_limits where key = ${key} and reset_at > now()`);
+    const row = res.rows[0] as { count: number; reset_at: string | Date } | undefined;
+    return row && Number(row.count) >= limit ? new Date(row.reset_at) : null;
+  } catch {
+    return null; // table not created yet → nothing recorded
+  }
+}
+
 const signInSchema = z.object({ email, password: z.string().min(1, "Enter your password").max(200) });
 
 export async function signIn(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const parsed = signInSchema.safeParse({ email: formData.get("email"), password: formData.get("password") });
   if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error), email: String(formData.get("email") ?? "") };
   const ip = clientIp(await headers()) ?? "unknown";
-  const [byEmail, byIp] = await Promise.all([
-    rateLimit(`login:email:${parsed.data.email}`, 8, 15 * 60),
-    rateLimit(`login:ip:${ip}`, 40, 15 * 60),
-  ]);
-  if (!byEmail.ok || !byIp.ok) {
-    const mins = Math.max(1, Math.ceil(((byEmail.ok ? byIp : byEmail).resetAt.getTime() - Date.now()) / 60000));
+  const failKey = `login:fail:${parsed.data.email}`;
+  // Every attempt counts against the network; only failures count against the account.
+  const byIp = await rateLimit(`login:ip:${ip}`, 100, 15 * 60);
+  const locked = await failuresLocked(failKey, 8);
+  if (!byIp.ok || locked) {
+    const resetAt = locked ?? byIp.resetAt;
+    const mins = Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 60000));
     return { error: `Too many attempts. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`, email: parsed.data.email };
   }
   const user = await authenticate(parsed.data.email, parsed.data.password);
   if (!user) {
+    await rateLimit(failKey, 8, 15 * 60);
     await audit({ actorType: "system", action: "auth.login_failed", metadata: { email: parsed.data.email }, ip });
     return { error: "That email and password don’t match.", email: parsed.data.email };
   }

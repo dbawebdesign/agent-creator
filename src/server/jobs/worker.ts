@@ -6,7 +6,7 @@ import { sql } from "drizzle-orm";
 import type { DB } from "@/server/db/client";
 import { logger } from "@/server/lib/logger";
 import { backoffMs, type JobType } from "./queue";
-import { schedulerTick } from "./scheduler";
+import { expireApprovals, schedulerTick } from "./scheduler";
 
 export type ClaimedRow = { id: string; type: string; payload: Record<string, unknown>; orgId: string | null; attempts: number; maxAttempts: number };
 type Handler = (payload: Record<string, unknown>, ctx: { db: DB; jobId: string; attempts: number; maxAttempts: number }) => Promise<void>;
@@ -126,6 +126,7 @@ export function startWorker(opts: {
     if (stopping) return;
     schedulerTick(opts.database)
       .then((n) => n && logger.info({ enqueued: n }, "scheduler enqueued runs"))
+      .then(() => expireApprovals(opts.database))
       .catch((err) => logger.error({ err: (err as Error).message }, "scheduler tick failed"));
   }, opts.schedulerMs ?? 15_000);
 

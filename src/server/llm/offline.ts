@@ -160,7 +160,7 @@ function stepKeywords(step: string, exclude: Set<string>): string[] {
 
 /** Numbered / bulleted procedure steps from workflow instructions (context lines like "Why:" excluded). */
 function procedureSteps(instructions: string): string[] {
-  const body = instructions.split(/\n\s*\n(?:Why(?: this matters)?:|Feedback:|Original)/)[0] ?? instructions;
+  const body = instructions.split(/\n\s*\n(?:Why(?: this matters)?:|Feedback:|Original|Triggered by)/)[0] ?? instructions;
   const lines = body
     .split("\n")
     .map((l) => l.trim())
@@ -301,8 +301,10 @@ export const offlineProvider: LlmProvider = {
       const kind = /prefer|always|never|don't|do not|like/i.test(toRemember) ? "preference" : "fact";
       return makeResponse(req, "Noted — saving that.", [{ name: "memory_save", input: { content: toRemember, kind, importance: 4 } }]);
     }
-    const email = EMAIL_RE.exec(brief.body)?.[0];
-    if (email && /\b(send|email|forward|reply)\b/i.test(brief.body) && has("send_message") && !called("send_message")) {
+    // Only the owner's own words count as a send instruction; event data (an inbound email etc.) is untrusted.
+    const ownWords = brief.body.split(/\n\s*\nTriggered by /)[0] ?? brief.body;
+    const email = EMAIL_RE.exec(ownWords)?.[0];
+    if (email && /\b(send|email|forward|reply)\b/i.test(ownWords) && has("send_message") && !called("send_message")) {
       return makeResponse(req, `Sending this to ${email}.`, [
         {
           name: "send_message",

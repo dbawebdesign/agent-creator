@@ -460,6 +460,17 @@ export async function startConversationRun(input: { orgId: string; agentId: stri
       .limit(1)
   )[0];
   if (!msg) throw new EngineNotFoundError("Message");
+  const findPrior = async () =>
+    (
+      await database
+        .select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(and(eq(schema.runs.orgId, i.orgId), eq(schema.runs.conversationId, i.conversationId), sql`${schema.runs.input}->>'messageId' = ${msg.id}`))
+        .limit(1)
+    )[0];
+  // Durable dedupe: a webhook redelivered after the first reply run finished must not trigger a second reply.
+  const already = await findPrior();
+  if (already) return { runId: already.id };
   const runId = randomUUID();
   const existing = await database.transaction(async (tx) => {
     await tx.insert(schema.runs).values({
@@ -477,13 +488,7 @@ export async function startConversationRun(input: { orgId: string; agentId: stri
     return null as string | null;
   }).catch(async (err) => {
     if (!(err instanceof DuplicateRun)) throw err;
-    const prior = (
-      await database
-        .select({ id: schema.runs.id })
-        .from(schema.runs)
-        .where(and(eq(schema.runs.orgId, i.orgId), eq(schema.runs.conversationId, i.conversationId), sql`${schema.runs.input}->>'messageId' = ${msg.id}`))
-        .limit(1)
-    )[0];
+    const prior = await findPrior();
     if (prior) return prior.id;
     throw err;
   });
@@ -518,11 +523,28 @@ export async function triggerEvent(input: {
     .where(and(eq(schema.workflows.orgId, i.orgId), eq(schema.workflows.agentId, agent.id), eq(schema.workflows.enabled, true), sql`${schema.workflows.trigger}->>'type' = 'event' and ${schema.workflows.trigger}->>'event' = ${i.event}`));
   const runIds: string[] = [];
   for (const wf of wfs) {
+    if (i.dedupeKey) {
+      // Durable dedupe (the queue key only covers jobs still queued/running).
+      const prior = await database
+        .select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(and(eq(schema.runs.orgId, i.orgId), eq(schema.runs.workflowId, wf.id), sql`${schema.runs.input}->>'dedupeKey' = ${i.dedupeKey}`))
+        .limit(1);
+      if (prior[0]) continue;
+    }
     const runId = randomUUID();
     const queued = await database.transaction(async (tx) => {
       const job = await enqueue(tx, "agent.run", { orgId: i.orgId, runId }, { orgId: i.orgId, idempotencyKey: i.dedupeKey ? `event:${wf.id}:${i.dedupeKey}` : `run:${runId}` });
       if (!job) return false;
-      await tx.insert(schema.runs).values({ id: runId, orgId: i.orgId, agentId: agent.id, workflowId: wf.id, trigger: "event", status: "queued", input: { kind: "workflow", event: i.event, eventPayload: i.payload ?? {} } });
+      await tx.insert(schema.runs).values({
+        id: runId,
+        orgId: i.orgId,
+        agentId: agent.id,
+        workflowId: wf.id,
+        trigger: "event",
+        status: "queued",
+        input: { kind: "workflow", event: i.event, eventPayload: i.payload ?? {}, ...(i.dedupeKey ? { dedupeKey: i.dedupeKey } : {}) },
+      });
       return true;
     });
     if (queued) runIds.push(runId);

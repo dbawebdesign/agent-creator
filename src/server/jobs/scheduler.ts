@@ -89,3 +89,31 @@ export async function schedulerTick(database: DB, now: Date = new Date(), batch 
     return enqueued;
   });
 }
+
+/** How long a pending approval waits for a human before it expires (env APPROVAL_TTL_HOURS, default 7 days). */
+export function approvalTtlMs(): number {
+  const h = Number(process.env.APPROVAL_TTL_HOURS ?? 168);
+  return (Number.isFinite(h) && h > 0 ? h : 168) * 3_600_000;
+}
+
+/**
+ * Expire approvals nobody decided on and wake their runs so the agent records the action as not taken and
+ * finishes (the runtime treats "expired" like a rejection). Multi-worker safe: the UPDATE … WHERE status='pending'
+ * is atomic per row, and the resume job reuses decideApproval's idempotency key.
+ */
+export async function expireApprovals(database: DB, now: Date = new Date(), ttlMs = approvalTtlMs(), batch = 100): Promise<number> {
+  const cutoff = new Date(now.getTime() - ttlMs);
+  const expired = (
+    await database.execute(sql`
+      update approvals set status = 'expired', decided_at = ${now.toISOString()}::timestamptz
+      where id in (
+        select id from approvals where status = 'pending' and created_at < ${cutoff.toISOString()}::timestamptz
+        order by created_at limit ${batch} for update skip locked)
+      returning id, org_id, run_id`)
+  ).rows as Array<{ id: string; org_id: string; run_id: string | null }>;
+  for (const a of expired) {
+    if (a.run_id) await enqueue(database, "agent.run", { orgId: a.org_id, runId: a.run_id }, { orgId: a.org_id, priority: 30, idempotencyKey: `approval:${a.id}` });
+  }
+  if (expired.length) logger.info({ expired: expired.length }, "expired stale approvals");
+  return expired.length;
+}

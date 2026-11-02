@@ -83,7 +83,7 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "c" || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest("[role=dialog]"))) return;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest("[role=dialog],[role=menu],[role=listbox]"))) return;
       e.preventDefault();
       router.push(`${base}/agents/new`);
     };

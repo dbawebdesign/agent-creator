@@ -25,9 +25,11 @@ function inkFor(hex: string): string {
 export default async function PortalLayout({ children, params }: { children: React.ReactNode; params: Promise<{ org: string }> }) {
   const { org: slug } = await params;
   const p = await getPortal(slug);
-  const style = p.brand.accent ? ({ "--brand": p.brand.accent, "--brand-ink": inkFor(p.brand.accent) } as React.CSSProperties) : undefined;
+  // accent is validated as #rrggbb in resolveBrand, so this CSS can't carry anything else.
+  const brandCss = p.brand.accent ? `:root{--brand:${p.brand.accent};--brand-ink:${inkFor(p.brand.accent)}}` : null;
   return (
-    <div className="portal-root" data-brand={p.brand.accent ? "" : undefined} style={style}>
+    <div className="portal-root" data-brand={brandCss ? "" : undefined}>
+      {brandCss ? <style>{brandCss}</style> : null}
       <TooltipProvider>
         <PortalShell
           slug={p.org.slug}

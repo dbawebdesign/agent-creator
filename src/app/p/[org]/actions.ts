@@ -245,6 +245,18 @@ export async function addCustomerAction(
   const access = await requireReseller(parsed.data.slug);
   if (!access) return fail("Only client workspaces can resell");
   const { name, email } = parsed.data;
+  const [dupe] = await db()
+    .select({ id: schema.organizations.id })
+    .from(schema.organizations)
+    .where(
+      and(
+        eq(schema.organizations.parentId, access.org.id),
+        isNull(schema.organizations.deletedAt),
+        sql`lower(${schema.organizations.name}) = lower(${name})`,
+      ),
+    )
+    .limit(1);
+  if (dupe) return fail(`You already have a customer called ${name}`);
   const slug = await uniqueSlug(name);
   const [org] = await db()
     .insert(schema.organizations)
@@ -330,6 +342,12 @@ export async function createPlanAction(input: z.input<typeof planInput>): Promis
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Check the plan");
   const access = await requireReseller(parsed.data.slug);
   if (!access) return fail("Only client workspaces can resell");
+  const [dupe] = await db()
+    .select({ id: schema.plans.id })
+    .from(schema.plans)
+    .where(and(eq(schema.plans.orgId, access.org.id), eq(schema.plans.active, true), sql`lower(${schema.plans.name}) = lower(${parsed.data.name})`))
+    .limit(1);
+  if (dupe) return fail("You already have a plan with that name");
   await db()
     .insert(schema.plans)
     .values({

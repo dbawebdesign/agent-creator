@@ -194,7 +194,13 @@ export async function getToday(orgId: string) {
       .where(and(eq(schema.deliverables.orgId, orgId), gte(schema.deliverables.createdAt, since))),
     listAgentsLite(orgId),
     db()
-      .select({ nextRunAt: schema.workflows.nextRunAt, name: schema.workflows.name, agentName: schema.agents.name })
+      .select({
+        id: schema.workflows.id,
+        nextRunAt: schema.workflows.nextRunAt,
+        name: schema.workflows.name,
+        agentName: schema.agents.name,
+        agentSeed: sql<string>`coalesce(${schema.agents.avatarSeed}, ${schema.agents.id}::text)`,
+      })
       .from(schema.workflows)
       .innerJoin(schema.agents, eq(schema.agents.id, schema.workflows.agentId))
       .where(
@@ -206,7 +212,7 @@ export async function getToday(orgId: string) {
         ),
       )
       .orderBy(asc(schema.workflows.nextRunAt))
-      .limit(1),
+      .limit(3),
   ]);
   const pendingRuns = new Set(approvals.map((a) => a.runId).filter(Boolean));
   const needsReview = recent
@@ -222,6 +228,7 @@ export async function getToday(orgId: string) {
     overnight: { count: overnight[0]?.n ?? 0, hours: overnight[0]?.hours ?? 0 },
     agents,
     nextRun: nextRun[0] ?? null,
+    upcoming: nextRun,
   };
 }
 
@@ -275,6 +282,24 @@ export async function getDeliverable(orgId: string, id: string) {
     agent: row.agent as AgentLite,
     workflowName: row.workflowName,
   };
+}
+
+/** The next piece of work waiting on the client, so review can flow item to item. */
+export async function nextToReview(orgId: string, excludeId: string) {
+  const [row] = await db()
+    .select({ id: schema.deliverables.id, title: schema.deliverables.title })
+    .from(schema.deliverables)
+    .where(
+      and(
+        eq(schema.deliverables.orgId, orgId),
+        eq(schema.deliverables.needsReview, true),
+        inArray(schema.deliverables.status, ["new", "seen"]),
+        ne(schema.deliverables.id, excludeId),
+      ),
+    )
+    .orderBy(desc(schema.deliverables.createdAt))
+    .limit(1);
+  return row ?? null;
 }
 
 /* ------------------------------------------------------------------- Team */

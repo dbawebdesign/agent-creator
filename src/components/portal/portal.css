@@ -2,23 +2,24 @@
  * Portal tenant branding. The layout sets --brand / --brand-ink on .portal-root; we re-point both the raw
  * tokens and Tailwind's resolved --color-* tokens (those are computed at :root, so they must be re-declared).
  */
-.portal-root[data-brand] {
+/*
+ * The layout writes --brand/--brand-ink on :root (validated hex only), so portaled UI — dialogs, menus,
+ * toasts — is branded too. Re-pointing --accent on :root also re-resolves Tailwind's --color-accent there.
+ */
+:root:has(.portal-root[data-brand]) {
   --accent: var(--brand);
   --accent-ink: var(--brand-ink);
   --accent-soft: color-mix(in oklab, var(--brand) 9%, transparent);
-  --color-accent: var(--accent);
-  --color-accent-ink: var(--accent-ink);
-  --color-accent-soft: var(--accent-soft);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .portal-root[data-brand] {
+  :root:not([data-theme="light"]):has(.portal-root[data-brand]) {
     --accent: color-mix(in oklab, var(--brand) 72%, white);
     --accent-ink: #0c0c0e;
     --accent-soft: color-mix(in oklab, var(--brand) 20%, transparent);
   }
 }
-:root[data-theme="dark"] .portal-root[data-brand] {
+:root[data-theme="dark"]:has(.portal-root[data-brand]) {
   --accent: color-mix(in oklab, var(--brand) 72%, white);
   --accent-ink: #0c0c0e;
   --accent-soft: color-mix(in oklab, var(--brand) 20%, transparent);
@@ -62,3 +63,9 @@
   .portal-reading.prose-roster td { white-space: nowrap; }
   .portal-reading.prose-roster { font-size: 15px; }
 }
+
+/* Chat bubbles: compact prose. (Unlayered, like .prose-roster, so it can actually override it.) */
+.portal-bubble.prose-roster { font-size: 14px; line-height: 1.6; color: inherit; }
+.portal-bubble.prose-roster p, .portal-bubble.prose-roster ul, .portal-bubble.prose-roster ol { margin: 0.45em 0; }
+.portal-bubble.prose-roster > :first-child { margin-top: 0; }
+.portal-bubble.prose-roster > :last-child { margin-bottom: 0; }
