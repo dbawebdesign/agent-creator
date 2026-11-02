@@ -142,8 +142,6 @@ async function mrrCents(agencyId: string, ids: string[]): Promise<number> {
 const changesHrefSql = sql`'/agents/' || ${s.deliverables.agentId}::text || '/activity?deliverable=' || ${s.deliverables.id}::text`;
 
 export async function getHome(agencyId: string) {
-  const orgs = await agencyOrgs(agencyId);
-  const ids = orgs.map((o) => o.id);
   const empty = {
     delivered: [],
     approvals: [],
@@ -154,11 +152,11 @@ export async function getHome(agencyId: string) {
     numbers: { mrrCents: 0, activeAgents: 0, hoursWeek: 0, deliveredWeek: 0 },
     counts: { clients: 0, agents: 0 },
   };
-  if (!ids.length) return empty;
+  void empty;
   const since = new Date(Date.now() - DAY);
   const week = new Date(Date.now() - 7 * DAY);
 
-  const [delivered, approvals, failed, agents, firstDeliveries, week7, mrr, changes] = await Promise.all([
+  const [delivered, approvals, failed, attentionAgents, agentCounts, week7, mrr, changes] = await Promise.all([
     db()
       .select({
         id: s.deliverables.id,
@@ -178,7 +176,7 @@ export async function getHome(agencyId: string) {
       .from(s.deliverables)
       .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
       .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
-      .where(and(inArray(s.deliverables.orgId, ids), gte(s.deliverables.createdAt, since)))
+      .where(and(inAgency(s.deliverables.orgId, agencyId), gte(s.deliverables.createdAt, since)))
       .orderBy(desc(s.deliverables.createdAt))
       .limit(8),
     db()
@@ -196,7 +194,7 @@ export async function getHome(agencyId: string) {
       .from(s.approvals)
       .innerJoin(s.agents, eq(s.agents.id, s.approvals.agentId))
       .innerJoin(s.organizations, eq(s.organizations.id, s.approvals.orgId))
-      .where(and(inArray(s.approvals.orgId, ids), eq(s.approvals.status, "pending")))
+      .where(and(inAgency(s.approvals.orgId, agencyId), eq(s.approvals.status, "pending")))
       .orderBy(desc(s.approvals.createdAt))
       .limit(6),
     db()
@@ -215,27 +213,42 @@ export async function getHome(agencyId: string) {
       .innerJoin(s.agents, eq(s.agents.id, s.runs.agentId))
       .innerJoin(s.organizations, eq(s.organizations.id, s.runs.orgId))
       .leftJoin(s.workflows, eq(s.workflows.id, s.runs.workflowId))
-      .where(and(inArray(s.runs.orgId, ids), eq(s.runs.status, "failed"), gte(s.runs.createdAt, new Date(Date.now() - 3 * DAY))))
+      .where(and(inAgency(s.runs.orgId, agencyId), eq(s.runs.status, "failed"), gte(s.runs.createdAt, new Date(Date.now() - 3 * DAY))))
       .orderBy(desc(s.runs.createdAt))
       .limit(5),
+    // Only what the page shows: provisioning agents, active agents with no delivery yet, and counts.
     db()
       .select({ ...agentCols, orgName: s.organizations.name })
       .from(s.agents)
       .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
-      .where(inArray(s.agents.orgId, ids)),
+      .where(
+        and(
+          inAgency(s.agents.orgId, agencyId),
+          or(
+            eq(s.agents.status, "provisioning"),
+            and(eq(s.agents.status, "active"), sql`not exists (select 1 from deliverables d where d.agent_id = ${s.agents.id})`),
+          ),
+        ),
+      )
+      .orderBy(desc(s.agents.createdAt))
+      .limit(12),
     db()
-      .select({ agentId: s.deliverables.agentId, n: sql<number>`count(*)`.mapWith(Number) })
-      .from(s.deliverables)
-      .where(inArray(s.deliverables.orgId, ids))
-      .groupBy(s.deliverables.agentId),
+      .select({
+        active: sql<number>`count(*) filter (where ${s.agents.status} = 'active')`.mapWith(Number),
+        live: sql<number>`count(*) filter (where ${s.agents.status} <> 'archived')`.mapWith(Number),
+        provisioning: sql<number>`count(*) filter (where ${s.agents.status} = 'provisioning')`.mapWith(Number),
+        clients: sql<number>`(select count(*) from organizations o where (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and o.kind = 'client' and o.deleted_at is null)`.mapWith(Number),
+      })
+      .from(s.agents)
+      .where(inAgency(s.agents.orgId, agencyId)),
     db()
       .select({
         hours: sql<number>`coalesce(sum(${s.deliverables.hoursSaved}), 0)`.mapWith(Number),
         n: sql<number>`count(*)`.mapWith(Number),
       })
       .from(s.deliverables)
-      .where(and(inArray(s.deliverables.orgId, ids), gte(s.deliverables.createdAt, week))),
-    mrrCents(agencyId, ids),
+      .where(and(inAgency(s.deliverables.orgId, agencyId), gte(s.deliverables.createdAt, week))),
+    clientTotals(agencyId).then((t) => t.mrrCents),
     db()
       .select({
         id: s.deliverables.id,
@@ -265,22 +278,22 @@ export async function getHome(agencyId: string) {
       .limit(20),
   ]);
 
-  const delivering = new Set(firstDeliveries.map((d) => d.agentId));
-  const live = agents.filter((a) => a.status === "active" || a.status === "provisioning");
+  const counts = agentCounts[0];
   return {
     delivered,
     approvals,
     changes: changes.filter((c) => c.open && !c.revised).slice(0, 6),
     failed,
-    provisioning: agents.filter((a) => a.status === "provisioning"),
-    waiting: live.filter((a) => a.status === "active" && !delivering.has(a.id)),
+    provisioning: attentionAgents.filter((a) => a.status === "provisioning").slice(0, 6),
+    waiting: attentionAgents.filter((a) => a.status === "active").slice(0, 6),
     numbers: {
       mrrCents: mrr,
-      activeAgents: agents.filter((a) => a.status === "active").length,
+      activeAgents: counts?.active ?? 0,
+      provisioningAgents: counts?.provisioning ?? 0,
       hoursWeek: week7[0]?.hours ?? 0,
       deliveredWeek: week7[0]?.n ?? 0,
     },
-    counts: { clients: orgs.filter((o) => o.kind === "client").length, agents: agents.filter((a) => a.status !== "archived").length },
+    counts: { clients: counts?.clients ?? 0, agents: counts?.live ?? 0 },
   };
 }
 

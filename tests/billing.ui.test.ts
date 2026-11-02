@@ -33,7 +33,7 @@ describe("billing components", () => {
     session.current = await makeUser(t.agency.id, "owner");
     let out = await html(ConnectStripeCard({ sellerOrgId: t.agency.id, returnPath: "/a/x/billing" }));
     expect(out).toContain("Test mode");
-    expect(out).toContain("isn&#x27;t connected");
+    expect(out).toContain("aren&#x27;t set up yet");
     expect(out).not.toContain("/api/billing/connect?");
 
     process.env.STRIPE_SECRET_KEY = "sk_test_ui";
@@ -69,7 +69,7 @@ describe("billing components", () => {
     expect(await CheckoutLinksCard({ buyerOrgId: t.client.id, returnPath: "/p/x" })).toBeNull();
     session.current = await makeUser(t.agency.id, "admin");
     let out = await html((await CheckoutLinksCard({ buyerOrgId: t.client.id, returnPath: "/a/x/clients/y" }))!);
-    expect(out).toContain("connected to Roster yet");
+    expect(out).toContain("Checkout links appear once they are");
     expect(out).not.toContain("Copy checkout link");
     process.env.STRIPE_SECRET_KEY = "sk_test_ui";
     await connectAccount(t.agency.id, `acct_bt_ul${t.agency.id.slice(0, 4)}`);

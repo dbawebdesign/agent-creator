@@ -298,13 +298,15 @@ export const deliverables = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
-    index("deliverables_org_created_idx").on(t.orgId, t.createdAt),
     index("deliverables_agent_created_idx").on(t.agentId, t.createdAt),
     index("deliverables_run_idx").on(t.runId),
-    // Keyset pages: order by created_at desc, id desc; cursor `(created_at, id) < ($t, $id)`.
-    index("deliverables_org_created_id_idx").on(t.orgId, t.createdAt.desc(), t.id.desc()),
-    index("deliverables_agency_created_idx").on(t.agencyId, t.createdAt.desc()),
-    index("deliverables_agency_changes_idx").on(t.agencyId, t.createdAt.desc()).where(sql`${t.status} = 'changes_requested'`),
+    // Ascending on purpose: scanned backward they serve `order by created_at desc, id desc` (NULLS FIRST, the SQL
+    // default). A drizzle `.desc()` column is DESC NULLS LAST and would NOT match that order by.
+    // Keyset pages: `where org_id = $1 and (created_at, id) < ($t, $id) order by created_at desc, id desc`.
+    // Also replaces the old (org_id, created_at) index for every prefix use.
+    index("deliverables_org_created_id_idx").on(t.orgId, t.createdAt, t.id),
+    index("deliverables_agency_created_idx").on(t.agencyId, t.createdAt),
+    index("deliverables_agency_changes_idx").on(t.agencyId, t.createdAt).where(sql`${t.status} = 'changes_requested'`),
     index("deliverables_review_idx").on(t.orgId).where(sql`${t.needsReview} and ${t.status} in ('new','seen')`),
     index("deliverables_workflow_idx").on(t.workflowId).where(sql`${t.workflowId} is not null`),
   ],

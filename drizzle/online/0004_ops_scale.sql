@@ -13,11 +13,11 @@ BEGIN
   END LOOP;
 END $$;
 --> statement-breakpoint
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_org_created_id_idx" ON "deliverables" USING btree ("org_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_org_created_id_idx" ON "deliverables" USING btree ("org_id","created_at","id");
 --> statement-breakpoint
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_agency_created_idx" ON "deliverables" USING btree ("agency_id","created_at" DESC NULLS LAST);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_agency_created_idx" ON "deliverables" USING btree ("agency_id","created_at");
 --> statement-breakpoint
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_agency_changes_idx" ON "deliverables" USING btree ("agency_id","created_at" DESC NULLS LAST) WHERE "deliverables"."status" = 'changes_requested';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_agency_changes_idx" ON "deliverables" USING btree ("agency_id","created_at") WHERE "deliverables"."status" = 'changes_requested';
 --> statement-breakpoint
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "deliverables_review_idx" ON "deliverables" USING btree ("org_id") WHERE "deliverables"."needs_review" and "deliverables"."status" in ('new','seen');
 --> statement-breakpoint
@@ -27,8 +27,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "runs_workflow_idx" ON "runs" USING btre
 --> statement-breakpoint
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "webhook_events_created_idx" ON "webhook_events" USING btree ("created_at");
 --> statement-breakpoint
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "jobs_claim_idx" ON "jobs" USING btree ("queue","priority" DESC NULLS LAST,"run_at") WHERE "jobs"."status" = 'queued';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "jobs_claim_idx" ON "jobs" USING btree ("queue","priority" DESC NULLS FIRST,"run_at") WHERE "jobs"."status" = 'queued';
 --> statement-breakpoint
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "jobs_finished_idx" ON "jobs" USING btree ("finished_at") WHERE "jobs"."status" in ('succeeded','failed','dead');
 --> statement-breakpoint
 DROP INDEX CONCURRENTLY IF EXISTS "jobs_ready_idx";
+--> statement-breakpoint
+-- Superseded by deliverables_org_created_id_idx (same leading columns plus id).
+DROP INDEX CONCURRENTLY IF EXISTS "deliverables_org_created_idx";

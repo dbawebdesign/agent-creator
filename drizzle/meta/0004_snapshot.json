@@ -2029,27 +2029,6 @@
         }
       },
       "indexes": {
-        "deliverables_org_created_idx": {
-          "name": "deliverables_org_created_idx",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "deliverables_agent_created_idx": {
           "name": "deliverables_agent_created_idx",
           "columns": [
@@ -2098,13 +2077,13 @@
             {
               "expression": "created_at",
               "isExpression": false,
-              "asc": false,
+              "asc": true,
               "nulls": "last"
             },
             {
               "expression": "id",
               "isExpression": false,
-              "asc": false,
+              "asc": true,
               "nulls": "last"
             }
           ],
@@ -2125,7 +2104,7 @@
             {
               "expression": "created_at",
               "isExpression": false,
-              "asc": false,
+              "asc": true,
               "nulls": "last"
             }
           ],
@@ -2146,7 +2125,7 @@
             {
               "expression": "created_at",
               "isExpression": false,
-              "asc": false,
+              "asc": true,
               "nulls": "last"
             }
           ],
@@ -4201,7 +4180,7 @@
               "expression": "priority",
               "isExpression": false,
               "asc": false,
-              "nulls": "last"
+              "nulls": "first"
             },
             {
               "expression": "run_at",

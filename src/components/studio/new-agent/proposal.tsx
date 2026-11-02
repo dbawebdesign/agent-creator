@@ -109,6 +109,8 @@ export function ProposalReview({
               onChange={(e) => set("summary", e.target.value)}
               className="mt-2 w-full resize-none rounded-md bg-transparent text-[14.5px] leading-relaxed text-ink-3 [field-sizing:content] hover:bg-surface-2/60 focus:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
             />
+            {/* How this draft was made (e.g. offline, no AI model). Agency-only; never copied into client-facing questions. */}
+            {draft.draftNote ? <p className="mt-1 text-[12.5px] text-ink-4">{draft.draftNote}</p> : null}
           </div>
         </div>
 

@@ -31,7 +31,7 @@ export const jobs = pgTable(
   },
   (t) => [
     // Matches the claim's `order by priority desc, run_at` (a plain priority-asc index forced a full sort of the backlog).
-    index("jobs_claim_idx").on(t.queue, t.priority.desc(), t.runAt).where(sql`${t.status} = 'queued'`),
+    index("jobs_claim_idx").on(t.queue, t.priority.desc().nullsFirst(), t.runAt).where(sql`${t.status} = 'queued'`),
     // Retention: maintenance.prune deletes finished jobs by age.
     index("jobs_finished_idx").on(t.finishedAt).where(sql`${t.status} in ('succeeded','failed','dead')`),
     index("jobs_locked_idx").on(t.lockedUntil).where(sql`${t.status} = 'running'`),
