@@ -37,3 +37,5 @@ Product spec: `docs/SPEC.md`. Live progress: `.workbench/WORKBENCH.md`.
 - Typecheck with `npx tsc --noEmit`; tests with `npx vitest run tests/<yours>`.
 - Demo data: `npm run db:seed` (idempotent reset). Logins: `aj@northbeam.ai` / `roster-demo` (agency owner),
   `dana@brandlord.co` / `roster-demo` (client owner).
+- Scripts outside Next (worker, seed, one-off tsx) must run with `tsx --conditions=react-server …` so `server-only`
+  imports resolve (the npm scripts already do this). Vitest aliases `server-only` to a shim.
