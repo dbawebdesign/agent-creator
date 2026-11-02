@@ -98,7 +98,7 @@ On macOS use `sed -i ''`. `APP_URL=http://localhost:3000` is accepted for local 
 Built in one overnight gauntlet loop (builders + fresh-context critics; log in `.workbench/WORKBENCH.md`, reports in
 `.workbench/critique/`).
 
-- **Verified on `main`:** fresh migrate + seed; 350/350 tests (41 files) on a fresh database; strict typecheck; production
+- **Verified on `main`:** fresh migrate + seed; 359/359 tests (42 files) on a fresh database; strict typecheck; production
   build with no warnings; worker bundle; standalone server healthy with CSP, HSTS and frame headers; security critic
   findings (3 rounds) fixed and re-verified; scale measured on 2k orgs / 1.1M runs (see the workbench).
 - **Last critic scores:** Studio design 8/10, Portal design 8.5/10, product "sell it tomorrow?" 5/10 in rounds 4, 5 and 6
