@@ -4,8 +4,9 @@
  * shaped by kind (email drafts addressed to a person, tables built from real rows, reports with a summary and
  * "Needs your decision"), and revisions that apply the feedback to the previous draft.
  */
-import { cell, normalizeWhitespace, splitSentences, tokenize, truncate } from "../text";
+import { cell, normalizeWhitespace, tokenize, truncate } from "../text";
 import { mentions, namedInTask } from "./quotes";
+import { answerFromRows, asksForRows, collectTables, columnsOf as tableColumns, describePlan, forbiddenTopics, linkFrom, nounOf, planRows, planTable, plural, renderDraft, rowDraft, splitSentences, type FileTable, type Plan } from "./tablework";
 
 export type Snip = { title: string; text: string; kind?: string };
 export type ComposeInput = {
@@ -19,7 +20,8 @@ export type ComposeInput = {
   now?: Date;
 };
 /** `trace` is the agency-facing "how I put this together" table: recorded in run_steps, never in the client's body. */
-export type Composed = { title: string; kind: string; body: string; preview: string; trace?: string };
+/** `data.substantive` is false when the body is a placeholder (format only, asks for data): no hours are credited for it. */
+export type Composed = { title: string; kind: string; body: string; preview: string; trace?: string; data?: { substantive: boolean; basis?: string; rows?: number } };
 
 // ───────────────────────────────────────────── context ─────────────────────────────────────────────
 
@@ -92,32 +94,9 @@ function splitCsvLine(line: string, sep: string): string[] {
   return out;
 }
 
-/** CSV / TSV / markdown tables inside retrieved knowledge chunks. */
+/** CSV / TSV / markdown tables inside retrieved knowledge chunks (a file's blocks merged across chunks). */
 export function tablesIn(snips: Snip[]): DataTable[] {
-  const out: DataTable[] = [];
-  for (const s of snips) {
-    const lines = s.text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    // Markdown tables.
-    const md = lines.filter((l) => /^\|.*\|$/.test(l));
-    if (md.length >= 3 && /^\|[\s:|-]+\|$/.test(md[1]!)) {
-      const parse = (l: string) => l.slice(1, -1).split("|").map((c) => c.trim());
-      out.push({ title: s.title, headers: parse(md[0]!), rows: md.slice(2).map(parse) });
-      continue;
-    }
-    for (const sep of [",", "\t", ";"]) {
-      const cand = lines.filter((l) => l.includes(sep));
-      if (cand.length < 3) continue;
-      const cells = cand.map((l) => splitCsvLine(l, sep));
-      const width = cells[0]!.length;
-      if (width < 2 || cells.filter((c) => c.length === width).length < Math.max(3, cand.length * 0.8)) continue;
-      const header = cells[0]!;
-      // A header row is mostly words, not numbers or dates.
-      if (header.filter((h) => /^[A-Za-z#][\w #/().%-]*$/.test(h)).length < width * 0.7) continue;
-      out.push({ title: s.title, headers: header, rows: cells.slice(1).filter((c) => c.length === width) });
-      break;
-    }
-  }
-  return out;
+  return collectTables(snips).map((t) => ({ title: t.title, headers: t.headers, rows: t.rows }));
 }
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$|^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/;
@@ -374,6 +353,103 @@ function revise(input: ComposeInput, pool: Sent[]): Composed {
   return { title: input.title, kind: input.output, body, preview: truncate(`Revised “${input.title.replace(/\s*\(revised\)$/, "")}”: ${changes[0] ?? "applied your feedback"}`, 200) };
 }
 
+// ───────────────────────────────────────────── table work ─────────────────────────────────────────────
+
+/** The part of a task that says what to do with the data (first deliverable: the ask, not the borrowed procedure). */
+function taskTextOf(input: ComposeInput, own: string): string {
+  if (input.kind === "first_deliverable") {
+    const why = /\n\s*\nWhy: ([\s\S]*)$/.exec(input.body)?.[1] ?? "";
+    const ask = (own.split(/\n\s*\nFollow the procedure/)[0] ?? own).replace(/^Produce “[^”]*” tonight\s*—\s*/i, "");
+    return `${input.title}. ${ask} ${why}`;
+  }
+  return `${input.kind === "workflow" ? `${input.title}. ` : ""}${own}`;
+}
+
+/** Which uploaded table a task is about: named by file, or the one whose headers / values it talks about. */
+function tableFor(text: string, tables: FileTable[], rules: string[], now: Date): Plan | null {
+  const lower = text.toLowerCase();
+  let best: { p: Plan; score: number } | null = null;
+  for (const t of tables) {
+    if (!t.rows.length) continue;
+    const p = planRows(t, text, rules, now);
+    const named = lower.includes(t.title.toLowerCase()) || lower.includes(t.title.toLowerCase().replace(/\.[a-z]+$/, "").replace(/[_-]+/g, " "));
+    const headerHits = t.headers.filter((h) => tokenize(h.replace(/_/g, " ")).some((w) => w.length >= 4 && new RegExp(`\\b${w}`).test(lower))).length;
+    const score = (named ? 5 : 0) + p.applied.length * 2 + (p.sortedBy ? 2 : 0) + p.excluded.length + headerHits * 0.5;
+    if ((named || p.applied.length || p.sortedBy) && (!best || score > best.score)) best = { p, score };
+  }
+  return best?.p ?? null;
+}
+
+const wantsRowDrafts = (text: string) =>
+  /\b(?:draft|write|prepare|compose)\b[^.]*\b(?:texts?|sms|emails?|reminders?|messages?|notes?)\b|\b(?:reminder|follow-up) (?:texts?|emails?|messages?)\b/i.test(text) && /\b(?:each|every|per|all|one for|for the|owners?|clients?|customers?|contacts?)\b/i.test(text);
+
+/** A table / list task over an uploaded file, done on the rows. Null when no uploaded table fits the task. */
+function tableWork(input: ComposeInput, own: string, rules: string[], who: Who, now: Date, prefersText: boolean): Composed | null {
+  const tables = collectTables(input.knowledge);
+  if (!tables.length) return null;
+  const text = taskTextOf(input, own);
+  if (!asksForRows(text) && input.output !== "table") return null;
+  const p = tableFor(text, tables, rules, now);
+  if (!p) return null;
+  const noun = nounOf(p);
+  const lines: string[] = [];
+  const decisions: string[] = [];
+  const subj = (r: string[]) => (p.cols.subject >= 0 ? r[p.cols.subject] : r[0]) ?? "row";
+  const person = (r: string[]) => (p.cols.person >= 0 ? r[p.cols.person] : null);
+  const nameOf = (r: string[]) => `${subj(r)}${person(r) && person(r) !== subj(r) ? ` (${person(r)})` : ""}`;
+  const odOf = (r: string[]) => (p.cols.overdue >= 0 ? Number(r[p.cols.overdue]) : p.derived?.values.get(r));
+
+  const drafts = wantsRowDrafts(text)
+    ? p.rows.slice(0, 25).map((r) =>
+        rowDraft(p, r, {
+          org: who.org,
+          agent: who.agent,
+          channel: /\btexts?\b|\bsms\b/i.test(text) || (prefersText && !/\bemails?\b/i.test(text)) ? "text" : "email",
+          link: linkFrom(input.knowledge),
+          topic: null,
+          forbidden: forbiddenTopics(rules),
+        }),
+      )
+    : [];
+  const top = p.rows[0];
+  const topOd = top ? odOf(top) : undefined;
+  const summary = [describePlan(p, noun)];
+  if (top && p.sortedBy && topOd != null && Number.isFinite(topOd)) summary.push(`${subj(top)} is the most overdue at ${topOd} days.`);
+  if (drafts.length) {
+    const heldN = drafts.filter((d) => d.held).length;
+    summary.push(`${drafts.length} ${drafts[0]!.channel === "text" ? (drafts.length === 1 ? "reminder text" : "reminder texts") : drafts.length === 1 ? "email" : "emails"} drafted below, one per ${p.cols.person >= 0 ? norm1(p.table.headers[p.cols.person]!) : noun}${heldN ? `; ${heldN} ${heldN === 1 ? "waits" : "wait"} for sign-off` : ""}. Nothing is sent until you approve.`);
+  }
+  if (p.excluded.length) summary.push(`Left out: ${p.excluded.map((e) => nameOf(e.row)).join(", ")} — ${[...new Set(p.excluded.map((e) => e.why))].join("; ")}.`);
+  lines.push("## Summary", "", summary.join(" "));
+  if (p.unmapped.length) lines.push("", `**Couldn't apply:** ${p.unmapped.join("; ")}. ${p.applied.length ? "The rest is applied." : "Showing every row instead."}`);
+  lines.push("", `## ${p.rows.length ? cap(plural(noun)) : "Result"}`, "");
+  if (p.rows.length) lines.push(...planTable(p));
+  else lines.push(`No ${plural(noun)} in ${p.table.title} match${p.applied.length ? ` ${p.applied.join(", ")}` : ""}.`);
+  if (drafts.length) {
+    lines.push("", `## ${drafts[0]!.channel === "text" ? "Reminder texts" : "Emails"}`, "");
+    for (const d of drafts) lines.push(...renderDraft(d));
+    if (p.rows.length > drafts.length) lines.push(`_${p.rows.length - drafts.length} more rows are in the table above; I draft the first ${drafts.length} per run._`, "");
+  }
+  for (const h of p.held) decisions.push(`${nameOf(h.row)}: ${h.why}${h.who ? "" : ""} — the draft is ready but stays with you until it is signed off.`);
+  const fb = forbiddenTopics(rules);
+  if (drafts.length && rules.length) decisions.push(`Checked against your rules${fb.length ? ` (nothing about ${fb.join(" or ")})` : ""}: ${rules.slice(0, 3).map((r) => `“${truncate(r, 110)}”`).join(" ")}`);
+  if (decisions.length) lines.push("", "## Needs your decision", "", ...decisions.map((d) => `- ${d}`));
+  const preview = truncate(
+    `${p.rows.length} ${p.rows.length === 1 ? noun : plural(noun)}${p.applied.length ? ` where ${p.applied[0]}` : ""}${p.sortedBy ? `, ${p.sortedBy}` : ""}${drafts.length ? `, with ${drafts.length} ${drafts[0]!.channel === "text" ? "texts" : "emails"} drafted` : ""}.`,
+    200,
+  );
+  const trace = [
+    "| # | Step | Status | Based on |",
+    "|---|---|---|---|",
+    `| 1 | Read ${cell(p.table.title)} | ${p.table.rows.length} of ${p.table.total ?? p.table.rows.length} rows | ${cell(p.table.title)} |`,
+    `| 2 | Filter and sort | ${cell(p.applied.join(", ") || "none")}${p.sortedBy ? `; ${cell(p.sortedBy)}` : ""} | The instructions |`,
+    `| 3 | Drafts | ${drafts.length} | ${cell(p.cols.person >= 0 ? p.table.headers[p.cols.person]! : "—")} column |`,
+  ].join("\n");
+  return { title: input.title, kind: input.output === "email_draft" ? "document" : input.output, body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), preview, trace, data: { substantive: true, basis: p.table.title, rows: p.rows.length } };
+}
+
+const norm1 = (h: string) => h.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+name$/, "").trim();
+
 // ───────────────────────────────────────────── main ─────────────────────────────────────────────
 
 export function compose(input: ComposeInput): Composed {
@@ -385,7 +461,7 @@ export function compose(input: ComposeInput): Composed {
 
   const own = ownWordsOf(input.body);
   const ev = eventOf(input.body);
-  const steps = stepsOf(own).filter((s) => !/^(?:deliver it as one document|lead with)/i.test(s));
+  const steps = stepsOf(own).filter((s) => !/^(?:deliver it as one document|lead with|hard rules? from the call|rules? from the call)/i.test(s));
   const rules = rulesFrom(input.memories);
   const people = peopleFrom(input.memories);
   const recipient = recipientFrom(input.memories);
@@ -399,6 +475,12 @@ export function compose(input: ComposeInput): Composed {
   const wantsProposal = /\b(?:proposals?|bids?|quotes? for)\b/i.test(`${input.title} ${req}`) && !/\b(?:email|reply)\b/i.test(req) && input.kind !== "first_deliverable";
   const wantsEmail = !wantsProposal && (/\b(?:draft|write|compose|prepare)\b[^.]*\b(?:email|e-mail|letter|reply|message|text)\b/i.test(req) || (input.output === "email_draft" && !/template|kit|playbook|queue/i.test(input.title)));
   const wantsSummary = /\bsummari[sz]e|\bsummary of\b|\brecap\b/i.test(req);
+  // Work over an uploaded table (filter, sort, one draft per row) is done on the rows themselves.
+  const prefersText = input.memories.some((m) => m.kind === "preference" && /\btexts?\b|\balways text\b/i.test(m.text));
+  if (!wantsProposal && !(wantsEmail && (namedIn(req, who).length || input.output === "email_draft"))) {
+    const tw = tableWork(input, own, rules, who, now, prefersText);
+    if (tw) return tw;
+  }
   const decisions: string[] = [];
   const needs: string[] = [];
   const lines: string[] = [];
@@ -547,7 +629,6 @@ export function compose(input: ComposeInput): Composed {
       const kept = [/dollar|amount|price/i.test(rules.join(" ")) ? "dollar amounts" : null, /\bdates?\b/i.test(rules.join(" ")) ? "dates" : null, /deductible/i.test(rules.join(" ")) ? "deductibles" : null].filter((x): x is string => !!x);
       decisions.push(`Check the ${drafts.length === 1 ? "draft" : "drafts"} against your rules: ${rules.slice(0, 3).map((r) => `“${truncate(r, 120)}”`).join(" ")}${kept.length ? ` — I kept out ${listJoin(kept)}.` : ""}`);
     }
-    if (drafts.length) decisions.push(`Approve, edit or reject ${drafts.length === 1 ? "the draft" : "each draft"} above.`);
     sources.push({ step: "Email drafts", status: drafts.length ? (targetedFrom || data ? "Built from your data" : "Drafted from your request") : "Not drafted: no recipient", basis: targetedFrom ?? (data ? data.table.title : "Your request") });
   } else {
     // Report / document / table: summary, the work products the steps ask for, what was checked, decisions, needs.
@@ -853,6 +934,9 @@ export function answerFromTables(question: string, tables: Analysis[], named: st
 
 /** Offline chat answers: named rows in the data that hold what was asked. */
 export function answerQuestion(question: string, knowledge: Snip[], now = new Date()): string[] {
+  // "Which patients are more than 100 days overdue?" is answered from the rows (filtered, sorted, counted).
+  const fromRows = answerFromRows(question, collectTables(knowledge), [], now);
+  if (fromRows) return [fromRows.replace(/\.$/, "")];
   const tables = tablesIn(knowledge).map((t) => analyze(t, now));
   return answerFromTables(question, tables, namedInTask(question));
 }

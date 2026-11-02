@@ -406,6 +406,46 @@ describe("Architect (offline) — product critic r3 H4 and design critic r4 regr
     expect(spec.channels).toContain("sms");
   });
 
+  it("veterinary clinic (Harborview): vaccine recalls first, an Industry-based role, the speaker's own job names, no cleaning/HIPAA leftovers", () => {
+    const spec = checkRubric({
+      file: "discovery-vet-harborview.md",
+      org: "Harborview Animal Hospital",
+      industry: "Veterinary clinic",
+      main: /vaccine recall/i,
+      also: [/post-surgery check-in/i, /pet insurance claim form/i, /no-show/i, /review/i],
+      never: /honestly|my week|call-out|crew|coverage/i,
+      // The call states 6 + 3 + 4 + 2 + 1.5 = 16.5 hours a week: within ±25%.
+      weekly: [16.5 * 0.75, 16.5 * 1.25],
+      role: /^Veterinary .*Coordinator$/,
+      extra: (s) => {
+        expect(s.workflows).toHaveLength(5);
+        expect(s.workflows[0]!.name).toBe("Vaccine recalls");
+        expect(s.workflows[0]!.trigger).toMatchObject({ type: "schedule", cron: "0 7 * * 1,4" });
+        expect(s.workflows[0]!.instructions).toMatch(/Cornerstone/);
+        expect(s.workflows[0]!.instructions).toMatch(/reminder text/);
+        expect(s.workflows.find((w) => /check-in/i.test(w.name))!.trigger).toMatchObject({ cron: "0 6 * * 1-5" });
+        expect(s.role).not.toMatch(/crew|scheduling/i);
+        expect(s.vertical).toBe("Veterinary clinic");
+        expect(s.seedMemories[0]).toBe("Harborview Animal Hospital is a veterinary clinic business serving pet owners.");
+        // Nothing from other playbooks: no crews, call-outs, property managers, or HIPAA for animals.
+        const text = allText(s).join("\n");
+        expect(text).not.toMatch(/\bcrew|call-out|calls out|property manager|HIPAA|\bBAA\b|\bPHI\b|7 PM scramble/i);
+        // Never a name, pain, question or need built from filler ("honestly my week is eaten by the phone").
+        expect(text).not.toMatch(/honestly my week|\bmy week\b/i);
+        expect(s.summary).not.toMatch(/honestly/i);
+        for (const q of s.openQuestions) expect(q).not.toMatch(/\b(?:to|of|for|in)\s{2,}|\(\s*\)|access to\s+for/);
+        expect(s.knowledgeNeeds.map((k) => k.title).join(" | ")).not.toMatch(/crew|roster|honestly/i);
+        expect(s.resaleIdea).not.toMatch(/call-out|scramble/i);
+        // Rules whole, abbreviations and reasons included.
+        expect(s.instructions).toContain("“Also, anything going to the Elm St. Rescue account needs Kayla's sign-off first.”");
+        expect(s.instructions).toMatch(/Never contact the Whitfield family about Biscuit\. Their dog passed last month/);
+        expect(s.instructions).toMatch(/Never quote a price for surgery or dental work\. Only Dr\. Okafor or I give estimates/);
+        expect(s.summary).toMatch(/of the ~17 hours a week described on the call/);
+      },
+    });
+    expect(spec.firstDeliverable.description).toContain("A list of every patient overdue for rabies or DHPP");
+  });
+
   it("estate planning law firm (Harbor & Pine): Monday aging, Friday cash summary, reply routing — no answered questions, no markup words", () => {
     const spec = checkRubric({
       file: "discovery-law-harbor-pine.md",

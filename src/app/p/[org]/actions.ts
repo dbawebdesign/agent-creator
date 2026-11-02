@@ -137,7 +137,8 @@ export async function reviewDeliverableAction(
       feedback,
       actor,
     });
-    // An email draft that waits on a send approval is decided together with its review.
+    // Only an approval tied to THIS deliverable is decided with its review — never the run's other pending approvals
+    // (a held reply, a payment change, an external send) that the person didn't see (security critique r3 H2).
     if (d.runId && action !== "archive") {
       const pending = await db()
         .select({ id: schema.approvals.id })
@@ -147,6 +148,7 @@ export async function reviewDeliverableAction(
             eq(schema.approvals.orgId, access.org.id),
             eq(schema.approvals.runId, d.runId),
             eq(schema.approvals.status, "pending"),
+            sql`${schema.approvals.payload}->>'deliverableId' = ${d.id}`,
           ),
         );
       for (const a of pending) {

@@ -26,6 +26,7 @@ import { indexText } from "@/server/knowledge";
 import { logger } from "@/server/lib/logger";
 import { costMicros, LlmError } from "@/server/llm";
 import { slugify, truncate } from "@/server/llm/text";
+import { genericForResale, resalePrivate, retargetSpec } from "@/server/services/resale";
 import { audit } from "@/server/security/audit";
 import { emailDomainFor } from "@/server/channels/domains";
 
@@ -1147,10 +1148,17 @@ export async function resellAgent(input: {
     : [];
   if (sources.length !== shareIds.length) throw new EngineNotFoundError("Knowledge source");
 
-  // Re-target the clone at the customer: the role, voice, workflows and generic procedure — not the reseller's people,
-  // rules, call quotes or memories. The reseller is credited as the provider.
-  const people = await resellerPeople(database, i.orgId, source.id);
-  const spec = genericForResale(retargetSpec(await specFromAgent(database, i.orgId, source.id), reseller.name, customer.name), people, source.name);
+  // Re-target the clone at the customer: the role (for the customer's industry), voice, workflows and generic
+  // procedure — not the reseller's people, accounts, rules, call quotes, memories or unshared files. The reseller is
+  // credited as the provider.
+  const retargeted = retargetSpec(await specFromAgent(database, i.orgId, source.id), reseller.name, customer.name);
+  const scrub = await resalePrivate(database, { orgId: i.orgId, agentId: source.id, spec: retargeted, sharedSourceIds: sources.map((s) => s.id), customerName: customer.name });
+  const spec = genericForResale(retargeted, scrub, source.name, {
+    customerName: customer.name,
+    resellerName: reseller.name,
+    customerIndustry: customer.industry,
+    resellerIndustry: reseller.industry,
+  });
   const { agentId } = await hireAgent({ orgId: customer.id, spec, actor: i.actor, sourceAgentId: source.id, monthlyBudgetCents: source.config.monthlyBudgetCents });
 
   for (const s of sources.filter((x) => x.status === "ready")) {
@@ -1176,81 +1184,4 @@ export async function resellAgent(input: {
   return { agentId };
 }
 
-/** Names of the reseller's people (its members and the people its agent learned about): never carried to a customer. */
-async function resellerPeople(database: DB, orgId: string, agentId: string): Promise<string[]> {
-  const [members, mems, contacts] = await Promise.all([
-    database
-      .select({ name: schema.users.name })
-      .from(schema.memberships)
-      .innerJoin(schema.users, eq(schema.users.id, schema.memberships.userId))
-      .where(eq(schema.memberships.orgId, orgId))
-      .limit(500),
-    database
-      .select({ content: schema.memories.content })
-      .from(schema.memories)
-      .where(and(eq(schema.memories.orgId, orgId), eq(schema.memories.agentId, agentId), sql`(${schema.memories.kind} = 'person' or ${schema.memories.content} ~ '^Person')`))
-      .limit(500),
-    database.select({ name: schema.contacts.name }).from(schema.contacts).where(eq(schema.contacts.orgId, orgId)).limit(500),
-  ]);
-  const names = [
-    ...members.map((m) => m.name),
-    ...contacts.map((c) => c.name),
-    ...mems.map((m) => /^Person(?: mentioned on the call)?:\s*([^(.,]+)/.exec(m.content)?.[1] ?? null),
-  ].filter((n): n is string => !!n && n.trim().length >= 2);
-  return [...new Set(names.map((n) => n.trim()))];
-}
-
-/**
- * Strip what belongs to the reseller's own business from a cloned spec: quotes from its discovery call, its rules,
- * the people and systems it named, and a first deliverable written from its call. The procedure stays.
- */
-export function genericForResale(spec: AgentSpec, people: string[], agentName: string): AgentSpec {
-  const escape = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const tokens = [...new Set(people.flatMap((p) => [p, p.split(/\s+/)[0] ?? ""]))].filter((t) => t.length >= 3 && t !== agentName).sort((a, b) => b.length - a.length);
-  const nameRe = tokens.length ? new RegExp(`\\b(?:${tokens.map(escape).join("|")})(?:'s)?\\b`, "g") : null;
-  const clean = (t: string) =>
-    (nameRe ? t.replace(nameRe, (m) => (/'s$/.test(m) ? "the team's" : "the team")) : t)
-      .split("\n")
-      .filter((l) => !/^\s*(?:\d+\.\s*)?(?:Hard rules from the call|- People:|- Systems you will work with:)/i.test(l))
-      .map((l) => l.replace(/\s*On the call: “[^”]*”(?:\s*—[^.\n]*\.)?/g, "").replace(/\s*\(The call points this way: “[^”]*”\)/g, "").replace(/“[^”]*”/g, "").replace(/\s{2,}/g, " ").trimEnd())
-      .join("\n");
-  // The reseller's rules section becomes the platform default.
-  const instructions = spec.instructions.replace(/## Rules from the call\n(?:- .*\n?)+/, "## Rules\n- Nothing leaves the business (emails, texts, changes in client systems) without approval.\n");
-  return agentSpec.parse({
-    ...spec,
-    instructions: truncate(clean(instructions), 12000),
-    summary: truncate(clean(spec.summary), 280),
-    workflows: spec.workflows.map((w) => ({ ...w, problem: "", instructions: truncate(clean(w.instructions), 6000) })),
-    firstDeliverable: {
-      title: truncate(`Your first week with ${spec.name}`, 120),
-      description: truncate(`What ${spec.name} will take over each week, and a first piece of finished work.`, 600),
-      instructions:
-        "Using the knowledge base (if any) and the workflows below, deliver a one-page brief: what you will do each week, what you need from the team to start (data, logins, documents), and a first piece of finished work in the format each workflow produces. Do not refer to any other business.",
-    },
-    seedMemories: [],
-    openQuestions: [],
-    resaleIdea: "",
-  });
-}
-
-/** Replace the reseller's name with the customer's throughout a cloned spec; credit the reseller once. */
-export function retargetSpec(spec: AgentSpec, fromName: string, toName: string): AgentSpec {
-  const from = fromName.trim();
-  const swap = (t: string) => (from ? t.replace(new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), toName) : t);
-  const credit = `Provided to ${toName} by ${from}.`;
-  return agentSpec.parse({
-    ...spec,
-    summary: truncate(`${swap(spec.summary).replace(/\s*Provided to .* by .*\.$/, "")} ${credit}`.trim(), 280),
-    instructions: truncate(`You work for ${toName}. ${swap(spec.instructions)}\n\n(${credit})`, 12000),
-    workflows: spec.workflows.map((w) => ({ ...w, name: truncate(swap(w.name), 80), problem: truncate(swap(w.problem), 600), instructions: truncate(swap(w.instructions), 6000) })),
-    firstDeliverable: {
-      title: truncate(swap(spec.firstDeliverable.title), 120),
-      description: truncate(swap(spec.firstDeliverable.description), 600),
-      instructions: truncate(swap(spec.firstDeliverable.instructions), 4000),
-    },
-    seedMemories: spec.seedMemories.map(swap),
-    openQuestions: spec.openQuestions.map(swap),
-  });
-}
-
-export { LlmError, draftsIn };
+export { LlmError, draftsIn, genericForResale, retargetSpec };

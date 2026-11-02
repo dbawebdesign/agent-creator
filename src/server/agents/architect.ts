@@ -162,6 +162,7 @@ const VERTICALS: Vertical[] = [
   { id: "design", label: "Design & branding agency", re: /design agency|brand assets|branding|graphic design/gi, customers: "brand clients" },
   { id: "legal", label: "Legal services", re: /law firm|attorneys?|lawyers?|paralegals?|case files?/gi, customers: "clients" },
   { id: "dental", label: "Dental practice", re: /dental|dentists?|hygienists?|patients?|orthodont\w*/gi, customers: "patients" },
+  { id: "vet", label: "Veterinary practice", re: /veterinar\w*|animal hospital|\bvets?\b|pet clinic|small animal/gi, customers: "pet owners" },
   { id: "medical", label: "Medical practice", re: /clinic|physicians?|med ?spa|chiropract\w*|physical therap\w*/gi, customers: "patients" },
   { id: "home", label: "Home services (HVAC, plumbing, electrical)", re: /\bhvac\b|plumbing (?:company|contractor|business)|furnaces?|air condition\w*|heating (?:and|&) air|technicians?/gi, customers: "homeowners" },
   { id: "roofing", label: "Roofing & exteriors contractor", re: /roof\w*|gutters?|siding|storm damage|hail/gi, customers: "homeowners" },
@@ -297,11 +298,13 @@ const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? "st" : n % 10 =
 const clock = (h: number, m: number) => `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 
 /** Systems that hold records (not the portals/carriers the agent checks against). */
-const RECORD_SYSTEMS = /^(?:PestPac|FieldRoutes|GorillaDesk|ServiceTrade|Swept|Janitorial Manager|Google Sheet|Dentrix|Eaglesoft|Open Dental|AppFolio|Buildium|Yardi|Rent Manager|QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|ServiceTitan|Housecall Pro|Jobber|Applied Epic|EZLynx|HawkSoft|Clio|Salesforce|HubSpot|AccuLynx|JobNimbus|Procore|Buildertrend|Karbon|TaxDome|Canopy|Shopify|Airtable|Google Sheets|Excel|commonsku|ESP|SAGE)$/;
+const RECORD_SYSTEMS = /^(?:Cornerstone|AVImark|ezyVet|PestPac|FieldRoutes|GorillaDesk|ServiceTrade|Swept|Janitorial Manager|Google Sheet|Dentrix|Eaglesoft|Open Dental|AppFolio|Buildium|Yardi|Rent Manager|QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|ServiceTitan|Housecall Pro|Jobber|Applied Epic|EZLynx|HawkSoft|Clio|Salesforce|HubSpot|AccuLynx|JobNimbus|Procore|Buildertrend|Karbon|TaxDome|Canopy|Shopify|Airtable|Google Sheets|Excel|commonsku|ESP|SAGE)$/;
 const MESSAGING_SYSTEMS = /^(?:Weave|Podium|Outlook|Gmail|Slack|Teams)$/;
 
 type Ctx = {
   org: string;
+  /** The Industry the agency typed, when given. */
+  industry?: string | null;
   d: Discovery;
   vertical: Vertical | null;
   ownerFirst: string;
@@ -351,10 +354,11 @@ function cronFor(t: Topic, ctx: Ctx, p: Play): WorkflowSpec["trigger"] {
   }
   if (c.kind === "weekly") {
     const months = c.months?.length ? c.months : null;
+    const days = c.dows?.length ? c.dows : [c.dow];
     return {
       type: "schedule",
-      cron: `0 7 * ${months ? months.join(",") : "*"} ${c.dow}`,
-      label: `${DOW[c.dow]} at 7:00 AM${months ? ` in ${listJoin(months.map((m) => MONTH_NAMES[m - 1]!))}` : ""}`,
+      cron: `0 7 * ${months ? months.join(",") : "*"} ${days.join(",")}`,
+      label: `${listJoin(days.map((x) => DOW[x]!))} at 7:00 AM${months ? ` in ${listJoin(months.map((m) => MONTH_NAMES[m - 1]!))}` : ""}`,
     };
   }
   if (p.at) return { type: "schedule", cron: `${p.at.m} ${p.at.h} * * ${c.days}`, label: `${c.days === "1-6" ? "Mon–Sat" : c.days === "*" ? "Every day" : "Weekdays"} at ${clock(p.at.h, p.at.m)}` };
@@ -390,6 +394,8 @@ type Play = {
   verb: (t: Topic, ctx: Ctx) => string;
   /** Short label when this task rides along with the owner's first ask ("last week's complaints by site"). */
   askLabel?: (t: Topic, ctx: Ctx) => string;
+  /** The play's own wording (crews, adjusters, vendors…) only applies when the speaker's words or the vertical match. */
+  fits?: (t: Topic, ctx: Ctx) => boolean;
 };
 
 const approvalStep = (t: Topic, ctx: Ctx, what: string) => {
@@ -410,6 +416,21 @@ const requesterOf = (t: Topic) => {
 };
 
 const visitOf = (t: Topic) => (/walk-?through/i.test(topicText(t)) ? "walk-through" : /inspection/i.test(topicText(t)) ? "inspection" : "site visit");
+const GUARDISH = /^(?:and |also |but )?(?:never|always|don'?t ever|only)\b/i;
+/** The speaker's own name for the job, made a complete noun phrase ("No-shows" + "call to rebook" → "No-show rebooking"). */
+const jobName = (t: Topic): string => {
+  const base = trimPhrase(t.label ?? t.phrase);
+  const txt = topicText(t);
+  if (/^(?:no-?shows?|cancellations?|missed appointments?)$/i.test(base)) return /rebook|reschedul/i.test(txt) ? `${cap(singular(base.toLowerCase()))} rebooking` : `${cap(singular(base.toLowerCase()))} follow-up`;
+  return cap(base);
+};
+/** Role from the client's Industry and the top pain ("Veterinary" + "vaccine recalls" → "Veterinary Vaccine Recall Coordinator"). */
+const industryRole = (t: Topic, ctx: Ctx): string => {
+  const ind = (ctx.industry ?? ctx.vertical?.label ?? "").split(/[\s/&,]+/)[0] ?? "";
+  const pain = jobName(t).split(/\s+/).map((w) => cap(singular(w.toLowerCase()))).join(" ");
+  const head = ind && !/^(?:commercial|small|local|the|a)$/i.test(ind) && !pain.toLowerCase().startsWith(ind.toLowerCase()) ? `${cap(ind.toLowerCase())} ` : "";
+  return truncate(`${head}${pain} Coordinator`, 80);
+};
 /** Chasing unpaid invoices from an aging report (30/60/90 days). */
 const isAging = (t: Topic) => t.action === "chase" && /\baging\b/i.test(`${t.phrase} ${topicText(t)}`);
 /** A report one person inside the business wants ("every Friday Mark wants a one-page cash summary") → who. */
@@ -429,6 +450,7 @@ const COMPUTER = ["computer_screenshot", "computer_click", "computer_type", "com
 
 const PLAYS: Record<Action, Play> = {
   verify: {
+    fits: (t) => /\b(?:verif\w*|eligibility|benefits|coverage|background|credit check)\b/i.test(topicText(t)),
     role: (t) => `${cap(t.qualifier || "Insurance")} Verification Coordinator`,
     name: (t) => `${cap(t.qualifier || singular(t.phrase.replace(/\s*verif\w*/, "")) || "Insurance")} verification${/tomorrow/i.test(t.sentences.map((s) => s.text).join(" ")) ? " for tomorrow's schedule" : ""}`,
     cadence: { kind: "daily", days: "1-5" },
@@ -482,7 +504,9 @@ const PLAYS: Record<Action, Play> = {
     role: (t, ctx) =>
       /claim/i.test(t.sentences.map((s) => s.text).join(" ")) && /adjuster|carrier/.test(t.phrase)
         ? "Claims Follow-up Coordinator"
-        : isAging(t) || /invoice|balance|payment/.test(t.phrase)
+        : /recalls?$/.test(t.phrase)
+          ? industryRole(t, ctx)
+          : isAging(t) || /invoice|balance|payment/.test(t.phrase)
           ? "Billing Coordinator"
           : `${cap(audienceOf(t, ctx))} Follow-up Coordinator`,
     name: (t) => {
@@ -490,6 +514,7 @@ const PLAYS: Record<Action, Play> = {
       if (/1099|w-?9/i.test(t.phrase)) return "W-9 collection & 1099 prep";
       if (/adjuster|carrier|insurance compan/i.test(t.phrase)) return /claim/i.test(txt) ? "Stalled claims: adjuster follow-up" : "Adjuster follow-up";
       if (isAging(t)) return `${t.cadence?.kind === "weekly" && t.cadence.dow === 1 ? "Monday " : ""}aging report & payment reminders`;
+      if (/recalls?$/.test(t.phrase)) return cap(t.label ?? t.phrase);
       if (/^(?:overdue|past[- ]due|outstanding|unpaid) (?:invoices?|balances?)$/.test(t.phrase)) return `${cap(t.phrase.split(" ")[0]!)} invoice follow-up`;
       const obj = normalizeObject(t.phrase);
       return `${cap(obj.includes(" ") ? obj : singular(obj))} follow-up`;
@@ -513,6 +538,19 @@ const PLAYS: Record<Action, Play> = {
         ];
       }
       const via = txt ? `text${messagingTool(ctx) ? ` (through ${messagingTool(ctx)})` : ""}` : "email";
+      if (/recalls?$/.test(t.phrase)) {
+        const all = topicText(t);
+        const items = [...new Set((all.match(/\b(?:rabies|DHPP|FVRCP|bordetella|lepto(?:spirosis)?|FeLV|cleanings?|check-?ups?|exams?)\b/gi) ?? []).map((x) => x))];
+        const what = items.length ? listJoin(items, "or") : "the care they are due for";
+        const via2 = /\btexts?\b/i.test(all) ? "text" : via;
+        return [
+          `Pull the overdue list from ${rec ?? "the practice system"}: every ${aud} whose ${/\bpet\b/i.test(all) ? "pet" : "appointment"} is overdue for ${what}, with the due date.`,
+          `Sort it by days overdue, most overdue first.`,
+          `Draft one short reminder ${via2} per ${aud}, by name${/\bpet'?s name\b/i.test(ctx.d.sentences.map((x) => x.text).join(" ")) ? ", with the pet's name in it (never “your pet”)" : ""}, with an easy way to book.`,
+          approvalStep(t, ctx, `any reminder goes to ${an(aud)}`),
+          `Deliver the list (patient, ${aud}, ${items.length ? "vaccine" : "item"}, due date, days overdue, drafted ${via2}) with the drafts ready to approve.`,
+        ];
+      }
       if (isAging(t)) {
         const all = topicText(t);
         const buckets = /\b30, 60,? (?:and )?90\b/.test(all) ? "30, 60 and 90+ days" : "age (30, 60, 90+ days)";
@@ -542,12 +580,16 @@ const PLAYS: Record<Action, Play> = {
         ? [`Should reminders go out from ${ctx.ownerFirst}'s email or a shared billing address?`]
         : [`How many touches should ${an(audienceOf(t, ctx))} get before we stop, and from whose name and number should messages go?`],
     overnight: (t, ctx) => ({
-      title: `${PLAYS.chase.name(t, ctx).replace(/^Stalled claims: adjuster follow-up$/, "Stalled claims")} — today's queue and drafted ${prefersText(t, ctx) ? "texts" : "emails"}`,
+      title: `${PLAYS.chase.name(t, ctx).replace(/^Stalled claims: adjuster follow-up$/, "Stalled claims")} — ${/recalls?$/.test(t.phrase) ? "the overdue list" : "today's queue"} and drafted ${prefersText(t, ctx) || /\btext/i.test(topicText(t)) ? "texts" : "emails"}`,
       description: `Every open item ${ctx.org} mentioned, prioritized by value, with a message ready to approve${t.money ? ` — about ${fmtMoney(t.money)} is waiting in this list` : ""}.`,
       instructions: [
         "Using the discovery call and memory:",
-        `1. Lay out the follow-up queue as a GFM table (${audienceOf(t, ctx)}, what is open, value, last contact, next step) — fill it from anything the call or knowledge base names; mark rows "example" where you have no data yet.`,
-        isAging(t)
+        /recalls?$/.test(t.phrase)
+          ? `1. Build the overdue list as a table (patient, ${audienceOf(t, ctx)}, what is due, due date, days overdue, drafted reminder), most overdue first — from the export in the knowledge base if there is one; mark rows "example" otherwise.`
+          : `1. Lay out the follow-up queue as a GFM table (${audienceOf(t, ctx)}, what is open, value, last contact, next step) — fill it from anything the call or knowledge base names; mark rows "example" where you have no data yet.`,
+        /recalls?$/.test(t.phrase)
+          ? `2. Draft the reminder ${/\btexts?\b/i.test(topicText(t)) ? "text" : "email"} for each ${audienceOf(t, ctx)}, by name and with the patient's name in it, ready to approve.`
+          : isAging(t)
           ? `2. Draft the reminder for each age bucket (30, 60 and 90+ days) in the firm's voice${/\bcc the attorney\b/i.test(topicText(t)) ? "; the 90-day one firmer, with the attorney cc'd" : ""}, and the short list of anything that needs a partner.`
           : `2. Draft three ${prefersText(t, ctx) ? "texts" : "emails"} in ${ctx.ownerFirst}'s voice: first touch, second touch, last touch.`,
         `3. Say exactly which export you need to fill the real queue next run, and what needs a decision (who approves, how many touches).`,
@@ -625,6 +667,7 @@ const PLAYS: Record<Action, Play> = {
     verb: (t, ctx) => `drafts the ${PLAYS.report.name(t, ctx).toLowerCase()}`,
   },
   triage: {
+    fits: (t) => isComplaints(t) || /\b(?:maintenance|repairs?|vendors?|tenants?|work orders?|tickets?|units?)\b/i.test(topicText(t)),
     role: (t) => (isComplaints(t) ? "Client Care Coordinator" : `${cap(t.qualifier || "Service")} Coordinator`),
     name: (t) => (isComplaints(t) ? `${cap(requesterOf(t))} requests & complaints` : `${cap(t.qualifier || "Service")} request triage & dispatch`),
     cadence: { kind: "event", channel: "email" },
@@ -749,6 +792,7 @@ const PLAYS: Record<Action, Play> = {
     verb: (t) => `sends ${t.qualifier || ""} renewal offers on time`,
   },
   packet: {
+    fits: (t) => /\b(?:adjusters?|supplements?|xactimate|packets?|permits?|submittals?|claim (?:paperwork|files?))\b/i.test(topicText(t)),
     role: (t) => (/claim|supplement/i.test(t.sentences.map((s) => s.text).join(" ")) ? "Claims Coordinator" : "Paperwork Coordinator"),
     name: (t) => {
       const txt = t.sentences.map((s) => s.text).join(" ");
@@ -973,6 +1017,7 @@ const PLAYS: Record<Action, Play> = {
     verb: () => "moves data between systems overnight",
   },
   coverage: {
+    fits: (t) => /\b(?:crews?|shifts?|techs?|technicians?|cleaners?|staff|drivers?|employees?|route|call(?:s|ed)? (?:in |out)|cover)\b/i.test(topicText(t)),
     role: () => "Crew Scheduling Coordinator",
     name: () => "Call-out coverage",
     cadence: { kind: "event", channel: "sms" },
@@ -1010,6 +1055,7 @@ const PLAYS: Record<Action, Play> = {
     askLabel: () => "call-out coverage",
   },
   schedule: {
+    fits: (t) => /\b(?:dispatch|techs?|technicians?|crews?|routes?|installers?|drivers?|jobs?)\b/i.test(topicText(t)),
     role: () => "Dispatch Coordinator",
     name: () => "Morning dispatch board",
     cadence: { kind: "daily", days: "1-6" },
@@ -1062,6 +1108,7 @@ const PLAYS: Record<Action, Play> = {
     verb: () => "asks for and answers reviews",
   },
   sync: {
+    fits: (t) => /\b(?:catalogs?|price lists?|scrap\w*|suppliers?|product (?:data|feeds?))\b/i.test(topicText(t)),
     role: () => "Catalog & Pricing Analyst",
     name: () => "Nightly catalog & pricing sync",
     cadence: { kind: "daily", days: "1-5" },
@@ -1142,23 +1189,31 @@ const PLAYS: Record<Action, Play> = {
     verb: (t) => (isReplyRouting(t) ? "routes client replies to the right person" : "triages the inbox and drafts replies"),
   },
   manual: {
-    role: () => "Operations Assistant",
-    name: (t) => cap(truncate(t.phrase, 60)),
+    role: (t, ctx) => industryRole(t, ctx),
+    name: (t) => jobName(t),
     cadence: { kind: "weekly", dow: 1 },
     outputKind: () => "document",
     tools: [...BASE, "send_message", "request_approval"],
     defaultHours: 2,
-    steps: (t, ctx) => [
-      `Collect what is needed for ${t.phrase} from ${listJoin(t.systems.slice(0, 3)) || "the knowledge base and memory"}.`,
-      `Do the ${t.phrase} work the way ${doerOf(t, ctx)} does it today (see the call notes in the knowledge base), and mark any assumption clearly.`,
-      `Deliver the result as one document with a table (item, what was done, what needs ${ctx.ownerFirst}) at the top.`,
-      approvalStep(t, ctx, "anything leaves the business"),
-    ],
-    knowledge: (t) => [{ title: `How ${t.phrase} is done today (a checklist or an example)`, why: "The agent follows the same steps." }],
-    questions: (t) => [`Walk us through one example of ${t.phrase}, start to finish.`],
-    overnight: (t) => ({ title: `${cap(t.phrase)}: the checklist and a first draft`, description: `The ${t.phrase} process written down from the call, with a first draft.`, instructions: `Write the step-by-step checklist for ${t.phrase} from the call, a first draft of the output, and what you need to do it for real.` }),
-    resale: (t, ctx) => `Offer ${t.phrase} as a service to ${ctx.org}'s customers.`,
-    verb: (t) => `handles ${t.phrase}`,
+    steps: (t, ctx) => {
+      const job = jobName(t).toLowerCase();
+      const txt = topicText(t);
+      // How the speaker described doing it today, in their words.
+      const how = t.sentences.find((x) => x !== t.first && x.text.split(/\s+/).length > 6 && !hoursPerWeekIn(x.text) && !GUARDISH.test(x.text))?.text;
+      const out = /\bforms?\b/i.test(txt) ? "filled-in form" : /\b(?:answer|reply|respond)\b/i.test(txt) ? "reply" : /\b(?:gets? a call|call (?:to|them|each|every))\b/i.test(txt) && /\btext/i.test(txt) ? "call script or text" : /\b(?:gets? a call|call (?:to|them|each|every))\b/i.test(txt) ? "call script" : /\btexts?\b/i.test(txt) ? "text" : "draft";
+      const rec = recordSystem(t, ctx);
+      return [
+        `List everything due for ${job} from ${rec ?? (listJoin(t.systems.slice(0, 3)) || "the records in the knowledge base")}${how ? ` — today it works like this: “${quoteOf(how, 180).replace(/[.!]$/, "")}”` : ""}.`,
+        `Prepare the ${out} for each one, in the team's voice, and mark anything you had to assume.`,
+        approvalStep(t, ctx, "anything leaves the business"),
+        `Deliver one document with a table (item, what was prepared, what needs ${ctx.ownerFirst}) at the top.`,
+      ];
+    },
+    knowledge: (t) => [{ title: `How ${jobName(t).toLowerCase()} is done today (a checklist or an example)`, why: "The agent follows the same steps." }],
+    questions: (t) => [`Walk us through one example of ${jobName(t).toLowerCase()}, start to finish.`],
+    overnight: (t) => ({ title: `${jobName(t)}: the checklist and a first draft`, description: `The ${jobName(t).toLowerCase()} process written down from the call, with a first draft.`, instructions: `Write the step-by-step checklist for ${jobName(t).toLowerCase()} from the call, a first draft of the output, and what you need to do it for real.` }),
+    resale: (t, ctx) => `Offer ${jobName(t).toLowerCase()} as a done-for-you service to businesses like ${ctx.org}.`,
+    verb: (t) => `handles ${jobName(t).toLowerCase()}`,
   },
 };
 
@@ -1216,17 +1271,21 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     const m = /without ((?:me|[A-Z][a-z]+)(?: or (?:me|[A-Z][a-z]+))?) (?:seeing|reading|reviewing|approving|signing off|looking at|checking)/.exec(r);
     if (m) return m[1]!.replace(/\bme\b/, firstName(d.owner));
     const rev = /\b(?:my|our) (?:partner|office manager|manager),? ([A-Z][a-z]+),? reviews/.exec(r)?.[1];
-    return rev ?? firstName(d.owner);
+    const all = d.sentences.map((x) => x.text).join(" ");
+    const can = /\bthat ([A-Z][a-z]+) can (?:just )?approve\b/.exec(all)?.[1];
+    return rev ?? can ?? firstName(d.owner);
   })();
   // Asked what a great morning looks like, the owner said what they'd come in to: the output goes to them.
   if (!d.recipient.name && d.askTopics.length && d.owner) d.recipient = { ...d.recipient, name: d.owner };
-  const ctx: Ctx = { org: orgName, d, vertical, ownerFirst: firstName(d.owner), approver: approverNames };
+  const ctx: Ctx = { org: orgName, industry: input.industry?.trim() || null, d, vertical, ownerFirst: firstName(d.owner), approver: approverNames };
 
   // Distinct actions only, best first; 2–5 workflows.
   // What the owner asked for first ("if you woke up tomorrow…") leads; then every other distinct pain, best first.
-  const seen = new Set<Action>();
+  const seen = new Set<string>();
   const ordered = [...d.askTopics.slice(0, 1), ...d.topics.filter((t) => t !== d.askTopics[0])];
-  const topics = ordered.filter((t) => (seen.has(t.action) ? false : (seen.add(t.action), true))).slice(0, 5);
+  // One workflow per job: the speaker's own named jobs are distinct even when no playbook covers them.
+  const jobKey = (t: Topic) => (t.action === "manual" ? `manual:${(t.label ?? t.phrase).toLowerCase()}` : t.action);
+  const topics = ordered.filter((t) => (seen.has(jobKey(t)) ? false : (seen.add(jobKey(t)), true))).slice(0, 5);
   const fallbackTopic: Topic | null = topics.length
     ? null
     : {
@@ -1250,6 +1309,8 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   if (fallbackTopic) topics.push(fallbackTopic);
   const primary = topics[0]!;
 
+  // A play's crews, adjusters or vendors only apply when the call is about them; otherwise the job is the speaker's own.
+  for (const t of topics) if (PLAYS[t.action].fits && !PLAYS[t.action].fits!(t, ctx)) t.action = "manual";
   const workflows: WorkflowSpec[] = topics.map((t) => {
     const p = PLAYS[t.action];
     const trigger = cronFor(t, ctx, p);
@@ -1337,7 +1398,8 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   const knowledgeNeeds = dedupeBy(topics.flatMap((t) => PLAYS[t.action].knowledge(t, ctx)), (k) => k.title).slice(0, 12);
   const usesComputer = topics.some((t) => PLAYS[t.action].computer);
   const compliance: string[] = [];
-  if (d.compliance.includes("hipaa"))
+  const humanHealth = (vertical?.id === "dental" || vertical?.id === "medical" || /\bhipaa\b|\bphi\b/i.test(d.sentences.map((x) => x.text).join(" "))) && vertical?.id !== "vet" && !/veterinar|animal|pet\b/i.test(input.industry ?? "");
+  if (d.compliance.includes("hipaa") && humanHealth)
     compliance.push("Patient data is PHI: sign a BAA with the practice, keep messages to the minimum necessary, and confirm which patient messages need a human before they go out (HIPAA).");
   if (d.compliance.includes("pii")) compliance.push("The agent will handle financial/personal records (PII): confirm where they may be stored and who may see them.");
   if (d.compliance.includes("contract")) compliance.push("Confirm the approval limits in the management agreement per owner before the agent drafts any dispatch.");
@@ -1346,7 +1408,11 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
       ...compliance,
       ...topics.flatMap((t) => PLAYS[t.action].questions(t, ctx)),
       d.recipient.name ? null : `Who at ${orgName} should receive the morning deliverables, and by what time?`,
-      d.systems.length ? `Can we get access to ${listJoin(d.systems.filter((s) => !MESSAGING_SYSTEMS.test(s)).slice(0, 3))} for the agent (read-only to start)?` : "Which systems hold the data the agent needs, and can it get read access?",
+      (() => {
+        // Never a question with an empty slot: no work system named → ask which one, once.
+        const work = d.systems.filter((x) => !MESSAGING_SYSTEMS.test(x)).slice(0, 3);
+        return work.length ? `Can we get access to ${listJoin(work)} for the agent (read-only to start)?` : "Which systems hold the data the agent needs, and can it get read access?";
+      })(),
     ].filter((q): q is string => !!q),
     (q) => q,
   )
