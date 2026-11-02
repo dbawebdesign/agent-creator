@@ -330,7 +330,7 @@ function revise(input: ComposeInput, pool: Sent[]): Composed {
       const changed = [
         before ? (n !== m ? `${m} → ${n} rows` : `same ${n} rows`) : `turned it into the list from ${redo.data?.basis ?? "your file"} (${n} rows)`,
         /\bleave|left out|skip|remove|drop|exclude\b/i.test(fb) && (redo.data?.excluded ?? 0) > 0 ? `left out what you named` : null,
-        /\bfirst\b|\bsort|\border\b/i.test(fb) ? (redo.data?.sorted ? "re-sorted as asked" : n > 1 ? "couldn't tell how to sort it, so it keeps the file's order" : null) : null,
+        /\bfirst\b|\bsort|\border\b/i.test(fb) ? (redo.data?.sorted && fbPlans.some((x) => !!x.sortedBy) ? "re-sorted as asked" : n > 1 ? "couldn't tell how to sort it, so it keeps the file's order" : null) : null,
         /\b(?:text|message|email|reminder)s?\b/i.test(fb) && /## (?:Reminder texts|Emails)/.test(redo.body) ? "one draft per row" : null,
       ].filter(Boolean);
       return { ...redo, title: input.title, body: `## What changed\n\n${cap(changed.join("; "))}.\n\n${redo.body}`, preview: truncate(`Revised “${title}”: ${changed.join("; ")}.`, 200) };
@@ -594,7 +594,8 @@ export function compose(input: ComposeInput): Composed {
   const prefersText = input.memories.some((m) => m.kind === "preference" && /\btexts?\b|\balways text\b/i.test(m.text));
   const procedurePlans = input.kind !== "message" && input.kind !== "task" && collectTables(input.knowledge).some((t) => {
     const pl = planRows(t, taskTextOf(input, own), rules, now);
-    return pl.applied.length > 0 || !!pl.sortedBy;
+    // The procedure names its own rows: a value filter, an upcoming window or an order (not just "5+ days" heuristics).
+    return pl.applied.some((a) => / is |in the next/.test(a)) || !!pl.sortedBy;
   });
   if (!wantsProposal && !(wantsEmail && (namedIn(req, who).length || /#?\b[A-Z]{2,}-?\d{3,}\b/.test(req) || (input.kind !== "message" && input.output === "email_draft" && !procedurePlans)))) {
     const tw = tableWork(input, own, rules, who, now, prefersText);
@@ -627,7 +628,9 @@ export function compose(input: ComposeInput): Composed {
     let noDraftReason: string | null = null;
     let targetedFrom: string | null = null;
     const data = tables.find((t) => t.rows.length && (!ref || t.rows.some((r) => r.join(" ").includes(ref))));
-    const rowsFor = data ? (ref ? data.rows.filter((r) => r.join(" ").includes(ref)) : data.staleCol != null ? data.rows.filter((r) => Number(r[data.staleCol!]) >= 5) : data.rows).slice(0, 5) : [];
+    // Never chase a row whose status says it's over (lapsed, cancelled…) unless the task is a win-back.
+    const isClosed = (t: Analysis, r: string[]) => !/\bwin[- ]?back|\breactivat|\blapsed\b/i.test(own) && t.headers.some((h, i) => /status|stage|state/i.test(h) && /\b(?:lapsed|cancel+ed|closed|declined|lost|non-?renew\w*|inactive|terminated)\b/i.test(r[i] ?? ""));
+    const rowsFor = data ? (ref ? data.rows.filter((r) => r.join(" ").includes(ref)) : data.staleCol != null ? data.rows.filter((r) => Number(r[data.staleCol!]) >= 5 && !isClosed(data, r)) : data.rows.filter((r) => !isClosed(data, r))).slice(0, 5) : [];
     const col = (t: Analysis, re: RegExp) => t.headers.findIndex((h) => re.test(h));
     // A request that names someone ("a reply to Lorna Fitch at Bayside") goes to that match only, or to nobody.
     const named = !ref && !ev?.from ? namedIn(req, who) : [];

@@ -58,7 +58,7 @@ describe("tables from chunks", () => {
   it("says which column it needs when the criteria don't map, and shows every row", () => {
     const csv: Snip = { title: "invoices.csv", text: "customer,invoice,amount\nAcme,INV-1,$400\nBolt,INV-2,$1200\nCrane,INV-3,$90" };
     const d = compose({ kind: "workflow", title: "Collections", output: "table", body: "Read invoices.csv. List every invoice past due, sorted by due date.", system, knowledge: [csv], memories: [], now });
-    expect(d.body).toMatch(/Couldn't apply:.*(?:due-date|status) column/);
+    expect(d.body).toMatch(/_Note: The file has no due date or status, so I couldn't tell which rows are overdue; showing every row\._/);
     expect(tableRows(d.body)).toHaveLength(3);
     expect(d.body).not.toMatch(JUNK);
   });
@@ -111,7 +111,7 @@ describe("first deliverable (held overnight) with the CSV on file", () => {
 describe("questions answered from the rows (chat / REST / MCP ask_agent)", () => {
   it("“Which patients are >100 days overdue?” → Hazel 125, Juniper 105", () => {
     const [a] = answerQuestion("Which patients are >100 days overdue?", knowledge, now);
-    expect(a).toMatch(/^2 patients in overdue_patients\.csv are more than 100 days overdue: Hazel — 125 days \(Nora Patel\); Juniper — 105 days \(Alicia Moreno\)/);
+    expect(a).toMatch(/^2 patients in overdue_patients\.csv are more than 100 days overdue(?:, most overdue first)?: Hazel — 125 days \(Nora Patel\); Juniper — 105 days \(Alicia Moreno\)/);
     expect(a).not.toMatch(/Biscuit|Mochi/);
   });
   it("counts with a threshold", () => {

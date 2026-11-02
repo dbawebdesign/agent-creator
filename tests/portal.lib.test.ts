@@ -16,8 +16,11 @@ import {
   clientSafeText,
   deliverableDomain,
   draftSendStatus,
+  emailReadinessFrom,
   resolveBrand,
+  reviewTitleKey,
 } from "@/server/queries/portal";
+import { clockTime, displayFirstName } from "@/components/portal/lib";
 import type { Org } from "@/server/auth/access";
 
 describe("portal: plain-English schedules", () => {
@@ -200,5 +203,34 @@ describe("agent address domains", () => {
     expect(deliverableDomain("team.example")).toBe(false);
     expect(deliverableDomain("team.northbeam.ai")).toBe(true);
     expect(deliverableDomain("agents.brandlord.co")).toBe(true);
+  });
+});
+
+describe("email readiness (one status for addresses)", () => {
+  it("only receives with both directions on a routable domain", () => {
+    expect(emailReadinessFrom({ email: true, emailInbound: true }, "agents.northbeam.ai")).toBe("receiving");
+    expect(emailReadinessFrom({ email: true, emailInbound: false }, "agents.northbeam.ai")).toBe("sending_only");
+    expect(emailReadinessFrom({ email: false, emailInbound: true }, "agents.northbeam.ai")).toBe("not_set_up");
+    expect(emailReadinessFrom({ email: true, emailInbound: true }, "agents.roster.local")).toBe("not_set_up");
+  });
+});
+
+describe("greeting, names, times, duplicate reviews", () => {
+  it("uses the org timezone and a neutral small-hours greeting", () => {
+    const threeAmNy = new Date("2026-11-02T08:00:00Z");
+    expect(greeting("America/New_York", threeAmNy)).toBe("Hello");
+    expect(greeting("America/New_York", new Date("2026-11-02T14:00:00Z"))).toBe("Good morning");
+    expect(greeting("America/New_York", new Date("2026-11-02T23:30:00Z"))).toBe("Good evening");
+  });
+  it("capitalizes lowercase first names only", () => {
+    expect(displayFirstName("linda")).toBe("Linda");
+    expect(displayFirstName("McKenna")).toBe("McKenna");
+  });
+  it("drops :00 so times match schedules", () => {
+    expect(clockTime(new Date("2026-11-02T11:00:00Z"), "America/New_York")).toBe("6 AM");
+    expect(clockTime(new Date("2026-11-02T14:08:00Z"), "America/New_York")).toBe("9:08 AM");
+  });
+  it("treats a revised copy as the same piece of work", () => {
+    expect(reviewTitleKey("Renewals due in 30 days (revised)")).toBe(reviewTitleKey("Renewals  due in 30 days"));
   });
 });

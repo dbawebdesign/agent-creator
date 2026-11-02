@@ -415,11 +415,14 @@ export function planRows(table: FileTable, text: string, rules: string[], now: D
         : /^(?:last|past)/.test(w) ? [new Date(d0.getTime() - N * DAY), new Date(d0.getTime() + DAY)]
         : /^in\b/.test(w) ? [d0, new Date(d0.getTime() + (N + 1) * DAY)]
         : [d0, new Date(d0.getTime() + (N + 1) * DAY)];
+      // "skip anyone contacted in the last 7 days": the window says who to leave out.
+      const invert = new RegExp(`\\b(?:skip|exclude|leave out|except|omit|not)\\b[^.;]*${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(lower);
       rows = rows.filter((r) => {
         const d = parseDate(r[dc] ?? "");
-        return !!d && d >= from && d < to;
+        return invert ? !d || d < from || d >= to : !!d && d >= from && d < to;
       });
-      applied.push(`${label(dc)} ${w.replace(/^within(?: the)? next|^in(?: the)? next|^within|^in\b/, "in the next").replace(/^in the next next/, "in the next")}`);
+      if (invert) applied.push(`${label(dc)} not ${w}`);
+      else applied.push(`${label(dc)} ${w.replace(/^within(?: the)? next|^in(?: the)? next|^within|^in\b/, "in the next").replace(/^in the next next/, "in the next")}`);
       windowCol = dc;
     } else unmapped.push(`I couldn't find a date in the file to apply “${win[1]}” to, so I didn't filter by date`);
   }

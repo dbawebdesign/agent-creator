@@ -113,11 +113,16 @@ export function EmailDomainForm({
           <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-xs sm:px-5">
             <div className="min-w-0 flex-1">
               <p className="truncate font-mono text-[13.5px] text-ink">@{domain.domain}</p>
+              <div className="mt-1 sm:hidden">
+                <StatusBadge d={domain} readiness={readiness} />
+              </div>
               <p className="mt-0.5 text-[12px] text-ink-3">
                 {domain.status === "verified" ? (readiness?.detail ?? `Agents send and receive email as name@${domain.domain}.`) : "Agents keep using @" + effectiveDomain + " until this is verified."}
               </p>
             </div>
-            <StatusBadge d={domain} readiness={readiness} />
+            <span className="max-sm:hidden">
+              <StatusBadge d={domain} readiness={readiness} />
+            </span>
             {domain.status !== "verified" ? (
               <Button size="sm" variant="secondary" onClick={check} disabled={pending}>
                 {pending ? "Checking…" : "Check now"}

@@ -23,7 +23,8 @@ export function WorkflowSwitch({
   const router = useRouter();
   return (
     <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-[12px] text-ink-3">
-      <span aria-hidden>{on ? "On" : "Paused"}</span>
+      {/* The switch already says "on"; only the exception gets words. */}
+      {on ? null : <span aria-hidden>Paused</span>}
       <Switch
         checked={on}
         disabled={pending}
