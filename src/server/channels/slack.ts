@@ -83,6 +83,12 @@ export function verifySlackState(state: string | null, nonceCookie: string | nul
   return { ...parsed, returnTo: safeReturnPath(parsed.returnTo) };
 }
 
+/** Slack app credentials are all set (install, callback and event verification can work). */
+export function slackConfigured(): boolean {
+  const e = env();
+  return Boolean(e.SLACK_CLIENT_ID && e.SLACK_CLIENT_SECRET && e.SLACK_SIGNING_SECRET);
+}
+
 export function slackAuthorizeUrl(state: string): string | null {
   const clientId = env().SLACK_CLIENT_ID;
   if (!clientId) return null;

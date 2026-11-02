@@ -2,9 +2,9 @@
 
 import { useTransition } from "react";
 import { toast } from "sonner";
-import { CreditCard, Link2, RefreshCw } from "lucide-react";
+import { ArrowUpRight, CreditCard, Link2, RefreshCw } from "lucide-react";
 import { Button, type ButtonProps } from "@/components/ui/button";
-import { openBillingPortal, refreshStripeAccount, startCheckout, syncPlan } from "@/server/billing/actions";
+import { openBillingPortal, refreshStripeAccount, startCheckout, startStripeConnect, syncPlan } from "@/server/billing/actions";
 
 type Common = { className?: string; variant?: ButtonProps["variant"]; size?: ButtonProps["size"]; children?: React.ReactNode };
 
@@ -137,6 +137,31 @@ export function RefreshConnectButton({ sellerOrgId, className }: { sellerOrgId: 
     >
       <RefreshCw className={pending ? "animate-spin" : undefined} />
       {pending ? "Checking…" : "Refresh"}
+    </Button>
+  );
+}
+
+/** Seller-side: start or resume Stripe Connect onboarding (navigates to Stripe). */
+export function ConnectStripeButton({ sellerOrgId, returnPath, className, variant = "primary", size = "md", children }: Common & { sellerOrgId: string; returnPath?: string }) {
+  const [pending, start] = useTransition();
+  return (
+    <Button
+      type="button"
+      variant={variant}
+      size={size}
+      className={className}
+      disabled={pending}
+      aria-busy={pending}
+      onClick={() =>
+        start(async () => {
+          const r = await startStripeConnect(sellerOrgId, returnPath ?? currentPath());
+          if (!r.ok) return void toast.error(r.error);
+          window.location.assign(r.url);
+        })
+      }
+    >
+      {pending ? "Opening Stripe…" : (children ?? "Connect Stripe")}
+      {pending ? null : <ArrowUpRight />}
     </Button>
   );
 }

@@ -111,6 +111,20 @@ export function openApiDocument(appUrl: string) {
             runId: { type: "string", format: "uuid" },
             reply: { type: ["string", "null"] },
             status: { type: "string", enum: ["completed", "queued"] },
+            deliverables: {
+              type: "array",
+              description: "Work the agent delivered while answering (titles only; GET /v1/deliverables/{id} for the body).",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", format: "uuid" },
+                  title: { type: "string" },
+                  preview: { type: ["string", "null"] },
+                  kind: { type: "string" },
+                  url: { type: "string", format: "uri" },
+                },
+              },
+            },
           },
         },
       },
@@ -186,9 +200,10 @@ export function openApiDocument(appUrl: string) {
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["text"],
+                  description: "Send `text` (or its alias `message`).",
                   properties: {
                     text: { type: "string", minLength: 1, maxLength: 20000 },
+                    message: { type: "string", minLength: 1, maxLength: 20000, description: "Alias of text" },
                     conversationId: { type: "string", format: "uuid", description: "Continue an existing conversation" },
                     wait: { type: "boolean", default: false },
                   },

@@ -64,7 +64,7 @@ function peopleFrom(memories: Snip[]): Array<{ name: string; role: string | null
 
 function recipientFrom(memories: Snip[]): string | null {
   for (const m of memories) {
-    const r = /^Morning deliverables go to ([A-Z][\w.]*(?: [A-Z]\w*)?)/.exec(m.text);
+    const r = /^Morning deliverables go to (Dr\. [A-Z][a-z]+|[A-Z][a-z]+)/.exec(m.text);
     if (r) return r[1]!;
   }
   return null;
@@ -242,9 +242,14 @@ function relevant(pool: Sent[], query: string, max: number, used: Set<string>): 
     .filter((s) => !used.has(s.text))
     .map((s) => {
       let sc = 0;
-      for (const w of new Set(tokenize(s.text))) if (q.has(w)) sc += Math.log((n + 1) / (df.get(w) ?? 1));
+      let hits = 0;
+      for (const w of new Set(tokenize(s.text)))
+        if (q.has(w)) {
+          sc += Math.log((n + 1) / (df.get(w) ?? 1));
+          hits++;
+        }
       if (/\d/.test(s.text)) sc += 0.4;
-      return { s, sc };
+      return { s, sc: hits >= 2 || q.size <= 2 ? sc : 0 };
     })
     .filter((x) => x.sc >= 1.2)
     .sort((a, b) => b.sc - a.sc)
@@ -382,7 +387,7 @@ export function compose(input: ComposeInput): Composed {
   const rules = rulesFrom(input.memories);
   const people = peopleFrom(input.memories);
   const recipient = recipientFrom(input.memories);
-  const prefs = input.memories.filter((m) => m.kind === "preference").map(memText).slice(0, 3);
+  const prefs = input.memories.filter((m) => m.kind === "preference").map(memText).filter((p) => p.split(/\s+/).length >= 4).slice(0, 3);
   const tables = tablesIn(input.knowledge).map((t) => analyze(t, now));
   const used = new Set<string>();
 
@@ -398,6 +403,9 @@ export function compose(input: ComposeInput): Composed {
   // Time / money context the owner gave on the call.
   const hours = facts.map((f) => /~(\d+(?:\.\d+)?) hours\/week/.exec(f.text)?.[1]).find(Boolean);
   const timeLine = (() => {
+    const own1 = facts.map((f) => new RegExp(`^${input.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: currently ~(\\d+(?:\\.\\d+)?) hours/week`).exec(f.text)?.[1]).find(Boolean);
+    if (own1) return `about ${own1} hours a week of manual work today`;
+    if (input.kind === "workflow") return null;
     const s = pool.find((p) => /\b\d+(?:\.\d+)? hours? (?:a|per|every) (?:week|day|month)\b/i.test(p.text) && relevant([p], `${input.title} ${own}`, 1, new Set()).length);
     return s?.text ?? (hours ? `about ${hours} hours a week of manual work today` : null);
   })();
@@ -486,60 +494,112 @@ export function compose(input: ComposeInput): Composed {
     decisions.push(`Approve, edit or reject ${drafts.length === 1 ? "the draft" : "each draft"} above.`);
     sources.push({ step: "Email drafts", status: data ? "Built from your data" : "Drafted from your request", basis: data ? data.table.title : "Your request" });
   } else {
-    // Report / document / table: summary, the work (one section per substantive step), decisions, needs.
+    // Report / document / table: summary, the work products the steps ask for, what was checked, decisions, needs.
     const work: string[] = [];
-    let tablesBuilt = 0;
+    const did: string[] = [];
+    const outputs: string[] = [];
+    // Things a report covers / a check captures ("cover: rent collected, delinquencies, …").
+    const coverStep = steps.find((st) => /\b(?:cover|capture|covering|including|include)\b[^:]*:\s*\S/i.test(st));
+    const items = coverStep ? (/:\s*(.+?)\.?$/.exec(coverStep)?.[1] ?? "").split(/,\s*(?:and\s+)?|\s+and\s+(?=[a-z]+$)/).map((x) => x.trim()).filter((x) => x.length > 1 && x.length < 60) : [];
     for (const step of steps) {
-      if (/\b(?:list exactly|what (?:access|data) you (?:still )?need|say exactly which|what you need to)\b/i.test(step)) {
+      const head = headingOf(step);
+      if (/\b(?:list exactly|list the exact|what (?:access|data) you (?:still )?need|say exactly which|what you need to|exact data you still need)\b/i.test(step)) {
         needs.push(...needsFrom(step, input.memories));
         const dec = /needs? a decision\s*\(([^)]+)\)/i.exec(step)?.[1];
         if (dec) for (const x of dec.split(/,\s*(?:and\s+)?/)) decisions.push(`Decide: ${x.trim()}.`);
         continue;
       }
-      if (/\brequest approval\b|\bneeds? a decision\b|\bwho approves\b/i.test(step)) {
-        decisions.push(truncate(step.replace(/^Request approval from ([^ ]+(?: or [^ ]+)?) before /i, "Approve before ").replace(/\.$/, ""), 220) + ".");
-        continue;
+      if (/\brequest approval\b/i.test(step)) {
+        const what = /\bbefore ([^(;]+?)(?:\s*\(|;|\.$|$)/i.exec(step.slice(step.search(/request approval/i)))?.[1];
+        decisions.push(`Approve ${what ? `before ${what.trim()}` : "each draft before it goes out"} — nothing is sent until you do.`);
+        if (!/\b(?:write|draft|build|deliver)\b/i.test(step.replace(/request approval[\s\S]*$/i, ""))) continue;
       }
-      const head = headingOf(step);
       const ev2 = relevant(pool, step, 2, used);
       ev2.forEach((e) => used.add(e.text));
       const cols = columnsOf(step);
-      work.push("", `### ${head}`);
-      if (cols.length || /\bGFM table\b|\btable\b/i.test(step)) {
+      const isLetter = /\b(?:write|draft)\b/i.test(step) && /\b(?:letter|report|summary|update)\b/i.test(step) && !/\btemplate\b/i.test(step);
+      if (isLetter) {
+        const aud = /\beach ([a-z]+)'?s?\b/i.exec(step)?.[1] ?? "client";
+        const rowsOf = items.length ? items : ["Key figure 1", "Key figure 2", "Key figure 3"];
+        work.push("", `### ${head}`, "", `> Hi {${aud} first name},`, ">", `> Here is your summary for {period}. {One-sentence headline: the biggest change and whether anything needs you.}`, ">");
+        work.push(...gfm(["", "This period", "Last period", "Change"], rowsOf.map((r) => [cap(r), "{from records}", "{from records}", "—"])).map((l) => `> ${l}`));
+        const voice = /\bin ([A-Z][a-z]+)'s voice\b/.exec(step)?.[1];
+        work.push(">", "> **Worth knowing:** {1–3 short points — anything unusual or that needs a decision}", ">", `> Best,\n> ${voice ?? who.agent}`, "", `_One letter per ${aud}; the figures fill in from the records each run._`);
+        outputs.push(head);
+        sources.push({ step: head, status: "Drafted — figures fill from your records", basis: items.length ? "Sections named on the call" : "The call" });
+      } else if (/\btemplate\b/i.test(step) && /\(([^)]+)\)/.test(step) && !/\bemail|text|message\b/i.test(step)) {
+        const parts = /\(([^)]+)\)/.exec(step)![1]!.split(/,\s*(?:and\s+)?/).map((x) => x.trim()).filter(Boolean);
+        work.push("", `### ${head}`);
+        for (const part of parts) {
+          work.push("", `**${cap(part)}**`, "");
+          if (/table|options|line items/i.test(part)) work.push(...gfm(["Option", "Description", "Unit price", "Quantity", "Total", "Lead time"], [["Good", "{item}", "{price}", "{qty}", "{total}", "{days}"], ["Better", "{item}", "{price}", "{qty}", "{total}", "{days}"], ["Best", "{item}", "{price}", "{qty}", "{total}", "{days}"]]));
+          else if (/terms/i.test(part)) work.push("- Prices valid for 30 days · {minimums} · {payment terms}", "- Lead times start when the order and any artwork or specs are approved");
+          else if (/intro|summary|greeting/i.test(part)) work.push(`Hi {first name}, thanks for the request. Below are three options for {what they asked for}, from best value to premium, with pricing and lead times. — ${who.agent}, ${who.org}`);
+          else work.push(`{${part}}`);
+        }
+        outputs.push(head);
+        sources.push({ step: head, status: "Drafted", basis: "Your format from the call" });
+      } else if (cols.length || /\bGFM table\b/i.test(step)) {
+        const many = /\b(three|two|four|3|2|4) sample\b/i.exec(step)?.[1];
+        const count = many ? ({ two: 2, three: 3, four: 4 } as Record<string, number>)[many.toLowerCase()] ?? Number(many) : 0;
+        if (count && !tables.length) {
+          const c = cols.length ? cols : ["Item", "Quantity", "Unit price", "Total"];
+          work.push("", `### ${head}`);
+          const kinds = relevant(pool, step, count, used).map((e) => truncate(e.text, 140));
+          for (let i = 0; i < count; i++) {
+            work.push("", `**Sample ${i + 1}${kinds[i] ? ` — based on: “${kinds[i]}”` : ""}**`, "", ...gfm(c, exampleRows(c, [], people)));
+          }
+          work.push("", "_Prices stay as placeholders until I have your price lists; the structure is final._");
+          outputs.push(head);
+          sources.push({ step: head, status: "Format ready — needs your price lists", basis: kinds[0] ?? "The call" });
+          continue;
+        }
         const data = tables.find((t) => cols.some((c) => t.headers.some((h) => tokenize(h).some((w) => tokenize(c).includes(w)))) || (!cols.length && t.rows.length));
+        work.push("", `### ${head}`);
         if (data) {
           work.push("", `From **${data.table.title}**: ${data.facts.join("; ")}.`, "", ...gfm(data.headers, data.rows.slice(0, 25)));
           if (data.flagged) decisions.push(`${data.flagged} ${data.flagged === 1 ? "item needs" : "items need"} a follow-up today (flagged in “${head}”).`);
           sources.push({ step: head, status: "Built from your data", basis: data.table.title });
         } else {
           const c = cols.length ? cols : ["Item", "Detail", "Status", "Next step"];
-          const ex = exampleRows(c, ev2, people);
-          work.push("", ...gfm(c, ex), "", "_Rows marked “example” show the format; real rows fill in as soon as I can read the source data._");
+          work.push("", ...gfm(c, exampleRows(c, ev2, people)), "", "_Rows marked “example” show the format; real rows fill in as soon as I can read the source data._");
           sources.push({ step: head, status: "Format ready — needs your data", basis: ev2[0] ? truncate(ev2[0].text, 80) : "The call" });
         }
-        tablesBuilt++;
-      } else if (/\bdraft\b|\bscript\b|\btemplate\b|\bmessage\b|\bemail\b|\btext\b/i.test(step)) {
-        work.push("", ...draftBlock(step, who, people, recipient, rules, prefs));
+        outputs.push(head);
+      } else if (/\bdraft\b|\bscript\b|\btemplate\b|\bmessages?\b|\bemails?\b|\btexts?\b/i.test(step) && /\b(?:draft|write|build|prepare)\b/i.test(step)) {
+        const textPref = input.memories.some((m) => m.kind === "preference" && /\btexts?\b|\balways text\b/i.test(m.text));
+        work.push("", `### ${head}`, "", ...draftBlock(step, who, people, recipient, rules, textPref ? [...prefs, "prefers texts"] : prefs));
+        outputs.push(head);
         sources.push({ step: head, status: "Drafted", basis: ev2[0] ? truncate(ev2[0].text, 80) : "The call" });
-      } else if (/\bchecklist\b|\brules?\b|\bplaybook\b|\brunbook\b/i.test(step)) {
-        const items = checklistFrom(step, ev2);
-        work.push("", ...items.map((i) => `- [ ] ${i}`));
+      } else if (/\bchecklist\b|\brules?\b|\bplaybook\b|\brunbook\b/i.test(step) && /\b(?:write|build|draft)\b/i.test(step)) {
+        work.push("", `### ${head}`, "", ...checklistFrom(step, ev2).map((i) => `- [ ] ${i}`));
+        outputs.push(head);
         sources.push({ step: head, status: "Written from the call", basis: ev2[0] ? truncate(ev2[0].text, 80) : "The call" });
+      } else if (step === coverStep || /^deliver\b/i.test(step)) {
+        continue;
       } else {
-        work.push("", ev2.length ? `What I'm working from: ${ev2.map((e) => truncate(e.text, 220)).join(" ")}` : `Set up the way you described; I'll fill in specifics as data arrives.`);
-        sources.push({ step: head, status: ev2.length ? "Grounded in your materials" : "Set up — needs your data", basis: ev2[0] ? truncate(ev2[0].text, 80) : "Best practice" });
+        // A process step (pull, compare, check…): report what happened this run instead of padding a section.
+        const known = (input.memories.map((m) => /^Systems and tools mentioned: (.+)\.$/.exec(m.text)?.[1]).find(Boolean) ?? "").split(/,\s*/).filter(Boolean);
+        const sys = known.find((k) => step.includes(k));
+        const hasData = tables.length > 0;
+        const short = truncate(step.split(/\s*[(:;]|\s+—\s+/)[0]!.replace(/[.,]+$/, ""), 90);
+        did.push(`${short}: ${hasData ? "done from the data on file" : sys ? `ready — runs as soon as I have access to ${sys}` : "ready — runs on the next scheduled pass"}.`);
+        sources.push({ step: short, status: hasData ? "Done from your data" : "Waiting on access", basis: sys ?? "—" });
       }
     }
-    if (wantsSummary || !work.length) {
+    if (did.length) work.push("", "### What I checked this run", "", ...did.map((x) => `- ${x}`));
+    if (wantsSummary || !outputs.length) {
       const top = relevant(pool, own || input.title, 5, used);
-      work.push("", "### What I found", "", ...(top.length ? top.map((t) => `- ${truncate(t.text, 260)}`) : ["- I don't have anything on file about this yet. Send me the details or a document and I'll take it from there."]));
-      sources.push({ step: "Summary", status: top.length ? "Grounded in your materials" : "Needs your data", basis: top[0]?.source ?? "—" });
+      if (top.length || !did.length) {
+        work.push("", "### What I found", "", ...(top.length ? top.map((t) => `- ${truncate(t.text, 260)}`) : ["- I don't have anything on file about this yet. Send me the details or a document and I'll take it from there."]));
+        sources.push({ step: "Summary", status: top.length ? "Grounded in your materials" : "Needs your data", basis: top[0]?.source ?? "—" });
+      }
     }
     const dataNote = tables.length ? ` I used ${tables.map((t) => `${t.table.title} (${t.facts[0]})`).join(", ")}.` : "";
     lines.push(
       "## Summary",
       "",
-      `Inside: ${listJoin(sources.map((x) => x.step.charAt(0).toLowerCase() + x.step.slice(1)).slice(0, 4))}.${timeLine ? ` This is built to take over ${/^about/.test(timeLine) ? timeLine : `the work you described on the call (“${truncate(timeLine, 160)}”)`}.` : ""}${dataNote}${decisions.length ? ` ${decisions.length} ${decisions.length === 1 ? "item needs" : "items need"} your decision below.` : ""}`,
+      `${outputs.length ? `Inside: ${listJoin(outputs.map((x) => x.charAt(0).toLowerCase() + x.slice(1)).slice(0, 4))}.` : `${cap(input.title)}: ${did.length} checks set up.`}${timeLine ? ` This is built to take over ${/^about/.test(timeLine) ? timeLine : `the work you described on the call (“${truncate(timeLine, 160)}”)`}.` : ""}${dataNote}${decisions.length ? ` ${decisions.length} ${decisions.length === 1 ? "item needs" : "items need"} your decision below.` : ""}`,
     );
     if (prefs.length) lines.push("", `**Shaped by your preferences:** ${prefs.map((p) => truncate(p, 140)).join(" · ")}`);
     lines.push("", "## The work", ...work);
@@ -580,7 +640,8 @@ function exampleRows(cols: string[], ev: Sent[], people: Array<{ name: string }>
       if (/who|owner|assigned|tech/i.test(c)) return people[r]?.name ?? "—";
       if (/\$|amount|value|portion|price|max|deductible|total/i.test(c)) return "—";
       if (/\bdays?\b/i.test(c)) return r === 0 ? "6 days" : "1 day";
-      if (/\btime\b/i.test(c)) return r === 0 ? "8:00 AM" : "9:30 AM";
+      if (/lead time|turnaround/i.test(c)) return "{days}";
+      if (/appointment|start|arriv/i.test(c) && /\btime\b/i.test(c)) return r === 0 ? "8:00 AM" : "9:30 AM";
       return "—";
     }),
   );

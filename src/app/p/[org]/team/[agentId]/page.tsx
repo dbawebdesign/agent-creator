@@ -21,6 +21,7 @@ import { agentStatus } from "@/components/portal/status";
 import { Thread } from "@/components/portal/thread";
 import { getAgentPage, getPortal } from "@/server/queries/portal";
 import { WorkflowSwitch } from "@/components/portal/workflow-switch";
+import { KnowledgeUpload } from "@/components/shared/knowledge-upload";
 
 export async function generateMetadata({
   params,
@@ -227,6 +228,17 @@ export default async function AgentPage({
             )}
           </section>
 
+          {p.canAct ? (
+            <section aria-labelledby="teach">
+              <h2 id="teach" className="text-[13px] font-semibold text-ink">
+                Teach {agent.name}
+              </h2>
+              <p className="mt-1 mb-3 text-[12.5px] text-ink-3">
+                Price lists, brand guides, past work: drop in files {agent.name} should know.
+              </p>
+              <KnowledgeUpload orgId={p.org.id} agentId={agent.id} />
+            </section>
+          ) : null}
           {agent.delivered30d > 0 ? (
             <section
               aria-label="This month"

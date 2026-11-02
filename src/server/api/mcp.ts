@@ -19,12 +19,21 @@ export const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
 
 const SERVER_INFO = { name: "roster", title: "Roster AI employees", version: "1.0.0" };
 
-const INSTRUCTIONS =
-  "Roster connects you to the user's AI employees — agents with a job, memory, a knowledge base and their own inbox. " +
-  "Use list_agents to see who is on the team and what workflows they run. Use ask_agent to give an agent a request or " +
-  "question in plain language; it answers using its own knowledge of the business. Use list_deliverables / " +
-  "get_deliverable to read finished work (reports, documents, tables, drafts). Use run_workflow to start one of an " +
-  "agent's workflows now.";
+/** Server instructions, mentioning only the tools this key's scopes allow. */
+export function instructionsFor(p: Pick<ApiPrincipal, "scopes">): string {
+  const can = (s: ApiScope) => p.scopes.includes(s);
+  const parts = ["Roster connects you to the user's AI employees — agents with a job, memory, a knowledge base and their own inbox."];
+  if (can("agents:read")) parts.push("Use list_agents to see who is on the team and what workflows they run.");
+  if (can("agents:invoke")) {
+    parts.push(
+      "Use ask_agent to give an agent a request or question in plain language; it answers using its own knowledge of the business, and lists any deliverables it produced.",
+    );
+  }
+  if (can("deliverables:read")) parts.push("Use list_deliverables / get_deliverable to read finished work (reports, documents, tables, drafts).");
+  if (can("workflows:run")) parts.push("Use run_workflow to start one of an agent's workflows now.");
+  if (parts.length === 1) parts.push("This API key has no tool scopes; ask the account owner for a key with access.");
+  return parts.join(" ");
+}
 
 // JSON-RPC error codes
 const PARSE_ERROR = -32700;
@@ -103,22 +112,32 @@ const TOOLS: ToolDef[] = [
       properties: {
         agent_id: { ...uuid, description: "The agent's id from list_agents" },
         message: { type: "string", minLength: 1, maxLength: 20000, description: "What you want the agent to do or answer" },
+        text: { type: "string", minLength: 1, maxLength: 20000, description: "Alias of message (either works)" },
         conversation_id: { ...uuid, description: "Optional: continue an existing conversation" },
       },
       required: ["agent_id", "message"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    // `text` is accepted as an alias of `message` (same as the REST API).
     args: z
-      .object({ agent_id: z.uuid(), message: z.string().trim().min(1).max(20_000), conversation_id: z.uuid().optional() })
-      .strict(),
-    run: async (p, a: { agent_id: string; message: string; conversation_id?: string }) => {
-      const res = await sendMessage(p, a.agent_id, { text: a.message, conversationId: a.conversation_id, wait: true }, "mcp");
+      .object({
+        agent_id: z.uuid(),
+        message: z.string().trim().min(1).max(20_000).optional(),
+        text: z.string().trim().min(1).max(20_000).optional(),
+        conversation_id: z.uuid().optional(),
+      })
+      .strict()
+      .refine((a) => Boolean(a.message ?? a.text), { message: "message is required", path: ["message"] }),
+    run: async (p, a: { agent_id: string; message?: string; text?: string; conversation_id?: string }) => {
+      const res = await sendMessage(p, a.agent_id, { text: a.message ?? a.text, conversationId: a.conversation_id, wait: true }, "mcp");
       return {
         reply: res.body.reply,
         status: res.body.status,
         conversation_id: res.body.conversationId,
         run_id: res.body.runId,
+        // Work the agent produced while answering (open `url`, or get_deliverable for the full body).
+        deliverables: res.body.deliverables,
       };
     },
   },
@@ -247,7 +266,7 @@ async function handleOne(msg: unknown, p: ApiPrincipal, version: string, inBatch
         protocolVersion: v,
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
-        instructions: INSTRUCTIONS,
+        instructions: instructionsFor(p),
       });
     }
     case "ping":

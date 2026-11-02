@@ -213,18 +213,47 @@ export async function workflowsFor(p: ApiPrincipal, agentIds: string[]): Promise
   return out;
 }
 
-export const messageBody = z.object({
-  text: z.string().trim().min(1, "text is required").max(20_000),
-  conversationId: z.uuid().optional(),
-  wait: z.boolean().optional().default(false),
-});
+/** `text` (canonical) or `message` (alias, as in MCP's ask_agent); `conversation_id` is accepted for `conversationId`. */
+export const messageBody = z.preprocess(
+  (v) => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+    const o = { ...(v as Record<string, unknown>) };
+    if (o.text === undefined && o.message !== undefined) o.text = o.message;
+    if (o.conversationId === undefined && o.conversation_id !== undefined) o.conversationId = o.conversation_id;
+    delete o.message;
+    delete o.conversation_id;
+    return o;
+  },
+  z.object({
+    text: z.string({ error: "text (or message) is required" }).trim().min(1, "text (or message) is required").max(20_000),
+    conversationId: z.uuid().optional(),
+    wait: z.boolean().optional().default(false),
+  }),
+);
+
+export type ApiRunDeliverable = { id: string; title: string; preview: string | null; kind: string; url: string };
+
+/** Deliverables a run produced, re-read org-scoped (titles/previews only; bodies need deliverables:read). */
+async function runDeliverables(p: ApiPrincipal, ids: string[]): Promise<ApiRunDeliverable[]> {
+  const unique = [...new Set(ids)].filter((id) => z.uuid().safeParse(id).success).slice(0, 20);
+  if (unique.length === 0) return [];
+  const rows = await db()
+    .select({ id: schema.deliverables.id, title: schema.deliverables.title, preview: schema.deliverables.preview, kind: schema.deliverables.kind, createdAt: schema.deliverables.createdAt })
+    .from(schema.deliverables)
+    .where(and(eq(schema.deliverables.orgId, p.orgId), inArray(schema.deliverables.id, unique)))
+    .orderBy(schema.deliverables.createdAt);
+  return rows.map((d) => ({ id: d.id, title: d.title, preview: d.preview, kind: d.kind, url: portalDeliverableUrl(p.orgSlug, d.id) }));
+}
 
 export async function sendMessage(
   p: ApiPrincipal,
   agentId: string,
   body: unknown,
   channel: "api" | "mcp" = "api",
-): Promise<{ status: number; body: { conversationId: string; runId: string; reply: string | null; status: "completed" | "queued" } }> {
+): Promise<{
+  status: number;
+  body: { conversationId: string; runId: string; reply: string | null; status: "completed" | "queued"; deliverables: ApiRunDeliverable[] };
+}> {
   const input = parseWith(messageBody, body);
   const agent = await loadAgent(p, agentId);
   if (agent.status !== "active") throw new ApiError("conflict", `Agent is ${agent.status}; it can't take messages right now.`);
@@ -253,9 +282,16 @@ export async function sendMessage(
     wait: input.wait,
   }));
   const done = input.wait && typeof res.reply === "string";
+  const made = Array.isArray(res.deliverables) ? res.deliverables.map((d) => d.id) : [];
   return {
     status: done ? 200 : 202,
-    body: { conversationId: res.conversationId, runId: res.runId, reply: res.reply ?? null, status: done ? "completed" : "queued" },
+    body: {
+      conversationId: res.conversationId,
+      runId: res.runId,
+      reply: res.reply ?? null,
+      status: done ? "completed" : "queued",
+      deliverables: await runDeliverables(p, made),
+    },
   };
 }
 

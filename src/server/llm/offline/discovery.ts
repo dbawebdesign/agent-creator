@@ -375,7 +375,7 @@ function listItems(s: string): string[] {
         if (i === parts.length - 1) x = x.replace(/\s+(?:into|to|for the|before|so)\s+.*$/i, "");
         return x.replace(/^(?:and|or|the|a|an)\s+/i, "").replace(/^whether it'?s\s+/i, "").trim();
       })
-      .filter((x) => x.length >= 3 && x.split(/\s+/).length <= 7);
+      .filter((x, i) => x.length >= 3 && x.split(/\s+/).length <= 7 && !(i === 0 && /\b(?:miss(?:es)?|is|are|has|have|needs?|gets?|spits|takes)\b/i.test(x)));
     // Prefer lists of things (lowercase) over lists of names (systems, carriers).
     const weight = (xs: string[]) => xs.filter((x) => /^[a-z]/.test(x)).length * 2 + xs.length;
     if (weight(cleaned) > weight(best)) best = cleaned;
@@ -626,7 +626,8 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     .slice(0, 6);
   const preferences = sentences
     .filter((s) => /\b(?:i|we) (?:prefer|always|never|don'?t want|do not want|like to|want everything|need (?:it|them|everything))\b|\b(?:prefer|definitely) (?:texts?|emails?|calls?)\b|^(?:texts?|email)[,.]/i.test(s.text) && s.text.length < 300)
-    .map((s) => s.text);
+    // A short answer ("Texts, definitely.") only makes sense with the question it answers.
+    .map((s) => (s.text.split(/\s+/).length <= 4 && s.question && /\?\s*$/.test(s.question) ? `${s.question.trim()} ${s.text}` : s.text));
   const resale =
     sentences.find((s) => /\bsell (?:this|it|that|the [\w\s-]{2,40}?) to (?:my |our |your |their )?(?:own )?(?:customers|clients|owners|members)|\bresell\b|\bpackage (?:this|it) up\b|\b(?:would )?pay (?:us )?(?:extra )?for (?:a|an|this|that)\b/i.test(s.text))?.text ?? null;
 
@@ -637,8 +638,8 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     topics: ranked,
     people: people.slice(0, 10),
     systems,
-    rules,
-    guardrails: [
+    rules: labelled ? rules : [],
+    guardrails: !labelled ? [] : [
       ...new Set(
         sentences
           .filter((s) => /^(?:and |but |also |oh,? and )?(?:never|always|don'?t ever|do not ever|under no circumstances|make sure|no one)\b|\b(?:you|the agent|it|we) (?:should|must|can) (?:never|not ever)\b|\bnot allowed to\b/i.test(s.text) && !/\?\s*$/.test(s.text) && s.text.length < 300)

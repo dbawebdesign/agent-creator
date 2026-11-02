@@ -1,3 +1,6 @@
+import { Suspense } from "react";
+import { CheckoutLinksCard } from "@/components/billing/checkout-links-card";
+import { BillingFlags } from "@/components/studio/billing-flags";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, asc, eq } from "drizzle-orm";
@@ -130,6 +133,10 @@ export default async function ClientPage({ params }: { params: Promise<{ agency:
               <PlanSelect agency={slug} clientId={org.id} clientName={org.name} current={active?.planId ?? null} plans={plans.map((p) => ({ id: p.id, name: p.name, price: money(p.priceCents) }))} />
               <p className="mt-2 text-[12px] text-ink-3">Flat rate. No setup fee, no token billing.</p>
             </div>
+            <CheckoutLinksCard buyerOrgId={org.id} returnPath={`/a/${slug}/clients/${org.slug}`} className="mt-3" />
+            <Suspense>
+              <BillingFlags />
+            </Suspense>
           </section>
 
           <section>

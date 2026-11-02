@@ -204,7 +204,15 @@ describe("REST v1 operations", () => {
 
     const queued = await messageRoute(req(`/agents/${w.agentA.id}/messages`, w.key, { method: "POST", body: JSON.stringify({ text: "later" }) }), params(w.agentA.id));
     expect(queued.status).toBe(202);
-    expect((await queued.json()).data.status).toBe("queued");
+    expect((await queued.json()).data).toMatchObject({ status: "queued", deliverables: [] });
+
+    // `message` is an alias of `text` (matches MCP's ask_agent); conversation_id of conversationId.
+    const alias = await messageRoute(req(`/agents/${w.agentA.id}/messages`, w.key, { method: "POST", body: JSON.stringify({ message: "Alias works", wait: true }) }), params(w.agentA.id));
+    expect(alias.status).toBe(200);
+    expect(engineMock.messageAgent.mock.calls.at(-1)![0]).toMatchObject({ text: "Alias works" });
+    const none = await messageRoute(req(`/agents/${w.agentA.id}/messages`, w.key, { method: "POST", body: JSON.stringify({ wait: true }) }), params(w.agentA.id));
+    expect(none.status).toBe(400);
+    expect((await none.json()).error.message).toMatch(/text \(or message\)/);
   });
 
   it("validates bodies and refuses paused agents", async () => {

@@ -4,7 +4,7 @@
 import "server-only";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { resolveAccess, type Role } from "@/server/auth/access";
+import { orgBySlug, resolveAccess, type Role } from "@/server/auth/access";
 import { clientIp, getCurrentUser } from "@/server/auth/session";
 import { db, schema } from "@/server/db/client";
 import { eq } from "drizzle-orm";
@@ -18,6 +18,7 @@ import {
   saveSlackInstall,
   signSlackState,
   slackAuthorizeUrl,
+  slackConfigured,
   verifySlackState,
 } from "./slack";
 
@@ -40,13 +41,30 @@ function back(path: string, result: string): NextResponse {
   return res;
 }
 
+/** `org` may be the org id or its slug. */
+async function orgIdFromParam(raw: string | null): Promise<string | null> {
+  if (!raw) return null;
+  if (z.uuid().safeParse(raw).success) return raw;
+  if (!/^[a-z0-9-]{1,64}$/.test(raw)) return null;
+  return (await orgBySlug(raw))?.id ?? null;
+}
+
 export async function handleSlackInstall(req: NextRequest): Promise<Response> {
   const url = new URL(req.url);
-  const orgId = z.uuid().safeParse(url.searchParams.get("org"));
-  if (!orgId.success) return notFound();
+  const orgId = await orgIdFromParam(url.searchParams.get("org"));
   const user = await getCurrentUser();
+
+  // Not configured on this deployment: always send the person back with a clear flag (never a bare 404),
+  // without revealing anything about orgs they can't see.
+  if (!slackConfigured()) {
+    const access = user && orgId ? await resolveAccess(user, orgId) : null;
+    const returnTo = safeReturnPath(url.searchParams.get("returnTo")) ?? (access ? defaultChannelsPath(access.org) : "/");
+    return back(returnTo, "unconfigured");
+  }
+
+  if (!orgId) return notFound();
   if (!user) return NextResponse.redirect(new URL("/login", appUrl()), 303);
-  const access = await resolveAccess(user, orgId.data);
+  const access = await resolveAccess(user, orgId);
   if (!access || !ADMIN.includes(access.role)) return notFound();
 
   const returnTo = safeReturnPath(url.searchParams.get("returnTo")) ?? defaultChannelsPath(access.org);

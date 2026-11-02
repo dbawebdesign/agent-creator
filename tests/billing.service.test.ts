@@ -90,9 +90,18 @@ describe("Connect onboarding", () => {
     expect(link?.params.get("return_url")).toContain("https://app.roster.test/api/billing/connect/return?org=");
     expect(link?.params.get("refresh_url")).toContain("https://app.roster.test/api/billing/connect?org=");
 
+    // GET (Stripe's refresh_url / CSRF-able) never creates an account for an org that has none.
+    const other = await makeUser(t.sibling.id, "owner");
+    session.current = other;
+    const refresh = await connectRoute(new Request(`https://app.roster.test/api/billing/connect?org=${t.sibling.id}&return=/p/x/resell`));
+    expect(refresh.headers.get("location")).toBe("https://app.roster.test/p/x/resell?billing=not_connected");
+    session.current = await makeUser(t.agency.id, "owner");
+    const resumed = await connectRoute(new Request(`https://app.roster.test/api/billing/connect?org=${t.agency.id}&return=/a/northbeam/billing`));
+    expect(resumed.headers.get("location")).toMatch(/^https:\/\/connect\.stripe\.com\//);
+
     await startStripeConnect(t.agency.id, "/a/northbeam/billing");
     expect(api.find("POST", "/v1/accounts")).toHaveLength(1);
-    expect(api.find("POST", "/v1/account_links")).toHaveLength(2);
+    expect(api.find("POST", "/v1/account_links")).toHaveLength(3);
 
     // Return from Stripe → account state refreshed → back into the app.
     const res = await connectReturnRoute(new Request(`https://app.roster.test/api/billing/connect/return?org=${t.agency.id}&next=/a/northbeam/billing`));
@@ -251,6 +260,9 @@ describe("portal, cancel, status", () => {
     session.current = await makeUser(t.client.id, "admin");
     expect(await openBillingPortal(t.client.id, "/p/x/settings")).toMatchObject({ ok: false, code: "not_found" });
     await db().insert(schema.billingCustomers).values({ orgId: t.client.id, stripeAccountId: "acct_bt_agency", stripeCustomerId: "cus_bt_1" });
+    session.current = await makeUser(t.agency.id, "owner");
+    expect(await openBillingPortal(t.client.id, "/p/x/settings")).toMatchObject({ ok: false, code: "invalid" });
+    session.current = await makeUser(t.client.id, "admin");
     const r = await openBillingPortal(t.client.id, "/p/x/settings");
     expect(r).toMatchObject({ ok: true });
     const [ps] = api.find("POST", "/v1/billing_portal/sessions");

@@ -22,8 +22,12 @@ export function BillingStatusBadge({ status, cancelAtPeriodEnd, className }: { s
   );
 }
 
-/** "Test mode" / "Not connected" marker for billing surfaces. */
+/** Mode marker: "Test mode" (Stripe not connected to the platform) or "Stripe test mode" (sk_test key). */
 export function BillingModeBadge({ mode }: { mode: "disabled" | "test" | "live" }) {
   if (mode === "live") return null;
-  return <Badge tone={mode === "test" ? "accent" : "neutral"}>{mode === "test" ? "Test mode" : "Stripe not configured"}</Badge>;
+  return (
+    <Badge tone={mode === "test" ? "accent" : "neutral"} className="shrink-0 whitespace-nowrap">
+      {mode === "test" ? "Stripe test mode" : "Test mode"}
+    </Badge>
+  );
 }

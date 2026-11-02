@@ -101,13 +101,19 @@ export async function applyAccountUpdate(a: Stripe.Account): Promise<BillingAcco
  * Hosted Stripe onboarding link for a seller org. Creates the connected account (Standard) on first use.
  * `returnUrl` is where the seller lands afterwards (must be inside the app).
  */
-export async function connectOnboardingLink(sellerOrgId: string, returnUrl: string, actor: Actor = {}): Promise<{ url: string; accountId: string }> {
+export async function connectOnboardingLink(
+  sellerOrgId: string,
+  returnUrl: string,
+  actor: Actor & { createIfMissing?: boolean } = {},
+): Promise<{ url: string; accountId: string }> {
   const stripe = requireStripe();
   const org = await orgById(sellerOrgId);
   const back = appUrl(returnUrl);
   let acct = await billingAccountFor(org.id);
   try {
     if (!acct || acct.deauthorizedAt) {
+      // GET entry points (Stripe's refresh_url) only resume onboarding; creating an account takes a POST action.
+      if (actor.createIfMissing === false) throw new BillingError("not_connected", "Start Stripe onboarding from the billing page.");
       const params: Stripe.AccountCreateParams = {
         type: "standard",
         business_profile: { name: org.branding.displayName ?? org.name, url: safeWebsite(org.website) },

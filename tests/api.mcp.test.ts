@@ -6,7 +6,7 @@ vi.hoisted(() => {
 });
 
 const engineMock = vi.hoisted(() => ({
-  messageAgent: vi.fn(async () => ({
+  messageAgent: vi.fn(async (): Promise<{ conversationId: string; runId: string; reply: string; deliverables?: { id: string; title: string; preview: string | null }[] }> => ({
     conversationId: "00000000-0000-4000-8000-000000000001",
     runId: "00000000-0000-4000-8000-000000000002",
     reply: "Three quotes are pending; Acme is the biggest at $4,000.",
@@ -137,6 +137,39 @@ describe("MCP tools", () => {
     expect(engineMock.messageAgent).toHaveBeenCalledWith(
       expect.objectContaining({ orgId: org.id, agentId: agent.id, channel: "mcp", wait: true, text: "What's pending?" }),
     );
+  });
+
+  it("ask_agent accepts text as an alias and returns the run's deliverables (org-scoped)", async () => {
+    const { org, agent, d, key } = await setup();
+    const foreign = await makeDeliverable((await makeOrg()).id, (await makeAgent((await makeOrg()).id)).id);
+    engineMock.messageAgent.mockResolvedValueOnce({
+      conversationId: "00000000-0000-4000-8000-000000000001",
+      runId: "00000000-0000-4000-8000-000000000002",
+      reply: "Done — the pipeline report is attached.",
+      deliverables: [
+        { id: d.id, title: d.title, preview: null },
+        { id: foreign.id, title: "not yours", preview: null },
+      ],
+    });
+    const r = await call(key, "tools/call", { name: "ask_agent", arguments: { agent_id: agent.id, text: "Send the pipeline report" } });
+    expect(r.result.isError).toBe(false);
+    const out = JSON.parse(r.result.content[0].text);
+    expect(out.deliverables).toEqual([{ id: d.id, title: d.title, preview: d.preview, kind: d.kind, url: `https://app.roster.test/p/${org.slug}/d/${d.id}` }]);
+    expect(engineMock.messageAgent).toHaveBeenCalledWith(expect.objectContaining({ text: "Send the pipeline report" }));
+    const both = await call(key, "tools/call", { name: "ask_agent", arguments: { agent_id: agent.id } });
+    expect(both.result.isError).toBe(true);
+  });
+
+  it("server instructions only mention tools the key can call; default keys can run workflows", async () => {
+    const { org, key } = await setup();
+    const full = await call(key, "initialize", { protocolVersion: "2025-06-18" });
+    expect(full.result.instructions).toContain("run_workflow");
+    const { key: ro } = await createApiKey({ orgId: org.id, name: "ro", scopes: ["agents:read", "deliverables:read"] });
+    const limited = await call(ro, "initialize", { protocolVersion: "2025-06-18" });
+    expect(limited.result.instructions).toContain("list_agents");
+    expect(limited.result.instructions).not.toMatch(/ask_agent|run_workflow/);
+    const { apiKey } = await createApiKey({ orgId: org.id, name: "default" });
+    expect(apiKey.scopes.sort()).toEqual([...ALL].sort());
   });
 
   it("validates tool arguments and reports unknown tools", async () => {

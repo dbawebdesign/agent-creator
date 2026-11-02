@@ -22,6 +22,14 @@ export const API_SCOPES = ["agents:read", "agents:invoke", "deliverables:read", 
 export type ApiScope = (typeof API_SCOPES)[number];
 export const apiScope = z.enum(API_SCOPES);
 
+/**
+ * Scopes for a key created without an explicit choice (e.g. the portal's "Create key" button): everything,
+ * including workflows:run, so every tool MCP advertises works out of the box. MCP's tools/list and its
+ * server instructions only ever mention the tools a key's scopes allow, so a narrower key never sees a
+ * tool it can't call. createApiKey uses this when `scopes` is omitted.
+ */
+export const DEFAULT_API_SCOPES: readonly ApiScope[] = API_SCOPES;
+
 export const KEY_PREFIX = "rk_live_";
 const KEY_RE = /^rk_live_[A-Za-z0-9_-]{32}$/;
 
@@ -52,7 +60,8 @@ export type ApiKeySummary = {
 const createInput = z.object({
   orgId: z.uuid(),
   name: z.string().trim().min(1).max(80),
-  scopes: z.array(apiScope).min(1).max(API_SCOPES.length),
+  /** Omitted → DEFAULT_API_SCOPES. */
+  scopes: z.array(apiScope).min(1).max(API_SCOPES.length).optional(),
   agentId: z.uuid().nullish(),
   createdBy: z.uuid().nullish(),
   expiresAt: z.date().nullish(),
@@ -79,7 +88,7 @@ export async function createApiKey(input: z.input<typeof createInput>): Promise<
   const parsed = createInput.safeParse(input);
   if (!parsed.success) throw new ApiKeyError("invalid_input", parsed.error.issues[0]?.message ?? "Invalid input");
   const { orgId, name, agentId, createdBy, expiresAt, ip } = parsed.data;
-  const scopes = [...new Set(parsed.data.scopes)];
+  const scopes = [...new Set(parsed.data.scopes ?? DEFAULT_API_SCOPES)];
 
   let agentName: string | null = null;
   if (agentId) {

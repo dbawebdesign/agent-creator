@@ -699,7 +699,7 @@ async function getRequestUncached(orgId: string, id: string) {
 /* ---------------------------------------------------------------- Connect */
 
 export async function getConnect(orgId: string) {
-  const [team, slack] = await Promise.all([
+  const [team, slack, sms] = await Promise.all([
     getTeam(orgId),
     db()
       .select({
@@ -714,7 +714,12 @@ export async function getConnect(orgId: string) {
         ),
       )
       .limit(1),
+    db()
+      .select({ id: schema.channelConnections.id, agentId: schema.channelConnections.agentId })
+      .from(schema.channelConnections)
+      .where(and(eq(schema.channelConnections.orgId, orgId), eq(schema.channelConnections.kind, "sms"))),
   ]);
+  const smsByAgent = new Map(sms.filter((c) => c.agentId).map((c) => [c.agentId!, c.id]));
   const s = slack[0];
   const teamName =
     typeof s?.config?.teamName === "string" ? s.config.teamName : null;
@@ -726,6 +731,8 @@ export async function getConnect(orgId: string) {
       seed: a.seed,
       email: a.email,
       phone: a.phone,
+      status: a.status,
+      smsConnectionId: smsByAgent.get(a.id) ?? null,
     })),
     slack: s ? { status: s.status, teamName } : null,
     appUrl: env().APP_URL,

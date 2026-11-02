@@ -15,6 +15,7 @@ import * as engine from "@/server/services/engine";
 import { fetchReceivedEmail, htmlToText, MAX_TEXT, normalizeSubject, parseAddress, parseMessageIds, stripQuotedReply } from "./email";
 import { E164_RE, START_WORDS, STOP_WORDS } from "./sms";
 import { stripMention } from "./slack";
+import { attachmentList, attachmentNote, emailSenderTrustedForFiles, processEmailAttachments } from "./attachments";
 
 type Agent = typeof schema.agents.$inferSelect;
 
@@ -224,13 +225,23 @@ const EVENT_FOR: Partial<Record<ChannelKind, "email.received" | "sms.received" |
  * event-triggered workflows. Crash-safe: if the process dies after the message commit, the retried
  * inbound.process job finds the stored message, sees no run for it yet, and starts it then.
  */
-export async function ingestAndWake(database: DB, input: IngestInput): Promise<IngestResult & { runId: string | null }> {
+export async function ingestAndWake(
+  database: DB,
+  input: IngestInput,
+  hooks: {
+    /** Runs after the message is stored and before the agent wakes (attachments). Errors are logged, not thrown. */
+    afterStore?: (r: { messageId: string; conversationId: string; throttled: boolean }) => Promise<void>;
+  } = {},
+): Promise<IngestResult & { runId: string | null }> {
   const res = await ingestInbound(database, input);
-  if (!input.triggerAgent || !res.messageId) return { ...res, runId: null };
-  if (!res.duplicate) {
-    const throttled = await inboundThrottled(input.agentId, res.messageId, database);
-    if (throttled) return { ...res, runId: null };
+  if (!res.messageId) return { ...res, runId: null };
+  const throttled = input.triggerAgent && !res.duplicate ? await inboundThrottled(input.agentId, res.messageId, database) : false;
+  if (hooks.afterStore) {
+    await hooks
+      .afterStore({ messageId: res.messageId, conversationId: res.conversationId, throttled })
+      .catch((err: unknown) => logger.warn({ err: err instanceof Error ? err.name : "unknown" }, "inbound: afterStore hook failed"));
   }
+  if (!input.triggerAgent || throttled) return { ...res, runId: null };
   const [prior] = await database
     .select({ id: schema.runs.id })
     .from(schema.runs)
@@ -446,6 +457,11 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   const conversationId = await threadEmail(database, agent, ids, from.email, subject);
   const threadKey = references[0] ?? inReplyTo[0] ?? messageIdHeader ?? `resend:${emailId}`;
 
+  // Attachment trust is decided before ingest creates/links the contact (see attachments.ts).
+  const attachments = attachmentList(full.attachments);
+  const filesTrusted = attachments.length > 0 && !isAuto ? await emailSenderTrustedForFiles(database, agent.orgId, from.email, senderAuth) : false;
+  const externalId = `email:${emailId}`;
+
   const res = await ingestAndWake(database, {
     orgId: agent.orgId,
     agentId: agent.id,
@@ -455,7 +471,7 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
     subject,
     contact: { email: from.email, name: from.name },
     body,
-    externalId: `email:${emailId}`,
+    externalId,
     meta: {
       emailMessageId: messageIdHeader,
       inReplyTo: inReplyTo[0] ?? null,
@@ -464,10 +480,23 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
       from: from.email,
       fromName: from.name,
       automated: isAuto || undefined,
-      attachments: Array.isArray(full.attachments) ? full.attachments.length : 0,
+      attachments: attachments.length,
     },
     triggerAgent: !isAuto && senderAuth !== "fail" && agent.status === "active",
     senderAuth,
+  }, {
+    afterStore: async ({ messageId, throttled }) => {
+      if (attachments.length === 0) return;
+      const outcomes = await processEmailAttachments(database, { orgId: agent.orgId, agentId: agent.id, emailId, sourceRef: externalId, attachments, trusted: filesTrusted, throttled });
+      const note = attachmentNote(outcomes);
+      await database
+        .update(schema.messages)
+        .set({
+          body: sql`case when ${schema.messages.meta} ? 'files' then ${schema.messages.body} else ${schema.messages.body} || ${`\n\n${note}`} end`,
+          meta: sql`${schema.messages.meta} || ${JSON.stringify({ files: outcomes, filesTrusted })}::jsonb`,
+        })
+        .where(and(eq(schema.messages.id, messageId), eq(schema.messages.orgId, agent.orgId)));
+    },
   });
   return res.duplicate ? "duplicate" : "stored";
 }

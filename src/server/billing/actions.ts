@@ -9,7 +9,8 @@
  *  - Sync a plan: an admin of the plan's seller org.
  *  - Checkout for buyer B: an admin of B — directly (the buyer) or via an ancestor (the seller's staff creating a
  *    link to send). The plan must belong to B's parent.
- *  - Billing portal / cancel for buyer B: an admin of B (direct or inherited).
+ *  - Billing portal for buyer B: a DIRECT admin of B (the portal can change cards and see invoices).
+ *  - Cancel for buyer B: an admin of B (direct, or the seller's staff via inheritance).
  */
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -139,6 +140,7 @@ export async function openBillingPortal(buyerOrgId: string, returnPath?: string)
     const buyer = uuid.parse(buyerOrgId);
     const ret = path.parse(returnPath) ?? "/";
     const access = await requireOrgById(buyer, "admin");
+    if (access.inherited && !access.user.isPlatformAdmin) throw new BillingError("invalid", "Only this organization's own admins can open its billing portal.");
     await limited(access, "portal");
     const { url } = await customerPortalLink(buyer, ret, { userId: access.user.id });
     return { ok: true, url };

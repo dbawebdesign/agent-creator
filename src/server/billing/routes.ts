@@ -1,6 +1,7 @@
 /**
  * Connect onboarding route logic (kept out of src/app so it can be tested with plain Request objects).
- *   GET /api/billing/connect?org=<id>&return=<path>        → 303 to a fresh Stripe Account Link (also Stripe's refresh_url)
+ *   GET /api/billing/connect?org=<id>&return=<path>        → 303 to a fresh Stripe Account Link (Stripe's refresh_url;
+ *                                                            resumes onboarding only — creating the account is a POST action)
  *   GET /api/billing/connect/return?org=<id>&next=<path>   → re-read the account from Stripe, 303 back into the app
  */
 import "server-only";
@@ -40,7 +41,7 @@ export async function connectRedirect(req: Request): Promise<Response> {
   try {
     const access = await requireOrgById(org.data, "admin");
     if (access.inherited && !access.user.isPlatformAdmin) return back(ret, "connect_forbidden");
-    const link = await connectOnboardingLink(org.data, ret, { userId: access.user.id });
+    const link = await connectOnboardingLink(org.data, ret, { userId: access.user.id, createIfMissing: false });
     return Response.redirect(link.url, 303);
   } catch (err) {
     const d = digest(err);

@@ -1,3 +1,6 @@
+import { BillingStatusBadge, SyncPlanButton } from "@/components/billing";
+import { ConnectStripeCard } from "@/components/billing/connect-stripe-card";
+import { BillingFlags } from "@/components/studio/billing-flags";
 import Link from "next/link";
 import { Suspense } from "react";
 import { hasRole, requireOrg } from "@/server/auth/access";
@@ -33,6 +36,11 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
           </Suspense>
         ) : null}
       </header>
+
+      <Suspense>
+        <BillingFlags />
+      </Suspense>
+      <ConnectStripeCard sellerOrgId={access.org.id} returnPath={`/a/${slug}/billing`} className="mb-8" />
 
       <section aria-label="Totals" className="grid grid-cols-2 gap-y-6 rounded-xl border border-line bg-surface px-5 py-5 shadow-xs sm:grid-cols-4 sm:divide-x sm:divide-line sm:px-0">
         <Stat className="sm:px-6" label="Monthly recurring" value={money(mrrCents)} sub={`${activeSubs.length} subscription${activeSubs.length === 1 ? "" : "s"}`} />
@@ -72,9 +80,12 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
                     {n} client{n === 1 ? "" : "s"}
                   </span>
                   {admin ? (
-                    <Suspense>
-                      <PlanDialog agency={slug} plan={plan} trigger={<button type="button" className="font-medium text-ink-3 hover:text-ink">Edit</button>} />
-                    </Suspense>
+                    <span className="flex items-center gap-1">
+                      <SyncPlanButton planId={plan.id} />
+                      <Suspense>
+                        <PlanDialog agency={slug} plan={plan} trigger={<button type="button" className="rounded-md px-2 py-1 font-medium text-ink-3 hover:bg-surface-2 hover:text-ink">Edit</button>} />
+                      </Suspense>
+                    </span>
                   ) : null}
                 </div>
               </li>
@@ -108,11 +119,7 @@ export default async function BillingPage({ params }: { params: Promise<{ agency
                         {sub ? (
                           <span className="inline-flex items-center gap-2">
                             <span className="text-ink-2">{sub.planName}</span>
-                            {sub.sub.status !== "active" ? (
-                              <Badge tone={sub.sub.status === "past_due" ? "warn" : sub.sub.status === "trialing" ? "accent" : "neutral"}>
-                                {sub.sub.status === "past_due" ? "Past due" : sub.sub.status[0]!.toUpperCase() + sub.sub.status.slice(1)}
-                              </Badge>
-                            ) : null}
+                            <BillingStatusBadge status={sub.sub.status} cancelAtPeriodEnd={sub.sub.cancelAtPeriodEnd} />
                           </span>
                         ) : (
                           <Badge tone="neutral">No plan</Badge>

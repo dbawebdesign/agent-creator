@@ -121,7 +121,11 @@ export function finalizeSpec(spec: AgentSpec): AgentSpec {
   const tools = [...new Set([...core, ...spec.tools, ...spec.workflows.flatMap((w) => w.tools)])];
   const channels = [...new Set(["portal" as const, ...spec.channels])];
   const usesComputer = tools.some((t) => /^computer_/.test(t));
-  const requireApprovalFor = normalizeApprovals([...(usesComputer ? ["write_client_system"] : []), ...spec.requireApprovalFor]).actions;
+  // Enforceable actions (email + SMS always on, client-system writes when the agent drives a computer). Anything else
+  // the model asked for stays visible on the proposal so hireAgent can record it as unenforceable; it never reaches
+  // the agent's config.
+  const approvals = normalizeApprovals([...(usesComputer ? ["write_client_system"] : []), ...spec.requireApprovalFor]);
+  const requireApprovalFor = [...approvals.actions, ...approvals.unenforceable];
   const weekly =
     spec.weeklyHoursSaved > 0
       ? spec.weeklyHoursSaved
@@ -306,7 +310,11 @@ type Play = {
 };
 
 const approvalStep = (t: Topic, ctx: Ctx, what: string) => {
-  const rules = rulesFor(t, ctx);
+  // The rule that governs this send: about this audience, "without me seeing it", not a dispatch dollar threshold.
+  const aud = audienceOf(t, ctx);
+  const score = (r: string) => (new RegExp(`\\b${aud}s?\\b`, "i").test(r) || new RegExp(`\\b${aud}s?\\b`, "i").test(what) && new RegExp(what.split(" ").slice(-1)[0] ?? "", "i").test(r) ? 2 : 0) + (/without (?:me|us|[A-Z])|nothing goes|before it'?s sent|reviews anything/i.test(r) ? 2 : 0) - (/\$\d/.test(r) ? 3 : 0);
+  const words = new Set([...(what.toLowerCase().match(/[a-z]{4,}/g) ?? [])].filter((w) => !/^(?:anything|goes|sent|send|before|each|their|into|message|reaches|writing|records)$/.test(w)));
+  const rules = [...rulesFor(t, ctx)].sort((a, b) => score(b) - score(a)).filter((r) => (r.toLowerCase().match(/[a-z]{4,}/g) ?? []).some((w) => words.has(w) || words.has(w.replace(/s$/, ""))));
   return `Request approval from ${ctx.approver} before ${what}${rules[0] ? ` (on the call: “${truncate(rules[0], 150)}”)` : ""}.`;
 };
 
@@ -381,6 +389,16 @@ const PLAYS: Record<Action, Play> = {
       const rec = recordSystem(t, ctx);
       const aud = audienceOf(t, ctx);
       const txt = prefersText(t, ctx);
+      if (/1099|w-?9/i.test(t.phrase)) {
+        const books = ctx.d.systems.find((x) => /QuickBooks|Xero|NetSuite|Sage|FreshBooks/.test(x)) ?? "the books";
+        return [
+          `For each client, list every vendor paid $600 or more this year from ${books}, with total paid and whether a W-9 is on file.`,
+          "Draft one short W-9 request per vendor that is missing one (on the client's behalf, with a secure upload link), and one summary email per client of who is still outstanding.",
+          approvalStep(t, ctx, "anything goes to a client or a vendor"),
+          "Follow up every 7 days until each W-9 is in; flag vendors who still have none by January 15.",
+          "Deliver a GFM table per client (vendor, total paid, W-9 on file?, requested on, status) and the draft 1099 list once every W-9 is in.",
+        ];
+      }
       const via = txt ? `text${messagingTool(ctx) ? ` (through ${messagingTool(ctx)})` : ""}` : "email";
       return [
         `Pull the list of ${/adjuster|carrier/.test(t.phrase) && /claim/i.test(t.sentences.map((s) => s.text).join(" ")) ? "stalled claims (no reply from the adjuster in 5+ days)" : normalizeObject(t.phrase)} from ${t.systems.filter((x) => RECORD_SYSTEMS.test(x)).length > 1 ? listJoin(t.systems.filter((x) => RECORD_SYSTEMS.test(x))) : rec ? `${rec}${/report/i.test(t.sentences.map((s) => s.text).join(" ")) ? " (the report the team already runs)" : ""}` : "the knowledge base and memory"}: ${aud}, what is open, value, and last contact.`,
@@ -404,7 +422,7 @@ const PLAYS: Record<Action, Play> = {
       ].join("\n"),
     }),
     resale: (t, ctx) => `Package the ${PLAYS.chase.name(t, ctx).toLowerCase()} as a done-for-you service ${ctx.org} can offer peers in the same trade.`,
-    verb: (t, ctx) => `handles ${PLAYS.chase.name(t, ctx).toLowerCase()}`,
+    verb: (t, ctx) => `handles ${PLAYS.chase.name(t, ctx).replace(/^(\w)(?=[a-z])/, (x) => x.toLowerCase())}`,
   },
   report: {
     role: () => "Reporting Analyst",
@@ -449,7 +467,7 @@ const PLAYS: Record<Action, Play> = {
       { title: `A recent ${t.phrase} you were happy with`, why: "Sets the format and tone to match." },
       { title: `Read access or exports from ${recordSystem(t, ctx) ?? "the system that holds the figures"}`, why: "Every figure comes from it." },
     ],
-    questions: (t, ctx) => [`Which ${audienceOf(t, ctx)}s get a ${t.phrase.replace(/s$/, "")}, and is there anyone who needs a different format?`],
+    questions: (t, ctx) => [`Which ${audienceOf(t, ctx)}s get ${an(t.phrase.replace(/s$/, ""))}, and does anyone need a different format?`],
     overnight: (t, ctx) => ({
       title: `${PLAYS.report.name(t, ctx)}: the template and a worked example`,
       description: `${ctx.org} wakes up to the ${t.phrase} format built from the call, with a worked example — the work that takes ${t.hoursPerWeek ? `about ${fmtHours(t.hoursPerWeek)}` : "hours"} by hand today.`,
@@ -488,7 +506,7 @@ const PLAYS: Record<Action, Play> = {
       ];
     },
     knowledge: () => [{ title: "Preferred vendor list (trade, area, rates, contact)", why: "Every dispatch picks from it." }, { title: "Owner approval thresholds per property", why: "Some owners want approval at a lower amount." }],
-    questions: (t, ctx) => [`Confirm the approval limits per owner (${rulesFor(t, ctx).filter((r) => /\$\d/.test(r)).length ? "the call mentioned more than one" : "the call did not give one"}), and who covers emergencies at night.`],
+    questions: (t, ctx) => [rulesFor(t, ctx).some((r) => /\$\d/.test(r)) ? "How should owner approval requests reach owners (email or text), and how long do we wait before calling?" : "Which jobs need the owner's approval before work starts, and above what amount?"],
     overnight: (t, ctx) => ({
       title: `${cap(t.qualifier || "Service")} triage playbook and dispatch drafts`,
       description: `The rules ${doerOf(t, ctx)} applies in her head, written down — urgency, vendor choice and approval limits — with ready-to-use dispatch and approval messages.`,
@@ -613,11 +631,12 @@ const PLAYS: Record<Action, Play> = {
     defaultHours: 6,
     steps: (t, ctx) => {
       const rec = recordSystem(t, ctx) ?? "the accounting system";
-      const items = t.items.length ? t.items : ["bank and credit card reconciliations", "uncategorized transactions", "accruals", "the close package"];
+      const items = t.lists.find((l) => /reconcil|accru|categori|code /i.test(l.text))?.items ?? ["bank and credit card reconciliations", "uncategorized transactions", "accruals", "the close package"];
+      const pkg = t.lists.find((l) => /balance sheet|p&l|package|summary/i.test(l.text) && !/reconcil/i.test(l.text))?.items;
       return [
         `On the first business day, build the close checklist for every client: ${listJoin(items)}.`,
         `Reconcile bank and card accounts in ${rec}; list every unmatched or uncategorized transaction with date, payee and amount.`,
-        ...(t.lists[1] ? [`Assemble each client's close package: ${listJoin(t.lists[1].items)}.`] : []),
+        ...(pkg ? [`Assemble each client's close package: ${listJoin(pkg)}.`] : []),
         "Draft ONE email per client with a table of what we need from them (receipt, explanation, document) — never one email per item.",
         `Prepare proposed adjusting entries for review; nothing is posted in ${rec} without approval.`,
         approvalStep(t, ctx, "any email goes to a client"),
@@ -697,7 +716,25 @@ const PLAYS: Record<Action, Play> = {
     tools: [...BASE, ...COMPUTER, "request_approval"],
     computer: true,
     defaultHours: 10,
-    steps: (t, ctx) => [
+    steps: (t, ctx) => {
+      if (!/migrat|switch|bring|pulling records|fields/i.test(t.phrase)) {
+        const txt = t.sentences.map((s) => s.text).join(" ");
+        const obj = /\b(?:the|our|every|each)\s+((?:[a-z]+\s+)?(?:orders?|lists?|forms?|sheets?|logs?|requests?|timesheets?|records?|bills?|receipts?|purchase orders?))\b/i.exec(txt)?.[1]?.toLowerCase() ?? "record";
+        const into = /\binto (?:the |our )?([a-z]+(?: [a-z]+)?? (?:website|portal|system|app|software))\b/i.exec(txt)?.[1] ?? recordSystem(t, ctx) ?? "the system";
+        return [
+          `When a ${singular(obj)} comes in, read it and pull out every line (item, quantity, size or color, job, needed-by date).`,
+          `Check it against the job${(() => {
+            const all = ctx.d.sentences.map((x) => x.text).join(" ");
+            const js = /\b([A-Z][A-Za-z]+) for (?:the )?jobs\b|\bjobs (?:are|live) in ([A-Z][A-Za-z]+)/.exec(all);
+            const sys = js?.[1] ?? js?.[2] ?? recordSystem(t, ctx);
+            return sys ? ` in ${sys}` : "";
+          })()} and flag anything that looks off (a missing quantity, an unusual amount, a duplicate).`,
+          `Enter it into the ${into} on your computer exactly as written, and keep the confirmation number.`,
+          approvalStep(t, ctx, `submitting the ${singular(obj)} on the ${into}`),
+          `Deliver a GFM table of what was entered (item, quantity, confirmation number, flags) to ${doerOf(t, ctx)}.`,
+        ];
+      }
+      return [
       "Open the source system on your computer and sign in with the credentials stored for this customer.",
       `For each ${ctx.vertical?.id === "insurance" ? "insured and policy (named insured, policy number, carrier, effective/expiration dates, premium, coverages)" : "record"}, click into every field and capture the values.`,
       "Normalize the data to the target system's field map (dates ISO-8601, money as numbers, names split first/last).",
@@ -705,7 +742,8 @@ const PLAYS: Record<Action, Play> = {
       "Produce a GFM table of migrated records plus an exceptions table that needs a human.",
       approvalStep(t, ctx, "writing records into the target system; then import and spot-check 5 records against the source"),
       "Report totals (records moved, exceptions, time taken) in the morning summary.",
-    ],
+      ];
+    },
     knowledge: (_t, ctx) => [
       { title: "Target system field map", why: "Defines where every source field goes." },
       { title: ctx.vertical?.id === "insurance" ? "Source agency-management system access (test account)" : "Source system access (test account)", why: "The agent works through the UI like a person would." },
@@ -892,6 +930,9 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
         })
       : raw;
   d.vertical = vertical?.label ?? null;
+  const isPerson = (x: string) => d.people.some((p) => x === p.name || x.startsWith(`${p.name} `));
+  d.systems = d.systems.filter((x) => !isPerson(x));
+  for (const t of d.topics) t.systems = t.systems.filter((x) => !isPerson(x));
   if (!labelled && vertical) {
     // A task the speaker also describes for other businesses, never tied to this one, is theirs, not this client's.
     const offTopic = new Set<Action>();
@@ -1003,14 +1044,15 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     if (t.hoursPerWeek) seedMemories.push(`${w.name}: currently ~${Math.round(t.hoursPerWeek * 10) / 10} hours/week of manual work.`);
     if (t.money && t.moneyText) seedMemories.push(`${w.name}: ${fmtMoney(t.money)} at stake — “${quoteOf(t.moneyText)}”`);
     const ev = [...t.sentences].filter((s) => s !== t.first).sort((a, b) => painScore(b.text) - painScore(a.text))[0];
-    seedMemories.push(`From the discovery call: “${quoteOf(t.first.text)}”`);
-    if (ev && painScore(ev.text) > 0) seedMemories.push(`From the discovery call: “${quoteOf(ev.text)}”`);
+    const lead = t.first.text.split(/\s+/).length > 6 ? t.first : (t.sentences.find((x) => x.text.split(/\s+/).length > 6 && !d.rules.includes(x.text)) ?? null);
+    if (lead) seedMemories.push(`From the discovery call: “${quoteOf(lead.text)}”`);
+    if (ev && ev !== lead && painScore(ev.text) > 0) seedMemories.push(`From the discovery call: “${quoteOf(ev.text)}”`);
   });
   for (const p of d.people) seedMemories.push(`Person: ${p.name}${p.role ? ` (${p.role}${p.name === d.owner ? ", on the call" : ""})` : ""}.`);
   if (d.systems.length) seedMemories.push(`Systems and tools mentioned: ${d.systems.join(", ")}.`);
   for (const r of d.rules) seedMemories.push(`Approval rule from the call: “${quoteOf(r)}”`);
   for (const g of d.guardrails) if (!d.rules.includes(g)) seedMemories.push(`Hard rule from the call: “${quoteOf(g)}”`);
-  for (const pref of d.preferences) if (!d.rules.includes(pref)) seedMemories.push(`Preference from the call: “${quoteOf(pref)}”`);
+  for (const pref of d.preferences) if (!d.rules.includes(pref) && pref.split(/\s+/).length >= 3) seedMemories.push(`Preference from the call: “${quoteOf(pref)}”`);
   if (d.recipient.name) {
     seedMemories.push(
       `Morning deliverables go to ${d.recipient.name}${d.recipient.channel ? ` by ${d.recipient.channel === "sms" ? "text" : "email"}` : ""}${d.recipient.by ? `, before ${clock(d.recipient.by.h, d.recipient.by.m)}` : ""}.`,

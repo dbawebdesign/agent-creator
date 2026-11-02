@@ -7,6 +7,9 @@ import {
   RevokeInvite,
 } from "@/components/portal/settings-forms";
 import { getPortal, getSettings, readPrefs } from "@/server/queries/portal";
+import { Suspense } from "react";
+import { SubscriptionCard } from "@/components/billing/subscription-card";
+import { PortalBillingFlags } from "@/components/portal/billing-flags";
 
 export const metadata = { title: "Settings" };
 
@@ -62,6 +65,9 @@ export default async function SettingsPage({
 
   return (
     <div className="mx-auto w-full max-w-[1040px] px-4 pt-8 md:px-6 md:pt-14">
+      <Suspense fallback={null}>
+        <PortalBillingFlags />
+      </Suspense>
       <header className="mb-10 animate-rise">
         <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">
           Settings
@@ -143,6 +149,16 @@ export default async function SettingsPage({
           </div>
         ) : null}
       </Section>
+
+      {p.isAdmin && !p.viewingAs ? (
+        <Section
+          id="billing"
+          title="Plan & billing"
+          body={`Your plan with ${p.org.kind === "customer" ? p.brand.name : "your agency"}. Pay by card and download invoices here.`}
+        >
+          <SubscriptionCard buyerOrgId={p.org.id} returnPath={`/p/${slug}/settings`} title="Your plan" />
+        </Section>
+      ) : null}
 
       {p.canResell && p.isAdmin ? (
         <Section

@@ -2,6 +2,7 @@
 import { and, eq } from "drizzle-orm";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { cleanupOrgs, makeAgent, makeDeliverable, makeOrg, rid, TEST_ENV } from "./channels.fixtures";
+import { deliveryStatusFor } from "@/server/channels/service";
 
 vi.hoisted(() => {
   Object.assign(process.env, { APP_URL: "https://app.roster.test", EMAIL_DOMAIN: "agents.roster.test" });
@@ -86,7 +87,9 @@ describe("channel.deliver (simulated mode)", () => {
       await channelDeliver({ orgId: org.id, agentId: agent.id, channel: "email", deliverableId: d.id, to: "Dana@Brandlord.co" }, { db: db(), jobId: `e${i}` });
     }
     const [row] = await db().select().from(schema.deliverables).where(eq(schema.deliverables.id, d.id));
-    expect(row!.deliveredVia.sort()).toEqual(["email", "portal"]);
+    // Simulated email (no RESEND_API_KEY) doesn't count as delivered; the message records it as test mode.
+    expect(row!.deliveredVia.sort()).toEqual(["portal"]);
+    expect(await deliveryStatusFor(org.id, [d.id])).toEqual({ [d.id]: [{ channel: "email", state: "test_mode", recipients: 1, label: "Email (test mode)" }] });
     const msgs = await db()
       .select()
       .from(schema.messages)

@@ -283,10 +283,11 @@ async function slackTargetAllowed(
 }
 
 /**
- * Deliver one outbound message under a row lock. Returns the final status.
- * Permanent failures are recorded on the message; transient failures are recorded and re-thrown.
+ * Deliver one outbound message under a row lock. Returns the final status: "sent" (a real provider send, now
+ * or on an earlier attempt), "simulated" (no provider configured: recorded with meta.simulated, nothing left
+ * the building), or "failed". Permanent failures are recorded on the message; transient ones are re-thrown.
  */
-export async function deliverMessage(database: DB, payload: DeliverPayload, messageId: string): Promise<"sent" | "skipped" | "failed"> {
+export async function deliverMessage(database: DB, payload: DeliverPayload, messageId: string): Promise<"sent" | "simulated" | "failed"> {
   const { org, agent } = await loadOrgAgent(database, payload.orgId, payload.agentId);
   let transient: unknown = null;
   const outcome = await database.transaction(async (txRaw) => {
@@ -299,7 +300,7 @@ export async function deliverMessage(database: DB, payload: DeliverPayload, mess
       .limit(1);
     if (!message) throw new PermanentJobError("message not found");
     if (message.direction !== "outbound") throw new PermanentJobError("message is not outbound");
-    if (message.deliveryStatus === "sent" || message.deliveryStatus === "delivered") return "skipped" as const;
+    if (message.deliveryStatus === "sent" || message.deliveryStatus === "delivered") return message.meta.simulated ? ("simulated" as const) : ("sent" as const);
     const [conversation] = await tx
       .select()
       .from(schema.conversations)
@@ -327,6 +328,7 @@ export async function deliverMessage(database: DB, payload: DeliverPayload, mess
         .where(eq(schema.messages.id, message.id));
       if (out.result.simulated) {
         logger.info({ messageId: message.id, channel: conversation.channel }, "channels: delivered in simulated mode");
+        return "simulated" as const;
       }
       return "sent" as const;
     } catch (err) {
@@ -483,13 +485,15 @@ async function deliverDeliverable(database: DB, payload: DeliverPayload, deliver
     return;
   }
 
+  // deliveredVia means "it actually reached them": only a real provider send stamps it. Simulated sends
+  // (no provider configured) stay visible per message (meta.simulated) — see deliveryStatusFor().
   let sentAny = false;
   let firstTransient: unknown = null;
   for (const r of recipients) {
     const messageId = await deliverableMessage(database, { org, agent, deliverable, channel, recipient: r });
     try {
       const status = await deliverMessage(database, { ...payload, to: r }, messageId);
-      if (status !== "failed") sentAny = true;
+      if (status === "sent") sentAny = true;
     } catch (err) {
       firstTransient ??= err;
     }

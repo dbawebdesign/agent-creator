@@ -11,7 +11,9 @@ import { env } from "@/server/env";
 import { audit } from "@/server/security/audit";
 import { mcpConfigSnippet, type McpSnippets } from "@/server/api/mcp-config";
 import { normalizeE164 } from "./sms";
-import { slackBotToken, slackRevokeToken } from "./slack";
+import { slackBotToken, slackConfigured, slackRevokeToken } from "./slack";
+
+export { slackConfigured };
 
 export { mcpConfigSnippet, type McpSnippets };
 
@@ -65,7 +67,7 @@ export function providerStatus(): ProviderStatus {
     email: !!e.RESEND_API_KEY,
     emailInbound: !!e.RESEND_WEBHOOK_SECRET,
     sms: !!(e.TWILIO_ACCOUNT_SID && e.TWILIO_AUTH_TOKEN && e.TWILIO_MESSAGING_SERVICE_SID),
-    slack: !!(e.SLACK_CLIENT_ID && e.SLACK_CLIENT_SECRET && e.SLACK_SIGNING_SECRET),
+    slack: slackConfigured(),
   };
 }
 
@@ -247,4 +249,58 @@ export async function setSlackAgent(orgId: string, connectionId: string, agentId
     .where(and(eq(schema.channelConnections.id, connectionId), eq(schema.channelConnections.orgId, orgId), eq(schema.channelConnections.kind, "slack")))
     .returning({ id: schema.channelConnections.id });
   if (!res.length) throw new ChannelError("not_found", "Connection not found.");
+}
+
+// ── Delivery status (for "Delivered via Email" vs "Email (test mode)") ──────
+
+export type ChannelDelivery = {
+  channel: string;
+  /** sent = a provider accepted it; test_mode = simulated (provider not configured); pending = queued. */
+  state: "sent" | "test_mode" | "pending" | "failed";
+  recipients: number;
+  /** Ready-made label: "Email", "Email (test mode)", "SMS (sending)", "Slack (failed)". */
+  label: string;
+};
+
+const CHANNEL_LABEL: Record<string, string> = { email: "Email", sms: "SMS", slack: "Slack", portal: "Portal", api: "API", mcp: "MCP" };
+const STATE_SUFFIX: Record<ChannelDelivery["state"], string> = { sent: "", test_mode: " (test mode)", pending: " (sending)", failed: " (failed)" };
+const RANK: ChannelDelivery["state"][] = ["sent", "test_mode", "pending", "failed"];
+
+/**
+ * Per-deliverable, per-channel outcome of email/SMS/Slack deliveries, from the outbound messages that
+ * carried them. Deliverables with no channel sends are absent from the result (portal-only).
+ */
+export async function deliveryStatusFor(orgId: string, deliverableIds: string[]): Promise<Record<string, ChannelDelivery[]>> {
+  const ids = [...new Set(deliverableIds)].slice(0, 500);
+  if (ids.length === 0) return {};
+  const rows = await db()
+    .select({
+      deliverableId: schema.messages.deliverableId,
+      channel: schema.conversations.channel,
+      status: schema.messages.deliveryStatus,
+      meta: schema.messages.meta,
+    })
+    .from(schema.messages)
+    .innerJoin(schema.conversations, and(eq(schema.conversations.id, schema.messages.conversationId), eq(schema.conversations.orgId, orgId)))
+    .where(and(eq(schema.messages.orgId, orgId), eq(schema.messages.direction, "outbound"), inArray(schema.messages.deliverableId, ids)));
+  const acc = new Map<string, Map<string, { states: Set<ChannelDelivery["state"]>; n: number }>>();
+  for (const r of rows) {
+    if (!r.deliverableId) continue;
+    const state: ChannelDelivery["state"] =
+      r.status === "failed" ? "failed" : r.status === "pending" ? "pending" : r.meta.simulated ? "test_mode" : "sent";
+    const byChannel = acc.get(r.deliverableId) ?? new Map();
+    const cur = byChannel.get(r.channel) ?? { states: new Set(), n: 0 };
+    cur.states.add(state);
+    cur.n++;
+    byChannel.set(r.channel, cur);
+    acc.set(r.deliverableId, byChannel);
+  }
+  const out: Record<string, ChannelDelivery[]> = {};
+  for (const [deliverableId, byChannel] of acc) {
+    out[deliverableId] = [...byChannel].map(([channel, v]) => {
+      const state = RANK.find((s) => v.states.has(s))!;
+      return { channel, state, recipients: v.n, label: `${CHANNEL_LABEL[channel] ?? channel}${STATE_SUFFIX[state]}` };
+    });
+  }
+  return out;
 }

@@ -7,6 +7,8 @@ import { SlackMark } from "@/components/portal/icons";
 import { getConnect, getPortal } from "@/server/queries/portal";
 import { timeAgo } from "@/lib/utils";
 import { providerStatus } from "@/server/channels/service";
+import { SmsConnect } from "@/components/shared/sms-connect";
+import { slackConfigured } from "@/server/channels/slack";
 
 export const metadata = { title: "Connect" };
 
@@ -79,7 +81,8 @@ export default async function ConnectPage({
     }
   }
   const withPhone = c.agents.filter((a) => a.phone);
-  const slackReady = providerStatus().slack;
+  const slackReady = slackConfigured();
+  const smsLive = providerStatus().sms;
   const provider = p.org.kind === "customer" ? p.brand.name : "your provider";
   const first = c.agents[0]?.name ?? "your team";
 
@@ -138,30 +141,41 @@ export default async function ConnectPage({
           title="Text"
           body="Text a teammate from your phone like you would a colleague — great for quick asks on the go."
         >
-          {withPhone.length ? (
+          {p.isAdmin && c.agents.length ? (
+            // Admins give each teammate a number right here; everyone else sees the numbers to text.
+            <ul className="space-y-4">
+              {c.agents.map((a) => (
+                <li key={a.id} className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4">
+                  <div className="flex min-w-0 items-center gap-2.5 sm:w-44 sm:pt-2">
+                    <AgentOrb seed={a.seed} name={a.name} size={24} />
+                    <span className="truncate text-[13.5px] font-medium text-ink">{a.name}</span>
+                  </div>
+                  <SmsConnect
+                    orgId={p.org.id}
+                    agentId={a.id}
+                    phone={a.phone}
+                    connectionId={a.smsConnectionId}
+                    live={smsLive}
+                    className="min-w-0 flex-1"
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : withPhone.length ? (
             <ul className="space-y-2.5">
               {withPhone.map((a) => (
-                <li
-                  key={a.id}
-                  className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
-                >
+                <li key={a.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
                   <div className="flex min-w-0 items-center gap-2.5 sm:w-44">
                     <AgentOrb seed={a.seed} name={a.name} size={24} />
-                    <span className="truncate text-[13.5px] font-medium text-ink">
-                      {a.name}
-                    </span>
+                    <span className="truncate text-[13.5px] font-medium text-ink">{a.name}</span>
                   </div>
-                  <CopyField
-                    value={a.phone!}
-                    label={`Copy ${a.name}'s number`}
-                    className="flex-1 tabular"
-                  />
+                  <CopyField value={a.phone!} label={`Copy ${a.name}'s number`} className="flex-1 tabular" />
                 </li>
               ))}
             </ul>
           ) : (
             <p className="rounded-lg bg-surface-2/70 px-3.5 py-3 text-[13px] text-ink-3">
-              No numbers yet. Ask {provider} to give {first} a phone number.
+              No numbers yet. A workspace admin can give {first} a number here.
             </p>
           )}
         </Section>

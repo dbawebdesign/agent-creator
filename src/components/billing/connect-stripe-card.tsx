@@ -1,11 +1,10 @@
-import { ArrowUpRight, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { hasRole, requireOrgById } from "@/server/auth/access";
 import { getBillingStatus } from "@/server/billing/service";
-import { buttonClass } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { BillingModeBadge } from "./billing-status-badge";
-import { RefreshConnectButton } from "./billing-buttons";
+import { ConnectStripeButton, RefreshConnectButton } from "./billing-buttons";
 
 /**
  * Seller payouts: Stripe Connect status + "Connect Stripe". Server component.
@@ -16,12 +15,11 @@ export async function ConnectStripeCard({ sellerOrgId, returnPath, className }: 
   const status = await getBillingStatus(sellerOrgId);
   const s = status.seller;
   const canConnect = hasRole(access, "admin") && (!access.inherited || access.user.isPlatformAdmin);
-  const href = `/api/billing/connect?org=${encodeURIComponent(sellerOrgId)}&return=${encodeURIComponent(returnPath)}`;
   const ready = !!s?.chargesEnabled;
   const started = !!s?.connected;
   const description =
     status.mode === "disabled"
-      ? "Billing runs in test mode until Stripe is configured for this workspace. Plans and subscriptions still work; nobody is charged."
+      ? "Stripe isn't connected to Roster yet, so nobody is charged. Plans and subscriptions still work as records."
       : ready
         ? `Payments go straight to your Stripe account${s?.accountHint ? ` (${s.accountHint})` : ""}. Flat monthly rate, billed by Stripe.`
         : started
@@ -34,35 +32,29 @@ export async function ConnectStripeCard({ sellerOrgId, returnPath, className }: 
         title="Payouts"
         description={description}
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <BillingModeBadge mode={status.mode} />
             {started && status.mode !== "disabled" && hasRole(access, "admin") ? <RefreshConnectButton sellerOrgId={sellerOrgId} /> : null}
           </div>
         }
       />
-      <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line px-5 py-3.5">
-        <ul className="flex flex-wrap gap-x-5 gap-y-1.5 text-[12.5px]">
-          <Step done={started} label="Account connected" />
-          <Step done={!!s?.detailsSubmitted} label="Details submitted" />
-          <Step done={ready} label="Charges enabled" />
-          <Step done={!!s?.payoutsEnabled} label="Payouts enabled" />
-        </ul>
-        {status.mode === "disabled" ? (
-          <span className="text-[12.5px] text-ink-4">Set STRIPE_SECRET_KEY to connect</span>
-        ) : canConnect && !ready ? (
-          <a href={href} className={buttonClass("primary", "md")}>
-            {started ? "Finish Stripe setup" : "Connect Stripe"}
-            <ArrowUpRight />
-          </a>
-        ) : canConnect && ready ? (
-          <a href={href} className={buttonClass("ghost", "sm", "text-ink-3")}>
-            Update details
-            <ArrowUpRight />
-          </a>
-        ) : !ready ? (
-          <span className="text-[12.5px] text-ink-4">An admin of {status.org.name} can connect Stripe</span>
-        ) : null}
-      </div>
+      {status.mode === "disabled" ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line px-5 py-3.5">
+          <ul className="flex flex-wrap gap-x-5 gap-y-1.5 text-[12.5px]">
+            <Step done={started} label="Account connected" />
+            <Step done={!!s?.detailsSubmitted} label="Details submitted" />
+            <Step done={ready} label="Charges enabled" />
+            <Step done={!!s?.payoutsEnabled} label="Payouts enabled" />
+          </ul>
+          {canConnect ? (
+            <ConnectStripeButton sellerOrgId={sellerOrgId} returnPath={returnPath} variant={ready ? "ghost" : "primary"} size={ready ? "sm" : "md"} className={ready ? "text-ink-3" : undefined}>
+              {ready ? "Update details" : started ? "Finish Stripe setup" : "Connect Stripe"}
+            </ConnectStripeButton>
+          ) : !ready ? (
+            <span className="text-[12.5px] text-ink-4">An admin of {status.org.name} can connect Stripe</span>
+          ) : null}
+        </div>
+      )}
     </Card>
   );
 }
