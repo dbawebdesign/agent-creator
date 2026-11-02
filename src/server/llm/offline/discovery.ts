@@ -210,6 +210,7 @@ const RE_HOURS_PER = new RegExp(
 );
 const RE_HOURS_DAILY = new RegExp(String.raw`\b${RANGE}\s+(and a half\s+)?hours?(\s+and a half)?\b[^.]{0,40}?\b(?:every|each) (?:single )?(morning|day|night|evening|afternoon|weekday|${DOWS})`, "i");
 const RE_DAILY_HOURS_REV = new RegExp(String.raw`\b(?:every|each) (?:single )?(morning|day|night|evening|afternoon|${DOWS})\b[^.]{0,40}?\b${RANGE}\s+(and a half\s+)?hours?(\s+and a half)?`, "i");
+const RE_DAYS_REV = new RegExp(String.raw`\b(?:every|each) (week|month|quarter)(?:[- ]end)?\b[^.]{0,40}?\b${NUM}\s+(?:full\s+|whole\s+)?(?:work\s*)?days?\b`, "i");
 const RE_DAYS_PER = new RegExp(String.raw`\b${NUM}\s+(?:full\s+|whole\s+)?(?:work\s*)?days?\b[^.]{0,30}?\b(?:a|per|each|every)\s+(week|month|quarter)`, "i");
 /** "That's three, four hours when I do it." — a time cost with no period; the task's cadence supplies it. */
 const RE_HOURS_BARE = new RegExp(String.raw`\b(?:that'?s|it'?s|takes?|took|spend\w*|eats?|costs?|about|maybe|probably|easily|like)\s+(?:me\s+|us\s+|her\s+|him\s+)?(?:\w+\s+){0,2}?${RANGE}\s+(?:hours?|hrs?)\b(?!\s+(?:a|per|each|every|ago|later|before|after|notice|away|out)\b)`, "i");
@@ -241,6 +242,12 @@ function hoursStatement(s: string): { hours: number; kind: HoursKind } | null {
     if (new RegExp(`^(?:${DOWS})s?$`).test(unit)) return { hours: round1(n + half), kind: "dow" };
     return { hours: round1((n + half) * 5), kind: "day" };
   }
+  const dr = RE_DAYS_REV.exec(s);
+  if (dr?.[1] && dr[2]) {
+    const n = toNum(dr[2]);
+    const unit = dr[1].toLowerCase();
+    if (n != null) return { hours: round1(n * 8 * (unit === "week" ? 1 : unit === "month" ? 1 / 4.33 : 1 / 13)), kind: "days" };
+  }
   const dd = RE_DAYS_PER.exec(s);
   if (dd?.[1] && dd[2]) {
     const n = toNum(dd[1]);
@@ -260,7 +267,18 @@ export function hoursPerWeekIn(s: string): number | null {
 export function bareHoursIn(s: string): number | null {
   if (hoursStatement(s)) return null;
   const m = RE_HOURS_BARE.exec(s);
-  return m ? rangeOf(m[1], m[2]) : null;
+  if (!m) return null;
+  const n = rangeOf(m[1], m[2]);
+  if (n == null) return null;
+  // "40 hours spread across December and January" is a season's total, not a week's.
+  const rest = s.slice((m.index ?? 0) + m[0].length);
+  if (/^\s*(?:spread |in total|total|all told)?\s*(?:across|over|between|during|in)\b/i.test(rest) || /\b(?:a|per|every|each) (?:single )?year\b|\bannually\b/i.test(s)) {
+    const months = (rest.match(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/gi) ?? []).length;
+    const nm = /\b(two|three|four|six|\d+) months\b/i.exec(rest);
+    const span = months || (nm ? (toNum(nm[1]!) ?? 0) : 0);
+    return span ? round1(n / (span * 4.33)) : null;
+  }
+  return n;
 }
 
 /**
@@ -312,7 +330,7 @@ const CONCEPTS: Concept[] = [
   { action: "verify", re: /\b(insurance|eligibility|benefits?|coverage|credit|background|license|income|employment)\s+(verifications?|checks?)\b|\b()(verif(?:y|ying|ied|ications?))\b|\b()(eligibility and benefits)\b/i },
   {
     action: "chase",
-    re: /\b(unscheduled|unbooked|unsigned|outstanding|past[- ]due|overdue|missing|open)\s+(treatment(?: plans?)?|estimates?|quotes?|proposals?|receipts?|documents?|invoices?|paperwork|balances?|leads?|applications?)\b|\bfollow(?:ing|s)?[- ]?(?:ups?\s+)?(?:up\s+)?(?:on|with)\s+(?:the |our |all |those |these )?()((?!them\b|it\b|that\b)[a-z]+(?: [a-z]+)?)|\bchas(?:e|es|ing)\s+(?:clients|customers|patients|people|homeowners|tenants|owners|members)\s+(?:for|about|on)\s+()([a-z]+(?: (?:and )?(?:missing )?[a-z]+)?)|\b()((?:1099|W-?9|W-?2|COI|lien waiver)s?)\b|\b(?:the |our )?(adjusters?|carriers?|insurance compan(?:y|ies)|vendors?|subs?)\s+(chased|follow[- ]?ups?)\b|\b(?:heard back from|chas(?:e|ing)|follow(?:ing)? up with) (?:the |our )?()(adjusters?|carriers?|insurance compan(?:y|ies))\b/i,
+    re: /\b(unscheduled|unbooked|unsigned|outstanding|past[- ]due|overdue|unpaid|missing|open)\s+(treatment(?: plans?)?|estimates?|quotes?|proposals?|receipts?|documents?|invoices?|paperwork|balances?|leads?|applications?)\b|\bfollow(?:ing|s)?[- ]?(?:ups?\s+)?(?:up\s+)?(?:on|with)\s+(?:the |our |all |those |these )?()((?!them\b|it\b|that\b)[a-z]+(?: [a-z]+)?)|\bchas(?:e|es|ing)\s+(?:clients|customers|patients|people|homeowners|tenants|owners|members)\s+(?:for|about|on)\s+()([a-z]+(?: (?:and )?(?:missing )?[a-z]+)?)|\b()((?:1099|W-?9|W-?2|COI|lien waiver)s?)\b|\b(?:the |our )?(adjusters?|carriers?|insurance compan(?:y|ies)|vendors?|subs?)\s+(chased|follow[- ]?ups?)\b|\b(?:heard back from|chas(?:e|ing)|follow(?:ing)? up with) (?:the |our )?()(adjusters?|carriers?|insurance compan(?:y|ies))\b|\b()(aging (?:report|list))\b/i,
   },
   { action: "close", re: /\b(month[- ]end|year[- ]end|quarter[- ]end)\s+(close|closes|closing)\b|\b()(clos(?:e|ing) the books|close package|reconciliations?|reconcil(?:e|ing) (?:the )?(?:bank|accounts|credit cards?))\b/i },
   { action: "renewal" as Action, re: /\b(lease|policy|contract|membership|subscription|license|warranty|service agreement)\s+(renewals?)\b|\b()(renewal (?:offers?|notices?|letters?))\b/i },
@@ -321,7 +339,7 @@ const CONCEPTS: Concept[] = [
     action: "triage",
     re: /\b(maintenance|service|repair|support|warranty|work)\s+(requests?|tickets?|orders?)\b|\b()(dispatch(?:es|ing|ed)? (?:a |the )?vendors?|vendors? (?:gets? )?dispatched|(?:preferred )?vendor list|pick the vendor)\b|\b(client|customer|tenant|site)?\s?(complaints?)\b|\b()(log (?:it|them|each one)|tell the (?:crew|shift|team|site) (?:lead|supervisor)|sends? (?:me|us) ["“])/i,
   },
-  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))|\b(weekly|monthly|daily)\s+(?:text |email |status )?(updates?)\b|\b(monday|weekly|monthly|friday)\s+(?:property[- ]manager|[a-z]+-[a-z]+)\s+(reports?|updates?|summar(?:y|ies))\b|\bsend (?:each|every|all|our|the|my) (?:[a-z-]+ ){1,3}(?:a |an |the )?(?:little |short |quick |brief )?()(reports?|updates?|summar(?:y|ies)|recaps?)\b/i },
+  { action: "report", re: /\b(monthly|weekly|daily|quarterly|monday|owner|client|cash|board|investor|status|performance|sales|progress|job[- ]cost|wip|management)\s+(reports?|statements?|summar(?:y|ies)|summary letters?|updates?)\b|\b()(reports?)\b(?= (?:every|each|by the|to (?:each|every|all)))|\b(weekly|monthly|daily)\s+(?:text |email |status )?(updates?)\b|\b(monday|weekly|monthly|friday)\s+(?:property[- ]manager|[a-z]+-[a-z]+|service|client|account|cash|status|inspection)\s+(reports?|updates?|summar(?:y|ies))\b|\bsend (?:each|every|all|our|the|my) (?:[a-z-]+ ){1,3}?(?:a |an |the )?(?:little |short |quick |brief )?(cash|status|progress|performance|sales|weekly|monthly|job[- ]cost|service|inspection)?\s?(reports?|updates?|summar(?:y|ies)|recaps?)\b/i },
   {
     action: "quote",
     re: /\b(?:put(?:ting)? together|build(?:ing)?|writ(?:e|ing)|creat(?:e|ing)|do(?:ing)?|draft(?:ing)?)\s+(?:the |a |an |our |my |each |every |all the )?()(quotes?|proposals?|bids?|estimates?)\b|\b(quote|proposal|bid)\s+(requests?|building|prep|writing)\b|^()(bids?|proposals?|quotes?|estimates?)[.!]?$|\b(?:copy(?:ing)?|reus(?:e|ing)) (?:the |my |our )?(?:last|old|previous) ()(proposals?|quotes?|bids?|estimates?)\b/i,
@@ -330,7 +348,7 @@ const CONCEPTS: Concept[] = [
     action: "entry",
     re: /\b()(data entry|re-?typ(?:e|ing)|re-?key(?:ing)?|re-?enter(?:ing)?|copy(?:ing)? and past(?:e|ing)|migrat(?:e|ing|ion)|switch(?:ing)? over from|bring (?:all )?(?:of )?(?:this|the|their) data|pulling records|click(?:s|ing)? into (?:all )?(?:of )?(?:the )?(?:different )?fields|typ(?:e|es|ing) (?:the |it |them |every |each |all )?(?:[a-z]+ )?into)\b/i,
   },
-  { action: "coverage", re: /\b()(call[- ]outs?|call(?:s|ed)? (?:me )?out\b|no[- ]shows?|can'?t make (?:it|their shift|the shift)|cover (?:the |a |their |his |her )?shifts?|shift coverage|find (?:a |someone to )?(?:replacement|cover|sub(?:stitute)?))/i },
+  { action: "coverage", re: /\b()(sick calls?|call(?:s|ed)? in sick|call[- ]outs?|call(?:s|ed)? (?:me )?out\b|no[- ]shows?|can'?t make (?:it|their shift|the shift)|cover (?:the |a |their |his |her )?shifts?|shift coverage|find (?:a |someone to )?(?:replacement|cover|sub(?:stitute)?))/i },
   { action: "schedule", re: /\b()((?:build(?:ing)?|mak(?:e|ing)|do(?:ing)?|reshuffl\w*) (?:the |our |a )?(?:technician |crew |tech |staff |driver |install )?schedules?|dispatch board|dispatch(?:ing)?(?! (?:a |the )?vendors?)(?=[\s.,]))/i },
   { action: "reviews", re: /\b(google|online|yelp|five[- ]star|5[- ]star|our|more|new|bad)\s+(reviews)\b|\b()(ask(?:ing)? (?:for|people for) (?:a )?reviews?|reputation)\b/i },
   { action: "sync", re: /\b()(scrap(?:e|es|ing)(?! agent)\b|catalogs?|price lists?|product (?:data|feeds?))\b/i },
@@ -381,12 +399,26 @@ export function conceptHits(s: string): Hit[] {
 // ───────────────────────────────────────────── pain ─────────────────────────────────────────────
 
 const PAIN_WORDS =
-  /\bby hand\b|\bmanually\b|\bchas(?:e|es|ing)\b|\bcopy(?:ing)? and paste\b|\bre-?typ\w*|\bre-?key\w*|\bbehind\b|\bdrowning\b|\bworst\b|\bkills? us\b|\beats?\b|\bfalls? apart\b|\bnobody\b|\bwe miss\b|\bmiss(?:es|ed)? (?:some|it|them|one)\b|\bforget\b|\bdon'?t have the (?:hands|time|people|bandwidth)\b|\btedious\b|\bboring\b|\brepetitive\b|\bhate\b|\btakes? forever\b|\bsurprise bill\b|\bwr(?:ite|ote) off\b|\bdenied\b|\bgo(?:es)? cold\b|\bmonth to month\b|\bspends?\b|\bspending\b|\bhad to\b|\bhas to\b|\bhave to\b|\bwritten by hand\b|\bsitting (?:in|there)\b|\bslips?\b|\bfalls? through\b|\bpain\b|\bheadache\b|\bnightmare\b|\bhands down\b|\bwaiting on\b|\bwait,\b/gi;
+  /\bby hand\b|\bmanually\b|\bchas(?:e|es|ing)\b|\bcopy(?:ing)? and paste\b|\bre-?typ\w*|\bre-?key\w*|\bbehind\b|\bdrowning\b|\bworst\b|\bkills? us\b|\beats?\b|\bfalls? apart\b|\bnobody\b|\bwe miss\b|\bmiss(?:es|ed)? (?:some|it|them|one)\b|\bforget\b|\bdon'?t have the (?:hands|time|people|bandwidth)\b|\btedious\b|\bboring\b|\brepetitive\b|\bhate\b|\btakes? forever\b|\bsurprise bill\b|\bwr(?:ite|ote) off\b|\bdenied\b|\bgo(?:es)? cold\b|\bmonth to month\b|\bspends?\b|\bspending\b|\bhad to\b|\bhas to\b|\bhave to\b|\bwritten by hand\b|\bsitting (?:in|there)\b|\bsits (?:in|there)\b|\bfor (?:a|two|three) weeks?\b|\bslips?\b|\bfalls? through\b|\bpain\b|\bheadache\b|\bnightmare\b|\bhands down\b|\bwaiting on\b|\bwait,\b/gi;
 
 const ITCH_Q = /\bitch\b|pain points?|eats? (?:up )?hours|spend(?:ing)? hours|repetitive|headache|biggest (?:problem|time)|walk me through your week|what(?:'s| is) (?:the|your) (?:biggest|main)/i;
 const INTRO = /^(?:and|also|oh,? and|plus|then|the other|another|the worst|the biggest|the big one|honestly|on top of that|the main|our biggest|my biggest|the last|last thing|lastly|finally|one more)\b/i;
 
-const WANT = /\bI'?d love\b|\bwould love\b|\bthat would (?:be huge|change)\b|\bif (?:she|he|we|I) had\b|\bI want\b|\bwe want\b/i;
+/** Agency questions that ask for the one thing the owner wants first. */
+const ASK_Q =
+  /woke up tomorrow|(?:great|perfect|ideal|good) (?:monday|morning|week|day|friday) look like|wake up tomorrow|one thing (?:was|were|got|is) (?:done|handled|off your plate)|magic wand|if you could (?:only )?(?:pick|choose|have|wave|snap)|what would you (?:want|pick|choose) first|start with first|most valuable|top priority|if we (?:only )?(?:did|do|fixed|fix|took) one thing|pay for first/i;
+/** The owner stating the ask unprompted. */
+const ASK_SELF =
+  /\bwhat I (?:really |actually |honestly )?want(?:ed)? is\b|\bthe (?:one )?thing I'?d (?:pay|kill) for\b|\bif I woke up tomorrow\b|\bif I could (?:wave a magic wand|snap my fingers|have one thing)\b|\bI'?d pay (?:good money |anything |real money )?for (?:that|this|the|a|an|someone)\b|\bmy (?:number one|#1|top|biggest) (?:ask|wish|priority) (?:is|would be)\b/i;
+/** A sentence that opens a new task mid-answer ("Every Monday I'm supposed to…"). */
+const STRONG_START = /^(?:(?:and|also|plus|oh,? and)\s+)?(?:every|each|on) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|morning|night|evening|day)s?\b|\bI'?m (?:also )?supposed to\b|^(?:and )?then there'?s\b/i;
+/** Questions about where data lives: the answer lists systems, it does not continue the last pain. */
+const SYSTEMS_Q = /\bwhere(?:'s| does| do| is| are)?\b[^?]*\b(?:live|kept|stored)\b|\bwhat (?:systems?|software|tools?|apps?|programs?)\b|\bwhat do you use\b|\bwhere do you keep\b|\bwhat are you using\b/i;
+/** Hard rules: "Never…", "And never…", "Always…", "Don't ever…", "Rule one: never…". */
+export const GUARD_RE =
+  /^(?:(?:and|but|also|oh,? and|plus|so|okay|ok|please|one|two|three|first|second|third|number (?:one|two|three)|rule (?:one|two|number \w+)|the (?:big |main |hard |one )?rule is|hard rule|and (?:also|please))[,:.]?\s+)*(?:never|always|don'?t ever|do not ever|under no circumstances|make sure|no one|nobody (?:but|except)|only (?:ever )?(?:talk|speak|email|text|contact|deal))\b|\b(?:you|the agent|it|we|the assistant) (?:should|must|can) (?:never|not ever)\b|\bnot allowed to\b/i;
+
+const WANT = /\b(?:[A-Z][a-z]+|[Hh]e|[Ss]he) wants (?:a|an|the|his|her)\b|\bI'?d love\b|\bwould love\b|\bthat would (?:be huge|change)\b|\bif (?:she|he|we|I) had\b|\bI want\b|\bwe want\b/i;
 
 function painScore(s: string): number {
   const hours = hoursPerWeekIn(s);
@@ -403,16 +435,16 @@ const KNOWN_SYSTEMS = [
   "Zapier", "ServiceTitan", "Housecall Pro", "Jobber", "Applied Epic", "EZLynx", "HawkSoft", "Dentrix", "Eaglesoft", "Open Dental", "Weave",
   "Clio", "Asana", "Trello", "Notion", "Airtable", "Stripe", "Square", "SAGE", "ESP", "commonsku", "DocuSign", "Calendly", "AppFolio", "Buildium",
   "Yardi", "Rent Manager", "Xactimate", "AccuLynx", "JobNimbus", "CompanyCam", "EagleView", "Procore", "Buildertrend", "CoConstruct", "Podium",
-  "Mailchimp", "Klaviyo", "Toast", "Slack", "Teams", "Zoom",
+  "Mailchimp", "Klaviyo", "Toast", "Slack", "Teams", "Zoom", "PestPac", "FieldRoutes", "GorillaDesk", "ServiceTrade", "Swept", "Janitorial Manager",
 ];
 /** Chat/meeting apps are channels, not systems the agent works in. */
 const NOT_WORK_SYSTEMS = new Set(["Slack", "Teams", "Zoom", "Gmail", "Outlook"]);
 const CAP_STOP = new Set(
-  "I We She He They It The A An And Or But So Then Also Every Each Our My Their His Her This That These Those If When What Who How Why Anything Nothing Tenants Owners Patients Clients Customers Email Text Texts Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March April May June July August September October November December Honestly Maybe Yeah Okay Oh Last Dr Mr Mrs Ms Hi Hey HVAC PM AM".split(" "),
+  "I We She He They It The A An And Or But So Then Also Every Each Our My Their His Her This That These Those If When What Who How Why Anything Nothing Tenants Owners Patients Clients Customers Email Text Texts Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March April May June July August September October November December Honestly Maybe Yeah Okay Oh Last Dr Mr Mrs Ms Hi Hey HVAC PM AM Sheet Sheets Drive Docs Online Excel Gmail Square Portal".split(" "),
 );
 
 /** Product names that are also everyday words ("square footage", "my teams", "a toast"): named only as software. */
-const COMMON_WORD_SYSTEMS = new Set(["Square", "Toast", "Teams", "Notion", "Canopy", "Weave", "Podium", "Stripe", "Zoom", "Excel", "Slack", "Outlook", "Clio", "Trello", "Asana", "Gusto", "Dext", "Karbon", "Procore", "Calendly"]);
+const COMMON_WORD_SYSTEMS = new Set(["Square", "Toast", "Teams", "Notion", "Canopy", "Weave", "Podium", "Stripe", "Zoom", "Excel", "Slack", "Outlook", "Gusto", "Sage"]);
 const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** "we use Square", "in Square", "the Square app" — yes; "Square footage, frequency…" — no. */
@@ -422,8 +454,8 @@ function namedAsSoftware(s: string, name: string): boolean {
     const before = s.slice(Math.max(0, at - 32), at).toLowerCase();
     const after = s.slice(at + name.length, at + name.length + 28);
     if (/^\s*(?:footage|feet|foot|meters?|miles?|yards?|inch(?:es)?|deal|meal|root|dance|one|ones|off|up|away|corner|peg|knot)\b/i.test(after)) continue;
-    if (/\b(?:in|on|into|from|through|via|using|use|uses|used|with|our|my|their|the|to|switched to|moved to|run on|runs on|log into|logged into|microsoft|google)\s*$/.test(before)) return true;
-    if (/^\s*(?:app|pos|account|dashboard|software|system|terminal|reader|payments?|integration|export|reports?|data|invoices?|for)\b/i.test(after)) return true;
+    if (/\b(?:in|on|of|into|from|through|via|using|use|uses|used|with|our|my|their|the|to|switched to|moved to|run on|runs on|log into|logged into|microsoft|google)\s*$/.test(before)) return true;
+    if (/^\s*(?:app|pos|account|dashboard|software|system|terminal|reader|payments?|integration|export|reports?|data|invoices?|for|files?|spreadsheets?|sheets?|workbooks?|channel|meeting|call)\b/i.test(after)) return true;
   }
   return false;
 }
@@ -451,7 +483,7 @@ function systemsIn(s: string): string[] {
 }
 
 const ROLE_WORDS =
-  "ops lead|operations lead|crew lead|shift lead|lead cleaner|site supervisor|office manager|front desk lead|front desk|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|ops manager|controller|accountant|coordinator|project manager|production manager|estimator|admin|administrator|senior accountant|staff accountant|associate|paralegal|manager|lead|supervisor|foreman|office admin|claims coordinator|leasing agent|property manager";
+  "managing partner|managing attorney|senior partner|attorney|ops lead|operations lead|crew lead|shift lead|lead cleaner|site supervisor|office manager|front desk lead|front desk|bookkeeper|assistant|partner|business partner|wife|husband|dispatcher|operations manager|ops manager|controller|accountant|coordinator|project manager|production manager|estimator|admin|administrator|senior accountant|staff accountant|associate|paralegal|manager|lead|supervisor|foreman|office admin|claims coordinator|leasing agent|property manager";
 
 function peopleIn(sentences: string[]): Person[] {
   const out: Person[] = [];
@@ -530,7 +562,7 @@ function cadenceIn(text: string): Cadence | null {
   const d = /\bevery (sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b|\bon (mondays|tuesdays|wednesdays|thursdays|fridays)\b/.exec(t);
   if (d) return { kind: "weekly", dow: dows.indexOf((d[1] ?? d[2]!.replace(/s$/, ""))) };
   if (/\bevery week\b|\bweekly\b|\beach week\b|\bonce a week\b/.test(t)) return { kind: "weekly", dow: 1 };
-  if (/\bevery (?:morning|afternoon|day|evening|night|weekday)\b|\beach (?:morning|day)\b|\bdaily\b|\btomorrow'?s\b|\ba day\b/.test(t)) return { kind: "daily", days: /saturday|six days/.test(t) ? "1-6" : "1-5" };
+  if (/\bevery (?:morning|afternoon|day|evening|night|weekday)\b|\beach (?:morning|day)\b|\bdaily\b|\btomorrow'?s\b|\ba day\b|\bmy (?:whole |entire )?day is\b|\ball day\b/.test(t)) return { kind: "daily", days: /saturday|six days/.test(t) ? "1-6" : "1-5" };
   const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
   const months = MONTHS.map((m, i) => (new RegExp(`\\b(?:in|across|through|and) ${m}\\b|\\b${m} and\\b`).test(t) ? i + 1 : 0)).filter(Boolean);
   if (months.length) return { kind: "weekly", dow: 1, months };
@@ -557,10 +589,14 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
       lastQuestion = t.text;
       return;
     }
+    const askTurn = !!lastQuestion && ASK_Q.test(lastQuestion) && (turns[ti - 1]?.agency ?? false);
+    let pos = 0;
     for (const s of splitSentences(t.text)) {
       if (s.length < 3) continue;
-      const asked = !!lastQuestion && /would you want|waiting for you|wish|magic wand|if you could|what would (?:help|change)|ideal/i.test(lastQuestion);
-      sentences.push({ text: s, turn: ti, idx: idx++, speaker: t.speaker, afterItch: lastAgencyItch, question: lastQuestion, asked });
+      const asked = !!lastQuestion && (/would you want|waiting for you|wish|magic wand|if you could|what would (?:help|change)|ideal/i.test(lastQuestion) || ASK_Q.test(lastQuestion));
+      const ask = (askTurn && pos < 4 && !GUARD_RE.test(s) && !APPROVAL_RULE.test(s)) || (labelled && ASK_SELF.test(s));
+      sentences.push({ text: s, turn: ti, idx: idx++, speaker: t.speaker, afterItch: lastAgencyItch, question: lastQuestion, asked, ask });
+      pos++;
     }
     lastAgencyItch = false;
   });
@@ -598,6 +634,8 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     rules: [],
     leadDays: null,
   });
+  const statements = new WeakMap<Topic, Array<{ hours: number; kind: HoursKind }>>();
+  const bare = new WeakMap<Topic, number>();
   for (const s of sentences) {
     if (s.turn !== lastTurn) {
       lastTurn = s.turn;
@@ -613,15 +651,25 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     const hits = isQuestion ? [] : conceptHits(s.text);
     const pain = painScore(s.text) + (s.asked ? 3 : 0);
     const intro = INTRO.test(s.text) || /,\s*hands down\b/i.test(s.text) || s.text.split(/\s+/).length <= 5;
+    const listAt = s.text.search(/\s[—–-]\s|:\s/);
+    const strong = labelled && STRONG_START.test(s.text) && (!hits[0] || listAt < 0 || hits[0].index < listAt);
+    // A rule ("Never send a price…") or a line that only says where data lives ("Invoicing is QuickBooks Online.")
+    // never starts a task of its own.
+    const sysOnly = systemsIn(s.text).length > 0 && painScore(s.text) === 0 && !WANT.test(s.text) && !s.ask;
+    const canStart = !(labelled && GUARD_RE.test(s.text)) && !sysOnly;
+    // Answers about where data lives, hard rules or tone don't continue the last pain.
+    const inventory = !!s.question && (SYSTEMS_Q.test(s.question) || /\b(?:hard rules?|never do|always do|tone|voice|sound like)\b/i.test(s.question));
     let target: Topic | null = null;
+    let detached = false;
     if (hits.length) {
       const existing = hits.map((h) => topics.find((t) => t.action === h.action)).filter((t): t is Topic => !!t);
       if (current && hits.some((h) => h.action === current!.action)) target = current;
-      else if (existing[0] && (!conceptSeenInTurn || intro)) target = existing[0];
-      else if (!conceptSeenInTurn || intro) {
+      else if (existing[0] && (!conceptSeenInTurn || intro || strong)) target = existing[0];
+      else if (!conceptSeenInTurn || intro || strong) {
         // New tasks named in this sentence. Unlabelled monologues need real pain in the sentence itself.
-        const fresh = hits.filter((h) => !topics.some((t) => t.action === h.action));
-        if (fresh.length && (labelled ? pain > 0 || s.afterItch || intro || !conceptSeenInTurn : pain >= 1.5)) {
+        const fresh = canStart ? hits.filter((h) => !topics.some((t) => t.action === h.action)) : [];
+        if (!canStart && !existing.length) detached = true;
+        if (fresh.length && (labelled ? pain > 0 || s.afterItch || intro || strong || !conceptSeenInTurn : pain >= 1.5)) {
           for (const h of fresh) topics.push(newTopic(h, s));
           target = topics.find((t) => t.action === fresh[0]!.action) ?? null;
           // Several tasks in one breath ("scrape catalogs and create invoices"): each gets this sentence.
@@ -631,15 +679,15 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
       conceptSeenInTurn = true;
     }
     // "The other thing is X." with no known task: start a topic named from the owner's own words.
-    if (!hits.length && !isQuestion && INTRO.test(s.text) && labelled) {
+    if (!hits.length && !isQuestion && INTRO.test(s.text) && labelled && canStart) {
       const np = /^(?:and|also|oh,? and|plus|then|the other (?:big )?(?:thing|one)(?: that [a-z ]+)?(?: is)?|another (?:thing|one)(?: is)?|the last thing(?: is)?|lastly|finally)\s*,?\s+(?:it'?s\s+)?(?:the |our |my )?([a-z0-9][a-z0-9' -]{2,40}?)(?=[.,!]|$| is | are | in | every | that )/i.exec(s.text)?.[1];
       if (np && np.split(/\s+/).length <= 4 && !/^(?:it|that|this|them|those|we|i|they|you|no|nothing|everything|anything|yeah|so)\b/i.test(np)) {
-        const t = newTopic({ action: "manual", qualifier: "", object: np.toLowerCase(), phrase: np.toLowerCase(), index: 0 }, s);
+        const t = newTopic({ action: "manual", qualifier: "", object: trimPhrase(np).toLowerCase(), phrase: trimPhrase(np).toLowerCase(), index: 0 }, s);
         topics.push(t);
         target = t;
       }
     }
-    if (!target && current && (labelled ? s.turn - lastTopicTurn(current) <= 4 : s.idx - (current.sentences[current.sentences.length - 1]?.idx ?? -9) <= 1)) target = current;
+    if (!target && !detached && !(inventory && !hits.length) && !(labelled && GUARD_RE.test(s.text)) && current && (labelled ? s.turn - lastTopicTurn(current) <= 4 : s.idx - (current.sentences[current.sentences.length - 1]?.idx ?? -9) <= 1)) target = current;
     if (target) {
       attach(target, s, pain, hits.length > 1);
       current = target;
@@ -649,9 +697,9 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   // Fallback for tasks no concept covers: a pain sentence with an explicit time cost and a verb-object phrase.
   for (const s of sentences) {
     const h = hoursPerWeekIn(s.text);
-    if (!h || h < 2 || topics.some((t) => t.sentences.includes(s))) continue;
+    if (!h || h < 2 || topics.some((t) => t.sentences.includes(s)) || GUARD_RE.test(s.text)) continue;
     const m = /\b(?:spend(?:s|ing)?|takes?|lose|losing)\b.*?\b(?:on|doing)\s+((?:the\s+)?[a-z][a-z' -]{3,40}?)(?=[,.]| every| each| a week| per| for| because|$)|\b(?:chasing|building|writing|typing|copying|entering|checking|calling|sending|updating|filling out|putting together|pulling|preparing|scheduling|booking|ordering|processing|sorting)\s+([a-z][a-z' -]{3,40}?)(?=[,.]| every| each| a week| per| for| because| into| from|$)/i.exec(s.text);
-    const phrase = normalizeWhitespace((m?.[1] ?? m?.[2] ?? "").replace(/^the\s+/i, ""));
+    const phrase = trimPhrase((m?.[1] ?? m?.[2] ?? "").replace(/^the\s+/i, ""));
     if (!phrase || /^(?:it|that|this|them|those|hours?)$/i.test(phrase)) continue;
     const t = newTopic({ action: "manual", qualifier: "", object: phrase, phrase: phrase.toLowerCase(), index: 0 }, s);
     attach(t, s, painScore(s.text));
@@ -665,8 +713,16 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     if (t.sentences.includes(s)) return;
     t.sentences.push(s);
     t.score += pain + (s.afterItch ? 4 : 0);
-    const h = hoursPerWeekIn(s.text);
-    if (h && (t.hoursPerWeek == null || h > t.hoursPerWeek)) t.hoursPerWeek = h;
+    const hs = hoursStatement(s.text);
+    if (hs) {
+      const xs = statements.get(t) ?? [];
+      xs.push(hs);
+      statements.set(t, xs);
+      t.hoursPerWeek = combineHours(xs);
+    } else {
+      const b = bareHoursIn(s.text);
+      if (b) bare.set(t, Math.max(bare.get(t) ?? 0, b));
+    }
     const mo = moneyIn(s.text);
     if (mo && mo.value >= 1000 && !APPROVAL_RULE.test(s.text) && !/\b(?:over|above|more than|under) \$/i.test(s.text) && (t.money == null || mo.value > t.money)) {
       t.money = mo.value;
@@ -686,14 +742,44 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   for (const t of topics) {
     const ctx = t.sentences.map((s) => s.text).join(" ");
     t.cadence = cadenceIn(ctx.replace(RE_HOURS_PER, " ").replace(RE_HOURS_DAILY, " ").replace(RE_DAYS_PER, " ")) ?? cadenceIn(ctx);
+    // "That's three, four hours when I do it" about a Monday report: the task's cadence supplies the period.
+    const b = bare.get(t);
+    if (t.hoursPerWeek == null && b) {
+      const c = t.cadence;
+      t.hoursPerWeek = round1(c?.kind === "daily" ? b * (c.days === "1-6" ? 6 : c.days === "*" ? 7 : 5) : c?.kind === "monthly" ? b / 4.33 : b);
+    }
     t.people = peopleIn(t.sentences.map((s) => s.text)).map((p) => p.name);
     if (t.hoursPerWeek) t.score += t.hoursPerWeek * 1.5;
     if (t.money) t.score += Math.log10(t.money) * 1.5;
     if (t.first.afterItch) t.score += 6;
   }
+  // "Billing." then "chasing unpaid invoices": one job. Invoicing stays its own job only when it is about making invoices.
+  const chaseInv = topics.find((t) => t.action === "chase" && /invoice|balance|payment|receivable|aging/.test(t.phrase));
+  const inv = topics.find((t) => t.action === "invoice");
+  if (chaseInv && inv && !/\b(?:send|create|build|prep|draft|make|issue|generate)\w* (?:out )?(?:the |their |our |all the )?invoices?\b|\binvoic(?:e|ing) (?:clients|customers|for)\b/i.test(inv.sentences.map((x) => x.text).join(" "))) {
+    for (const x of inv.sentences) if (!chaseInv.sentences.includes(x)) chaseInv.sentences.push(x);
+    chaseInv.sentences.sort((a, b) => a.idx - b.idx);
+    chaseInv.first = chaseInv.sentences[0]!;
+    chaseInv.score += inv.score;
+    chaseInv.hoursPerWeek = Math.max(chaseInv.hoursPerWeek ?? 0, inv.hoursPerWeek ?? 0) || null;
+    for (const x of inv.systems) if (!chaseInv.systems.includes(x)) chaseInv.systems.push(x);
+    topics.splice(topics.indexOf(inv), 1);
+  }
+  // "What would a great Monday look like?" — the ask names the day it should be ready.
+  for (const t of topics) {
+    const a = t.sentences.find((x) => x.ask);
+    const day = a && /\b(monday|tuesday|wednesday|thursday|friday)\b/i.exec(`${a.question ?? ""} ${t.sentences.filter((x) => x.ask).map((x) => x.text).join(" ")}`)?.[1];
+    if (day && t.cadence?.kind !== "daily") t.cadence = { kind: "weekly", dow: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"].indexOf(day.toLowerCase()) };
+  }
   const ranked = topics
     .filter((t) => t.score >= 2 && (t.hoursPerWeek || t.money || t.sentences.some((s) => (s.text.match(PAIN_WORDS) ?? []).length > 0 || s.asked || WANT.test(s.text)) || t.first.afterItch))
     .sort((a, b) => b.score - a.score || a.first.idx - b.first.idx);
+  // What the owner asked for first, in the order they said it.
+  const askTopics = ranked
+    .map((t) => ({ t, at: t.sentences.find((x) => x.ask)?.idx ?? -1 }))
+    .filter((x) => x.at >= 0)
+    .sort((a, b) => a.at - b.at)
+    .map((x) => x.t);
 
   const allText = sentences.map((s) => s.text);
   const people = peopleIn(allText);
@@ -711,7 +797,7 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
   else if (owner) people.find((p) => p.name === owner)!.role ??= "owner";
   const systems0 = [...new Set(sentences.flatMap((s) => systemsIn(s.text)))];
   // "QuickBooks" said once and "QuickBooks Online" said once are one system.
-  const fuller = (x: string) => systems0.find((y) => y !== x && y.toLowerCase().startsWith(x.toLowerCase())) ?? x;
+  const fuller = (x: string) => systems0.find((y) => y.startsWith(`${x} `) || y === `${x}s`) ?? x;
   const systems = [...new Set(systems0.map(fuller))];
   for (const t of topics) t.systems = [...new Set(t.systems.map(fuller))];
   const rules = [...new Set(sentences.filter((s) => APPROVAL_RULE.test(s.text) || /\b(?:over|above|more than) \$\d[\d,]*\b[^.]*\bapprov/i.test(s.text)).map((s) => s.text))];
@@ -738,6 +824,10 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
       by: earliestMorningTime(txt) ?? askedAt,
     };
   }
+
+  // "Tone?" → "Warm but short. Property managers are busy. No fluff, bullet points are fine."
+  const toneTurn = turns.findIndex((t, i) => t.agency && /\b(?:tone|voice|how (?:should|do you want) (?:it|the assistant|the agent|they|we|messages) (?:to )?sound|how formal)\b/i.test(t.text) && !!turns[i + 1] && !turns[i + 1]!.agency);
+  const tone = toneTurn >= 0 ? truncate(sentences.filter((s) => s.turn === toneTurn + 1).map((s) => s.text).join(" "), 220) || null : null;
 
   const compliance: string[] = [];
   if (/\bhipaa\b|\bphi\b|\bpatients?\b/i.test(joined)) compliance.push("hipaa");
@@ -767,8 +857,9 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     guardrails: !labelled ? [] : [
       ...new Set(
         sentences
-          .filter((s) => /^(?:and |but |also |oh,? and )?(?:never|always|don'?t ever|do not ever|under no circumstances|make sure|no one)\b|\b(?:you|the agent|it|we) (?:should|must|can) (?:never|not ever)\b|\bnot allowed to\b/i.test(s.text) && !/\?\s*$/.test(s.text) && s.text.length < 300)
-          .map((s) => s.text),
+          .filter((s) => GUARD_RE.test(s.text) && !/\?\s*$/.test(s.text) && s.text.length < 400)
+          // "Two. Never send…": drop the count; keep the rule whole.
+          .map((s) => s.text.replace(/^(?:(?:one|two|three|first|second|third|number (?:one|two|three)|rule (?:one|two))[,:.]?\s+)/i, "")),
       ),
     ].slice(0, 8),
     channels: { sms, slack, email: true },
@@ -778,9 +869,25 @@ export function readDiscovery(raw: string, keep?: (text: string, prev: string, n
     preferences: [...new Set(preferences)].slice(0, 6),
     resale,
     vertical: null,
+    askTopics,
+    statedHours: round1(ranked.reduce((n, t) => n + (t.hoursPerWeek ?? 0), 0)),
+    tone,
   };
 }
 
 const singular = (w: string) => w.replace(/ies$/, "y").replace(/(?<!s)s$/, "");
 
-export const quoteOf = (s: string, max = 240) => truncate(normalizeWhitespace(s.replace(/^(?:so|and|but|yeah|well|okay|like|honestly|oh),?\s+/i, "")), max);
+const TAIL_STOP = /\s+(?:and|or|but|nor|so|to|for|of|with|in|on|at|from|into|by|about|the|a|an|my|our|their|your|his|her|that|which|who|when|while|because|then|is|are|was|were|be|it|this|these|those|as|than|if|forgetting|trying|like)$/i;
+/** "the last proposal and" → "the last proposal": a task name never ends on a joining word. */
+export function trimPhrase(p: string): string {
+  let x = normalizeWhitespace(p).replace(/[,;:—–-]+$/, "").trim();
+  for (let i = 0; i < 6 && TAIL_STOP.test(x); i++) x = x.replace(TAIL_STOP, "").trim();
+  return x;
+}
+
+export const quoteOf = (s: string, max = 240) => {
+  const t = normalizeWhitespace(s);
+  const cut = t.replace(/^(?:so|and|but|yeah|well|okay|like|honestly|oh),?\s+/i, "");
+  // "And never contact…" quoted as a rule reads "Never contact…".
+  return truncate(cut !== t ? cut.replace(/^[a-z]/, (c) => c.toUpperCase()) : cut, max);
+};

@@ -78,7 +78,8 @@ export function ProposalReview({
           <div className="min-w-0 flex-1">
             <p className="text-[12.5px] font-medium text-accent">Proposed for {clientName}</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-x-2">
-              <span className="relative -ml-1 inline-grid max-w-full">
+              {/* Auto-sized name field: the invisible twin sets the width; -mx-1 cancels the field's padding so the dot sits evenly. */}
+              <span className="relative -mx-1 inline-grid max-w-full">
                 <span aria-hidden className="invisible col-start-1 row-start-1 px-1 text-[26px] font-semibold tracking-[-0.025em] whitespace-pre">
                   {draft.name || "Name"}
                 </span>
@@ -184,7 +185,7 @@ export function ProposalReview({
           </section>
           <section>
             <h2 className="mb-3 flex items-center gap-2 text-[14px] font-semibold text-ink">
-              <HelpCircle className="size-4 text-ink-3" aria-hidden /> Confirm with {clientName.split(/\s+/)[0]}
+              <HelpCircle className="size-4 text-ink-3" aria-hidden /> Confirm with {clientName}
             </h2>
             {draft.openQuestions.length ? (
               <ol className="space-y-2.5">

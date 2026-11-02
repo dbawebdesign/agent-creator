@@ -4,7 +4,6 @@ import { and, eq } from "drizzle-orm";
 import { ArrowLeft } from "lucide-react";
 import { PortalMarkdown as Markdown } from "@/components/portal/markdown";
 import { AgentOrb } from "@/components/ui/agent-orb";
-import { Badge } from "@/components/ui/badge";
 import { AskComposer } from "@/components/portal/composer";
 import { ChannelIcon, KindIcon, kindLabel } from "@/components/portal/icons";
 import {
@@ -24,6 +23,8 @@ import {
 } from "@/server/queries/portal";
 import * as engine from "@/server/services/engine";
 import { testModeChannels } from "@/components/portal/test-mode";
+import { deliverableStatus } from "@/components/portal/status";
+import { StatusPill } from "@/components/portal/status-pill";
 
 export async function generateMetadata({
   params,
@@ -77,16 +78,11 @@ export default async function DeliverablePage({
 
   const tz = p.org.timezone;
   const next = p.canAct ? await nextToReview(p.org.id, d.id) : null;
-  const via = d.deliveredVia.length ? d.deliveredVia : ["portal" as const];
   const testMode = testModeChannels();
-  const status =
-    d.status === "approved"
-      ? { tone: "good" as const, label: "Approved" }
-      : d.status === "changes_requested"
-        ? { tone: "neutral" as const, label: "Changes requested" }
-        : d.needsReview
-          ? { tone: "warn" as const, label: "Needs your OK" }
-          : null;
+  // Simulated channels (no provider keys here) are never claimed as a delivery route.
+  const real = d.deliveredVia.filter((v) => !testMode.includes(v));
+  const via = real.length ? real : ["portal" as const];
+  const status = deliverableStatus(d);
 
   const meta = (
     <dl className="grid grid-cols-2 gap-x-6 gap-y-5 text-[13px] md:grid-cols-1">
@@ -109,9 +105,6 @@ export default async function DeliverablePage({
             <span key={v} className="inline-flex items-center gap-1.5">
               <ChannelIcon channel={v} className="text-ink-3" />{" "}
               {CHANNEL_LABEL[v] ?? v}
-              {testMode.includes(v) ? (
-                <span className="text-ink-3"> (test mode)</span>
-              ) : null}
             </span>
           ))}
         </dd>
@@ -162,9 +155,7 @@ export default async function DeliverablePage({
             </h1>
             {status ? (
               <div className="mt-3">
-                <Badge tone={status.tone} dot>
-                  {status.label}
-                </Badge>
+                <StatusPill status={status} />
               </div>
             ) : null}
           </header>

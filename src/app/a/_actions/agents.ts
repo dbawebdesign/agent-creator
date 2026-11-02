@@ -9,6 +9,7 @@ import { z } from "zod";
 import { agentSpec, APPROVAL_ACTIONS, channelKind, workflowSpec, type AgentSpec } from "@/server/agents/spec";
 import { isValidCron, nextRunForTrigger } from "@/server/jobs/scheduler";
 import { audit } from "@/server/security/audit";
+import { logger } from "@/server/lib/logger";
 import type { WorkflowTrigger } from "@/server/db/schema";
 import { db, schema } from "@/server/db/client";
 import {
@@ -302,6 +303,46 @@ export async function createWorkflow(slug: string, agentId: string, raw: z.input
     await audit({ orgId: ctx.agent.orgId, actorType: "user", actorId: ctx.access.user.id, action: "workflow.created", targetType: "workflow", targetId: row!.id, metadata: { agentId: ctx.agent.id, trigger: trigger.type } });
     revalidatePath(`/a/${slug}/agents/${agentId}`, "layout");
     return { ok: true, id: row!.id };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Retry a setup that stalled: re-run the computer provisioning step, then activate the agent. */
+export async function retrySetup(slug: string, agentId: string): Promise<Result> {
+  try {
+    const ctx = await studioAgent(slug, agentId, "member");
+    if (ctx.agent.status !== "provisioning") return { ok: true };
+    const { provisionAgentComputer } = await import("@/server/services/engine");
+    try {
+      await provisionAgentComputer({ orgId: ctx.agent.orgId, agentId: ctx.agent.id });
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err), agentId: ctx.agent.id }, "setup retry: computer provisioning failed");
+      return { ok: false, error: "The cloud computer still isn’t starting. Try again in a few minutes." };
+    }
+    await setAgentStatus({ orgId: ctx.agent.orgId, agentId: ctx.agent.id, status: "active", actor: ctx.actor });
+    revalidatePath(`/a/${slug}`, "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Release a held (finished-early) deliverable to the client now instead of at its scheduled time. */
+export async function releaseNow(slug: string, agentId: string, runId: string): Promise<Result> {
+  if (!uuid.safeParse(runId).success) return { ok: false, error: "Invalid run" };
+  try {
+    const ctx = await studioAgent(slug, agentId, "member");
+    const [run] = await db()
+      .select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(and(eq(schema.runs.id, runId), eq(schema.runs.agentId, ctx.agent.id), eq(schema.runs.orgId, ctx.agent.orgId)))
+      .limit(1);
+    if (!run) return { ok: false, error: "Run not found" };
+    const { releaseHeldDeliverable } = await import("@/server/services/engine");
+    await releaseHeldDeliverable({ orgId: ctx.agent.orgId, runId: run.id, actor: ctx.actor });
+    revalidatePath(`/a/${slug}`, "layout");
+    return { ok: true };
   } catch (err) {
     return fail(err);
   }

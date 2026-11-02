@@ -7,8 +7,10 @@ import {
   Bot,
   Building2,
   Check,
+  CheckCheck,
   ChevronsUpDown,
   CreditCard,
+  FileText,
   House,
   LayoutTemplate,
   LogOut,
@@ -55,6 +57,7 @@ export function StudioShell(props: ShellProps) {
       { id: "new-client", group: "Actions", label: "Add a client", href: `${base}/clients?new=1`, icon: <Building2 />, keywords: ["create", "customer"] },
       { id: "invite", group: "Actions", label: "Invite a teammate", href: `${base}/settings#team`, icon: <UserPlus /> },
       { id: "new-plan", group: "Actions", label: "Create a plan", href: `${base}/billing?new=1`, icon: <CreditCard />, keywords: ["price", "pricing"] },
+      { id: "approvals", group: "Actions", label: "Review approvals and change requests", href: `${base}#needs-attention`, icon: <CheckCheck />, keywords: ["approve", "approval", "decline", "reject", "pending", "sign off", "changes", "attention"] },
       ...NAV.map((n) => ({ id: `nav-${n.label}`, group: "Go to", label: n.label, href: `${base}${n.href}`, icon: <n.icon /> })),
       ...props.agents.map((a) => ({
         id: `agent-${a.id}`,
@@ -85,13 +88,22 @@ export function StudioShell(props: ShellProps) {
           keywords: [a.role, a.orgName],
         })),
         ...r.clients.map((c) => ({ id: `client-${c.id}`, group: "Clients", label: c.name, href: `${base}/clients/${c.slug}`, icon: <Building2 /> })),
+        ...r.deliverables.map((d) => ({
+          id: `deliverable-${d.id}`,
+          group: "Deliverables",
+          label: d.title,
+          hint: `${d.agentName} · ${d.orgName}`,
+          href: `${base}/agents/${d.agentId}?d=${d.id}`,
+          icon: <FileText />,
+          keywords: [d.agentName, d.orgName],
+        })),
       ];
     },
     [slug, base],
   );
 
   return (
-    <CommandPalette items={items} search={search} placeholder="Search agents, clients, or type a command…">
+    <CommandPalette items={items} search={search} placeholder="Search agents, clients, deliverables, or type a command…">
       <ShellFrame {...props} base={base} />
     </CommandPalette>
   );
@@ -216,14 +228,15 @@ function ShellFrame({ base, children, ...props }: ShellProps & { base: string })
                   <li key={a.id}>
                     <Link
                       href={href}
+                      title={`${a.name} · ${a.role} · ${a.orgName}`}
                       className={cn(
                         "flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors",
                         active ? "bg-surface-2 text-ink" : "text-ink-2 hover:bg-surface-2/70 hover:text-ink",
                       )}
                     >
                       <AgentOrb seed={a.seed} name={a.name} size={16} />
-                      <span className="truncate">{a.name}</span>
-                      <span className="ml-auto max-w-[45%] truncate pl-2 text-[11.5px] text-ink-3">{a.orgName}</span>
+                      <span className="max-w-[60%] shrink-0 truncate">{a.name}</span>
+                      <span className="ml-auto min-w-0 truncate pl-2 text-right text-[11.5px] text-ink-3">{a.orgName}</span>
                     </Link>
                   </li>
                 );

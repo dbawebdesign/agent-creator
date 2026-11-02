@@ -38,7 +38,7 @@ export default async function RequestsPage({
   const tz = p.org.timezone;
 
   return (
-    <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
+    <div className="mx-auto w-full max-w-[1040px] px-4 pt-8 md:px-6 md:pt-14">
       <header className="mb-6 animate-rise">
         <h1 className="text-[26px] font-semibold tracking-[-0.025em] text-ink md:text-[28px]">
           Requests

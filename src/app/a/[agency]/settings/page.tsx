@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { SectionHeading } from "@/components/studio/bits";
 import { ApiKeyCreate, InviteForm, KeyAge, ProfileForm, RevokeInviteButton, RevokeKeyButton } from "@/components/studio/settings-forms";
+import { EmailDomainForm } from "@/components/shared/email-domain-form";
+import { getEmailDomainSettings } from "@/server/channels/domains";
 
 export const metadata = { title: "Settings" };
 
@@ -23,7 +25,11 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
   const access = await requireOrg(slug, "viewer");
   const org = access.org;
   const admin = hasRole(access, "admin");
-  const [{ members, invites }, keys] = await Promise.all([getTeam(org.id), admin ? loadKeys(org.id) : Promise.resolve(null)]);
+  const [{ members, invites }, keys, emailDomain] = await Promise.all([
+    getTeam(org.id),
+    admin ? loadKeys(org.id) : Promise.resolve(null),
+    admin ? getEmailDomainSettings(org.id) : Promise.resolve(null),
+  ]);
   const b = org.branding;
 
   return (
@@ -47,6 +53,14 @@ export default async function SettingsPage({ params }: { params: Promise<{ agenc
           showPoweredBy: (b as { showPoweredBy?: unknown }).showPoweredBy === true,
         }}
       />
+
+      {emailDomain ? (
+        <section id="email" className="mt-16 scroll-mt-8">
+          <SectionHeading title="Agent email" className="[&_h2]:text-[14px]" />
+          <p className="-mt-1 mb-4 text-[13px] text-ink-3">Every agent gets its own inbox on this domain, for you and for the clients you serve.</p>
+          <EmailDomainForm orgId={org.id} {...emailDomain} />
+        </section>
+      ) : null}
 
       <section id="team" className="mt-16 scroll-mt-8">
         <SectionHeading title="Team" count={members.length} className="[&_h2]:text-[14px]" />

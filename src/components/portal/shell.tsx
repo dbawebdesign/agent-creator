@@ -258,7 +258,7 @@ export function PortalShell({
 
       <nav
         aria-label="Portal tabs"
-        className="portal-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-line bg-canvas/90 backdrop-blur-md md:hidden"
+        className="portal-tabbar fixed inset-x-0 bottom-0 z-30 border-t border-line bg-canvas/95 backdrop-blur-xl backdrop-saturate-150 md:hidden"
       >
         <ul className="mx-auto flex max-w-md items-stretch justify-around px-2">
           {tabs.map((it) => {

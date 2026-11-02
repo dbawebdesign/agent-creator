@@ -1,5 +1,6 @@
 /**
- * Email channel: each agent has its own inbox `<emailHandle>@<EMAIL_DOMAIN>`.
+ * Email channel: each agent has its own inbox `<emailHandle>@<domain>`, where domain is the nearest verified
+ * white-label domain up the org chain (see domains.ts), else env EMAIL_DOMAIN.
  * Outbound through the Resend REST API; inbound through Resend webhooks (see inbound.ts).
  *
  * Header safety: every value that reaches a header (display names, subject, Message-ID references) is
@@ -292,6 +293,13 @@ export function agentFromName(agentName: string, branding: { emailFromName?: str
   return brand ? `${headerSafe(agentName, 40)} · ${brand}` : headerSafe(agentName, 60);
 }
 
-export function agentAddress(handle: string): string {
-  return `${handle}@${env().EMAIL_DOMAIN}`;
+/** `<handle>@<domain>`; pass the org's domain from emailDomainFor(orgId) (defaults to env EMAIL_DOMAIN). */
+export function agentAddress(handle: string, domain: string = env().EMAIL_DOMAIN): string {
+  return `${handle}@${domain}`;
 }
+
+/**
+ * White-label domains: emailDomainFor(orgId) walks customer → client → agency to the nearest verified
+ * domain (else env EMAIL_DOMAIN); agentAddressFor(agent) is the agent's address on it.
+ */
+export { agentAddressFor, emailDomainFor, emailDomainsFor } from "./domains";

@@ -34,9 +34,8 @@ export default async function AgentSettingsPage({ params }: { params: Promise<{ 
         agency={slug}
         canAdmin={canAdmin}
         agent={{ id: a.id, name: a.name, role: a.role, summary: a.summary, instructions: a.instructions, status: a.status, config: { voice: a.config.voice, requireApprovalFor: a.config.requireApprovalFor } }}
-      />
-
-      <section aria-labelledby="channels-h" className="max-w-[720px]">
+      >
+      <section aria-labelledby="channels-h">
         <h2 id="channels-h" className="text-[14px] font-semibold text-ink">
           Channels
         </h2>
@@ -46,7 +45,7 @@ export default async function AgentSettingsPage({ params }: { params: Promise<{ 
             <div className="mb-3 flex items-center gap-2">
               <MessageSquare className="size-4 text-ink-3" aria-hidden />
               <span className="text-[13.5px] font-medium text-ink">Text messages</span>
-              {!overview.providers.sms ? <span className="ml-auto text-[12px] text-ink-3">Texts are simulated until Twilio is configured</span> : null}
+              {!overview.providers.sms ? <span className="ml-auto text-[12px] text-ink-3">Test mode · texts aren’t sent yet</span> : null}
             </div>
             {canAdmin ? (
               <SmsConnect orgId={a.orgId} agentId={a.id} phone={ch?.sms.phone ?? null} connectionId={ch?.sms.connectionId ?? null} live={overview.providers.sms} />
@@ -63,6 +62,7 @@ export default async function AgentSettingsPage({ params }: { params: Promise<{ 
           </div>
         </div>
       </section>
+      </AgentSettings>
     </div>
   );
 }

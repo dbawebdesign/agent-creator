@@ -6,7 +6,7 @@
  * knowledge_search → memory_recall → (memory_save) → (send_message) → create_deliverable → final summary —
  * composing its output from the task instructions and the tool results it actually received.
  */
-import { compose, emailFromInstruction, whoAmI } from "./offline/compose";
+import { answerQuestion, compose, emailFromInstruction, whoAmI } from "./offline/compose";
 import { withoutQuotedContext } from "./offline/quotes";
 import { estimateTokens, keywords, normalizeWhitespace, splitSentences, STOPWORDS, tokenize, truncate } from "./text";
 import type { LlmContent, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall } from "./types";
@@ -282,6 +282,9 @@ export const offlineProvider: LlmProvider = {
     if (deliverable) parts.push(`Done — “${deliveredTitle(deliverable) ?? brief.title}” is ready for you in the portal.`);
     if (sent) parts.push(sent.isError ? "I could not send the message." : /approval/i.test(sent.result) ? "The outgoing email is waiting for your approval." : "Message sent.");
     if (saved) parts.push(`Got it — I'll remember that ${String(saved.input.content ?? "").replace(/^I\s/, "you ")}.`);
+    // A direct question the data answers ("what was Bayside's score?") gets the answer, not a paraphrase.
+    const answers = brief.kind === "message" && !deliverable ? answerQuestion(brief.body, knowledge) : [];
+    if (answers.length) parts.push(answers.length === 1 ? `${answers[0]}.` : `From your data: ${answers.join("; ")}.`);
     if (!parts.length) {
       const top = bestMatches(sentencesOf([...memories, ...knowledge]), kws, 2);
       parts.push(

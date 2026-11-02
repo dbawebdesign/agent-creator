@@ -15,7 +15,7 @@ export type InviteEmailResult = { sent: boolean; simulated: boolean };
 export async function emailInvite(orgId: string, to: string, url: string, opts: { expiresInDays?: number } = {}): Promise<InviteEmailResult> {
   const e = env();
   if (!e.RESEND_API_KEY) return { sent: false, simulated: true };
-  const [{ orgChain }, { resolveBrand }, { formatFrom, sendEmail }] = await Promise.all([
+  const [{ orgChain }, { resolveBrand }, { emailDomainFor, formatFrom, sendEmail }] = await Promise.all([
     import("@/server/auth/access"),
     import("@/server/queries/portal"),
     import("@/server/channels/email"),
@@ -24,13 +24,15 @@ export async function emailInvite(orgId: string, to: string, url: string, opts: 
   const org = chain[0];
   if (!org) return { sent: false, simulated: false };
   const brand = resolveBrand(chain);
+  // White-label: the inviting org's nearest verified email domain, else env EMAIL_DOMAIN.
+  const domain = await emailDomainFor(org.id);
   const days = opts.expiresInDays ?? 14;
   const res = await sendEmail({
-    from: formatFrom(brand.name, `team@${e.EMAIL_DOMAIN}`),
+    from: formatFrom(brand.name, `team@${domain}`),
     to: [to],
     subject: `You're invited to ${org.name}`,
     text: `You've been invited to join ${org.name} on ${brand.name}.\n\nAccept the invitation:\n${url}\n\nThe link works once and expires in ${days} days. If you weren't expecting this, you can ignore it.`,
-    messageId: `<invite-${randomToken(12)}@${e.EMAIL_DOMAIN}>`,
+    messageId: `<invite-${randomToken(12)}@${domain}>`,
     idempotencyKey: `invite:${sha256(url)}`,
   });
   return { sent: !res.simulated, simulated: res.simulated };

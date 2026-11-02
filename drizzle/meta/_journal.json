@@ -36,6 +36,13 @@
       "when": 1793599857833,
       "tag": "0004_ops_scale",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793601753710,
+      "tag": "0005_email_domains",
+      "breakpoints": true
     }
   ]
 }

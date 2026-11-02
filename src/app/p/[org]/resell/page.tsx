@@ -7,7 +7,6 @@ import { getBillingStatus } from "@/server/billing/service";
 import { notFound } from "next/navigation";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { AgentOrb } from "@/components/ui/agent-orb";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   AddCustomerDialog,
@@ -16,6 +15,8 @@ import {
 } from "@/components/portal/resell-forms";
 import { getPortal, getResell } from "@/server/queries/portal";
 import { formatMoney } from "@/lib/utils";
+import { capitalize } from "@/components/portal/lib";
+import { StatusPill } from "@/components/portal/status-pill";
 
 export const metadata = { title: "Resell" };
 
@@ -119,32 +120,39 @@ export default async function ResellPage({
                 ? `${formatMoney(billedCents)}/mo is billed by card through Stripe${billedCents < r.monthlyCents ? `; the rest is at list price, not billed yet` : ""}.`
                 : sellerReady
                   ? `${formatMoney(yearly)} a year at your prices. Copy a checkout link below so customers pay by card.`
-                  : `${formatMoney(yearly)} a year at your prices. Billing isn’t connected yet, so collect payment the way you do today.`}
+                  : seller.mode === "disabled"
+                    ? `${formatMoney(yearly)} a year at your prices. Card payments aren’t switched on yet, so collect payment the way you do today.`
+                    : `${formatMoney(yearly)} a year at your prices. Connect Stripe below so customers pay you by card.`}
           </p>
         </div>
-        <dl className="grid grid-cols-2 gap-6 border-t border-line pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
-          <div>
-            <dt className="text-[12px] text-ink-3">
-              {billed.length ? "Paying by card" : "Subscribed customers"}
-            </dt>
-            <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">
-              {billed.length || paying}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[12px] text-ink-3">Teammates resold</dt>
-            <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">
-              {r.customers.reduce((n, c) => n + c.agents.length, 0)}
-            </dd>
-          </div>
-        </dl>
+        {/* The pair only adds anything once there are more customers than the list below shows at a glance. */}
+        {r.customers.length >= 3 ? (
+          <dl className="grid grid-cols-2 gap-6 border-t border-line pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-8">
+            <div>
+              <dt className="text-[12px] text-ink-3">
+                {billed.length ? "Paying by card" : "Subscribed customers"}
+              </dt>
+              <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">
+                {billed.length || paying}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[12px] text-ink-3">Teammates resold</dt>
+              <dd className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-ink tabular">
+                {r.customers.reduce((n, c) => n + c.agents.length, 0)}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
       </section>
 
-      {canManage ? (
+      {/* With payments off platform-wide the hero subline says so once; the card only shows when there's a step to take. */}
+      {canManage && seller.mode !== "disabled" ? (
         <ConnectStripeCard
           sellerOrgId={p.org.id}
           returnPath={`/p/${slug}/resell`}
           className="mt-4"
+          showMode={false}
         />
       ) : null}
 
@@ -209,7 +217,14 @@ export default async function ResellPage({
                     <p className="truncate text-[14.5px] font-medium text-ink">
                       {c.name}
                     </p>
-                    {c.status !== "active" ? <Badge>{c.status}</Badge> : null}
+                    {c.status !== "active" ? (
+                      <StatusPill
+                        status={{
+                          tone: "neutral",
+                          label: capitalize(c.status.replace(/_/g, " ")),
+                        }}
+                      />
+                    ) : null}
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] text-ink-3">
                     {c.agents.length ? (
@@ -319,12 +334,9 @@ export default async function ResellPage({
           {canManage ? <NewPlanDialog slug={slug} /> : null}
         </div>
         {r.plans.length ? (
-          <ul className="grid gap-3 sm:grid-cols-2">
+          <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface shadow-sm">
             {r.plans.map((plan) => (
-              <li
-                key={plan.id}
-                className="rounded-xl border border-line bg-surface p-4 shadow-sm"
-              >
+              <li key={plan.id} className="px-4 py-3.5 md:px-5">
                 <div className="flex items-baseline justify-between gap-3">
                   <p className="truncate text-[14px] font-medium text-ink">
                     {plan.name}

@@ -138,7 +138,7 @@ export function SmsConnect({
         <p className="mt-1.5 text-[12.5px] text-ink-3">
           {live
             ? `Text this number to reach ${who}.`
-            : `Texts won’t go through yet (test mode).`}
+            : `Texting isn’t switched on yet, so texts to this number won’t reach ${who}.`}
         </p>
       </div>
     );
@@ -235,10 +235,10 @@ export function SmsConnect({
       >
         {error ??
           (editing
-            ? "A number from your Twilio account. Point its incoming-message webhook at /api/webhooks/twilio."
+            ? "The phone number people text to reach this agent. It has to be a number your SMS account owns."
             : live
               ? "People can text this number to reach the agent."
-              : "Saved. Texts won't send until Twilio is set up (test mode).")}
+              : "Saved. Texts won't send until text messaging is switched on for your workspace (test mode).")}
       </p>
     </div>
   );

@@ -24,11 +24,17 @@ export async function SubscriptionCard({
   returnPath,
   className,
   title = "Plan & billing",
+  quiet = false,
 }: {
   buyerOrgId: string;
   returnPath: string;
   className?: string;
   title?: string;
+  /**
+   * Client-facing: no mode badge or Stripe wording. When billing isn't live it says so once, plainly
+   * ("Billing isn't live yet."). Default false keeps the agency view unchanged.
+   */
+  quiet?: boolean;
 }) {
   const access = await requireOrgById(buyerOrgId, "viewer");
   const status = await getBillingStatus(buyerOrgId);
@@ -66,11 +72,15 @@ export async function SubscriptionCard({
       <CardHeader
         title={title}
         description={
-          status.mode === "disabled"
-            ? "Stripe isn't connected yet, so no card is needed and nobody is charged."
-            : undefined
+          quiet
+            ? status.mode === "live"
+              ? undefined
+              : "Billing isn't live yet, so no card is needed and nobody is charged."
+            : status.mode === "disabled"
+              ? "Stripe isn't connected yet, so no card is needed and nobody is charged."
+              : undefined
         }
-        action={<BillingModeBadge mode={status.mode} />}
+        action={quiet ? undefined : <BillingModeBadge mode={status.mode} />}
       />
       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line px-5 py-4">
         <div className="min-w-0">

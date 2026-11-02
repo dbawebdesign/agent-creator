@@ -15,7 +15,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { isOfflineModel } from "@/server/env";
 import { anthropicStructured } from "@/server/llm/anthropic";
 import { OFFLINE_MODEL } from "@/server/llm/offline";
-import { conceptHits, hoursPerWeekIn, moneyIn, quoteOf, readDiscovery, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
+import { conceptHits, hoursPerWeekIn, moneyIn, quoteOf, readDiscovery, trimPhrase, type Action, type Cadence, type Discovery, type Topic } from "@/server/llm/offline/discovery";
 import { hash32, normalizeWhitespace, truncate } from "@/server/llm/text";
 import type { LlmUsage } from "@/server/llm/types";
 import { agentSpec, normalizeApprovals, type AgentSpec, type WorkflowSpec } from "./spec";
@@ -171,6 +171,7 @@ const VERTICALS: Vertical[] = [
   { id: "restaurant", label: "Restaurants & hospitality", re: /restaurants?|menus?|reservations?|catering/gi, customers: "guests" },
   { id: "marketing", label: "Marketing agency", re: /marketing agency|\bseo\b|ad campaigns?|social media management/gi, customers: "brands" },
   { id: "recruiting", label: "Recruiting & staffing", re: /recruit\w*|candidates?|staffing|job postings?/gi, customers: "hiring managers" },
+  { id: "cleaning", label: "Commercial cleaning & janitorial", re: /janitorial|commercial cleaning|cleaning (?:company|business|crews?|services?)|custodial/gi, customers: "property managers and facility managers" },
   { id: "construction", label: "Construction & contracting", re: /construction|general contractor|subcontractors?|takeoffs?/gi, customers: "project owners" },
 ];
 
@@ -238,16 +239,27 @@ function detectVerticals(text: string): Map<string, number> {
   return m;
 }
 
-/** The business type, from the client's industry field or how the owner describes the business — not incidental words. */
-function pickVertical(industry: string | null | undefined, description: string): Vertical | null {
-  for (const src of [industry ?? "", description]) {
-    if (!src.trim()) continue;
-    const hit = VERTICALS.map((v) => ({ v, n: countMatches(v.re, src) + (src.toLowerCase().includes(v.label.toLowerCase().split(/[ &(]/)[0] ?? "\u0000") ? 1 : 0) }))
-      .filter((x) => x.n > 0)
-      .sort((a, b) => b.n - a.n)[0];
-    if (hit) return hit.v;
-  }
-  return null;
+/**
+ * The business type. The Industry field the agency typed wins outright: when it is filled in, words from the call never
+ * override it (a cleaning company that cleans "two medical clinics" is not a medical practice). Without it, the
+ * client's name, then how the owner describes the business — leaving out the list of who they serve.
+ */
+function pickVertical(industry: string | null | undefined, orgName: string, description: string): Vertical | null {
+  const best = (src: string) => {
+    if (!src.trim()) return null;
+    return (
+      VERTICALS.map((v) => {
+        const head = v.label.toLowerCase().split(/[ &(]/)[0] ?? "";
+        // The label's first word counts only when it is specific ("roofing", "dental"), not "commercial" or "home".
+        return { v, n: countMatches(v.re, src) + (head && !/^(?:commercial|home|e-commerce|marketing|construction)$/.test(head) && src.toLowerCase().includes(head) ? 1 : 0) };
+      })
+        .filter((x) => x.n > 0)
+        .sort((a, b) => b.n - a.n)[0]?.v ?? null
+    );
+  };
+  if (industry?.trim()) return best(industry);
+  const own = description.replace(/\b(?:we (?:do|serve|clean|work (?:for|with)|have clients like)|clients? (?:like|include)|customers? (?:like|include)|accounts? (?:like|include))\b[^.]*/gi, " ");
+  return best(orgName) ?? best(own);
 }
 
 export function runsPerWeek(trigger: WorkflowSpec["trigger"]): number {
@@ -285,7 +297,7 @@ const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? "st" : n % 10 =
 const clock = (h: number, m: number) => `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 
 /** Systems that hold records (not the portals/carriers the agent checks against). */
-const RECORD_SYSTEMS = /^(?:Google Sheet|Dentrix|Eaglesoft|Open Dental|AppFolio|Buildium|Yardi|Rent Manager|QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|ServiceTitan|Housecall Pro|Jobber|Applied Epic|EZLynx|HawkSoft|Clio|Salesforce|HubSpot|AccuLynx|JobNimbus|Procore|Buildertrend|Karbon|TaxDome|Canopy|Shopify|Airtable|Google Sheets|Excel|commonsku|ESP|SAGE)$/;
+const RECORD_SYSTEMS = /^(?:PestPac|FieldRoutes|GorillaDesk|ServiceTrade|Swept|Janitorial Manager|Google Sheet|Dentrix|Eaglesoft|Open Dental|AppFolio|Buildium|Yardi|Rent Manager|QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|ServiceTitan|Housecall Pro|Jobber|Applied Epic|EZLynx|HawkSoft|Clio|Salesforce|HubSpot|AccuLynx|JobNimbus|Procore|Buildertrend|Karbon|TaxDome|Canopy|Shopify|Airtable|Google Sheets|Excel|commonsku|ESP|SAGE)$/;
 const MESSAGING_SYSTEMS = /^(?:Weave|Podium|Outlook|Gmail|Slack|Teams)$/;
 
 type Ctx = {
@@ -297,16 +309,25 @@ type Ctx = {
   approver: string;
 };
 
-const recordSystem = (t: Topic, ctx: Ctx) => t.systems.find((s) => RECORD_SYSTEMS.test(s)) ?? ctx.d.systems.find((s) => RECORD_SYSTEMS.test(s)) ?? null;
+const BOOKS = /^(?:QuickBooks(?: Online)?|Xero|NetSuite|Sage Intacct|FreshBooks|Clio)$/;
+const recordSystem = (t: Topic, ctx: Ctx) =>
+  t.systems.find((s) => RECORD_SYSTEMS.test(s)) ??
+  // Money owed lives in the books, not the job or inventory system.
+  ((t.action === "chase" && /invoice|balance|payment|aging/.test(`${t.phrase} ${t.sentences.map((x) => x.text).join(" ")}`)) || t.action === "invoice" ? ctx.d.systems.find((s) => BOOKS.test(s)) : undefined) ??
+  ctx.d.systems.find((s) => RECORD_SYSTEMS.test(s)) ??
+  null;
 const checkSources = (t: Topic) => t.systems.filter((s) => !RECORD_SYSTEMS.test(s) && !MESSAGING_SYSTEMS.test(s));
 const doerOf = (t: Topic, ctx: Ctx) => t.people.find((p) => p !== ctx.d.owner && !p.startsWith("Dr.")) ?? ctx.d.owner ?? "the owner";
 const messagingTool = (ctx: Ctx) => ctx.d.systems.find((s) => /^(?:Weave|Podium)$/.test(s)) ?? null;
 const audienceOf = (t: Topic, ctx: Ctx): string => {
-  const direct = /\b(?:to|for) (?:each |every |all |our |the )?(owners|clients|customers|patients|tenants|homeowners|members|buyers)\b/i.exec(t.first.text);
+  const direct = /\b(?:to|for) (?:each |every |all |our |the )?(property managers|owners|clients|customers|patients|tenants|homeowners|members|buyers)\b/i.exec(t.first.text);
   if (direct) return singular(direct[1]!.toLowerCase());
-  const txt = t.sentences.map((s) => s.text).join(" ").toLowerCase();
-  const m = /\b(?:each|every|all|our|the|those) (owner|client|customer|patient|tenant|homeowner|member|insured|buyer|adjuster)s?\b/.exec(txt) ?? /\b(owners|clients|customers|patients|tenants|homeowners|members|buyers)\b/.exec(txt);
-  return m ? singular(m[1]!) : singular(ctx.vertical?.customers.split(" ")[0] ?? "customer");
+  const txt = t.sentences.map((s) => s.text).join(" ").toLowerCase().replace(/property-manager/g, "property manager");
+  const m = /\b(?:each|every|all|our|the|those) (property manager|account|owner|client|customer|patient|tenant|homeowner|member|insured|buyer|adjuster)s?\b/.exec(txt) ?? /\b(property managers|owners|clients|customers|patients|tenants|homeowners|members|buyers)\b/.exec(txt);
+  if (m) return singular(m[1]!);
+  // Whoever owes the money on an overdue invoice is a client, whatever the business.
+  if (t.action === "chase" && /invoice|balance|payment|receivable/.test(t.phrase)) return "client";
+  return singular(ctx.vertical?.customers.split(/ and |, /)[0] ?? "customer");
 };
 /** Text channel for a topic's outreach: texts when the call says this audience prefers them. */
 const prefersText = (t: Topic, ctx: Ctx) => {
@@ -367,6 +388,8 @@ type Play = {
   overnight: (t: Topic, ctx: Ctx) => { title: string; description: string; instructions: string };
   resale: (t: Topic, ctx: Ctx) => string;
   verb: (t: Topic, ctx: Ctx) => string;
+  /** Short label when this task rides along with the owner's first ask ("last week's complaints by site"). */
+  askLabel?: (t: Topic, ctx: Ctx) => string;
 };
 
 const approvalStep = (t: Topic, ctx: Ctx, what: string) => {
@@ -377,6 +400,29 @@ const approvalStep = (t: Topic, ctx: Ctx, what: string) => {
   const rules = [...rulesFor(t, ctx)].sort((a, b) => score(b) - score(a)).filter((r) => (r.toLowerCase().match(/[a-z]{4,}/g) ?? []).some((w) => words.has(w) || words.has(w.replace(/s$/, ""))));
   return `Request approval from ${ctx.approver} before ${what}${rules[0] ? ` (on the call: “${truncate(rules[0], 150)}”)` : ""}.`;
 };
+
+const topicText = (t: Topic) => t.sentences.map((s) => s.text).join(" ");
+/** Client requests and complaints ("the trash in suite 210 wasn't emptied"), not maintenance dispatch to vendors. */
+const isComplaints = (t: Topic) => t.action === "triage" && (/complain|client request/i.test(t.phrase) || /\blog it\b|crew lead|wasn'?t emptied/i.test(topicText(t))) && !/vendor|maintenance|repair/i.test(`${t.phrase} ${t.qualifier}`);
+const requesterOf = (t: Topic) => {
+  const m = /\b((?:[a-z]+ )?managers?|clients?|customers?|tenants?|residents?|members?)\s+(?:send|email|text|call|complain)/i.exec(topicText(t));
+  return m ? singular(m[1]!.toLowerCase()) : "client";
+};
+
+const visitOf = (t: Topic) => (/walk-?through/i.test(topicText(t)) ? "walk-through" : /inspection/i.test(topicText(t)) ? "inspection" : "site visit");
+/** Chasing unpaid invoices from an aging report (30/60/90 days). */
+const isAging = (t: Topic) => t.action === "chase" && /\baging\b/i.test(`${t.phrase} ${topicText(t)}`);
+/** A report one person inside the business wants ("every Friday Mark wants a one-page cash summary") → who. */
+const internalReport = (t: Topic): string | null => {
+  const txt = topicText(t);
+  if (/\b(?:each|every|all) (?:client|customer|owner|tenant|patient|homeowner|property manager)s?\b/i.test(txt)) return null;
+  return /\b([A-Z][a-z]+) wants (?:a|an|the|his|her)\b/.exec(txt)?.[1] ?? null;
+};
+/** Replies to our reminders that land with the wrong person and wait ("it sits in his inbox for a week"). */
+const isReplyRouting = (t: Topic) => t.action === "inbox" && /\brepl(?:y|ies)\b/i.test(topicText(t)) && /\bgoes to\b|\bsits\b|\brout/i.test(topicText(t));
+
+/** Bids written after a walk-through or site visit (cleaning, contracting), not catalog quotes. */
+const isBid = (t: Topic) => t.action === "quote" && /walk-?through|site visit|inspection|walk the (?:site|building)|\bbids?\b|square f(?:ootage|eet)/i.test(topicText(t));
 
 const BASE = ["knowledge_search", "memory_recall", "memory_save", "create_deliverable"];
 const COMPUTER = ["computer_screenshot", "computer_click", "computer_type", "computer_key"];
@@ -433,11 +479,18 @@ const PLAYS: Record<Action, Play> = {
     verb: (t) => `verifies ${t.qualifier || "insurance"} before every visit`,
   },
   chase: {
-    role: (t, ctx) => (/claim/i.test(t.sentences.map((s) => s.text).join(" ")) && /adjuster|carrier/.test(t.phrase) ? "Claims Follow-up Coordinator" : `${cap(audienceOf(t, ctx))} Follow-up Coordinator`),
+    role: (t, ctx) =>
+      /claim/i.test(t.sentences.map((s) => s.text).join(" ")) && /adjuster|carrier/.test(t.phrase)
+        ? "Claims Follow-up Coordinator"
+        : isAging(t) || /invoice|balance|payment/.test(t.phrase)
+          ? "Billing Coordinator"
+          : `${cap(audienceOf(t, ctx))} Follow-up Coordinator`,
     name: (t) => {
       const txt = t.sentences.map((s) => s.text).join(" ");
       if (/1099|w-?9/i.test(t.phrase)) return "W-9 collection & 1099 prep";
       if (/adjuster|carrier|insurance compan/i.test(t.phrase)) return /claim/i.test(txt) ? "Stalled claims: adjuster follow-up" : "Adjuster follow-up";
+      if (isAging(t)) return `${t.cadence?.kind === "weekly" && t.cadence.dow === 1 ? "Monday " : ""}aging report & payment reminders`;
+      if (/^(?:overdue|past[- ]due|outstanding|unpaid) (?:invoices?|balances?)$/.test(t.phrase)) return `${cap(t.phrase.split(" ")[0]!)} invoice follow-up`;
       const obj = normalizeObject(t.phrase);
       return `${cap(obj.includes(" ") ? obj : singular(obj))} follow-up`;
     },
@@ -460,6 +513,20 @@ const PLAYS: Record<Action, Play> = {
         ];
       }
       const via = txt ? `text${messagingTool(ctx) ? ` (through ${messagingTool(ctx)})` : ""}` : "email";
+      if (isAging(t)) {
+        const all = topicText(t);
+        const buckets = /\b30, 60,? (?:and )?90\b/.test(all) ? "30, 60 and 90+ days" : "age (30, 60, 90+ days)";
+        const escalate = /\bcc the attorney\b/i.test(all) ? " The 90-day ones get a firmer note with the attorney cc'd, as today." : "";
+        const phone = /prefer a (?:phone )?call/i.test(all) ? ` Clients noted as preferring a phone call get a short call note for ${ctx.ownerFirst} instead of an email.` : "";
+        const partner = ctx.d.people.find((p) => p.role && /partner|attorney/i.test(p.role) && p.name !== ctx.d.owner)?.name;
+        return [
+          `Pull the aging report from ${rec ?? "the billing system"} and sort it by ${buckets}.`,
+          `Draft each client's reminder in the firm's voice — warm, plain, never pushy.${escalate}${phone}`,
+          partner ? `Put anything that needs ${partner} in one short list for him, so nothing waits in his inbox.` : `List anything that needs a partner's answer separately.`,
+          approvalStep(t, ctx, "any reminder goes to a client"),
+          `Deliver the aging summary (client, amount, days outstanding, reminder drafted, next step) with the drafts below it, ready when ${ctx.ownerFirst} comes in.`,
+        ];
+      }
       return [
         `Pull the list of ${/adjuster|carrier/.test(t.phrase) && /claim/i.test(t.sentences.map((s) => s.text).join(" ")) ? "stalled claims (no reply from the adjuster in 5+ days)" : normalizeObject(t.phrase)} from ${t.systems.filter((x) => RECORD_SYSTEMS.test(x)).length > 1 ? listJoin(t.systems.filter((x) => RECORD_SYSTEMS.test(x))) : rec ? `${rec}${/report/i.test(t.sentences.map((s) => s.text).join(" ")) ? " (the report the team already runs)" : ""}` : "the knowledge base and memory"}: ${aud}, what is open, value, and last contact.`,
         `Prioritize by value and age${t.money ? ` — about ${fmtMoney(t.money)} sits in this list today, so start with the largest items` : ""}; skip anyone contacted in the last 7 days.`,
@@ -470,14 +537,19 @@ const PLAYS: Record<Action, Play> = {
       ];
     },
     knowledge: (t, ctx) => [{ title: `Export of open ${normalizeObject(t.phrase)}${recordSystem(t, ctx) ? ` from ${recordSystem(t, ctx)}` : ""}`, why: "The follow-up queue is built from it." }],
-    questions: (t, ctx) => [`How many touches should ${an(audienceOf(t, ctx))} get before we stop, and from whose name and number should messages go?`],
+    questions: (t, ctx) =>
+      isAging(t)
+        ? [`Should reminders go out from ${ctx.ownerFirst}'s email or a shared billing address?`]
+        : [`How many touches should ${an(audienceOf(t, ctx))} get before we stop, and from whose name and number should messages go?`],
     overnight: (t, ctx) => ({
       title: `${PLAYS.chase.name(t, ctx).replace(/^Stalled claims: adjuster follow-up$/, "Stalled claims")} — today's queue and drafted ${prefersText(t, ctx) ? "texts" : "emails"}`,
       description: `Every open item ${ctx.org} mentioned, prioritized by value, with a message ready to approve${t.money ? ` — about ${fmtMoney(t.money)} is waiting in this list` : ""}.`,
       instructions: [
         "Using the discovery call and memory:",
         `1. Lay out the follow-up queue as a GFM table (${audienceOf(t, ctx)}, what is open, value, last contact, next step) — fill it from anything the call or knowledge base names; mark rows "example" where you have no data yet.`,
-        `2. Draft three ${prefersText(t, ctx) ? "texts" : "emails"} in ${ctx.ownerFirst}'s voice: first touch, second touch, last touch.`,
+        isAging(t)
+          ? `2. Draft the reminder for each age bucket (30, 60 and 90+ days) in the firm's voice${/\bcc the attorney\b/i.test(topicText(t)) ? "; the 90-day one firmer, with the attorney cc'd" : ""}, and the short list of anything that needs a partner.`
+          : `2. Draft three ${prefersText(t, ctx) ? "texts" : "emails"} in ${ctx.ownerFirst}'s voice: first touch, second touch, last touch.`,
         `3. Say exactly which export you need to fill the real queue next run, and what needs a decision (who approves, how many touches).`,
       ].join("\n"),
     }),
@@ -488,11 +560,13 @@ const PLAYS: Record<Action, Play> = {
     role: () => "Reporting Analyst",
     name: (t, ctx) => {
       const c = t.cadence;
-      const when = /^(?:weekly|monthly|daily)$/.test(t.qualifier) ? cap(t.qualifier) : c?.kind === "monthly" ? "Monthly" : c?.kind === "weekly" ? (c.dow === 1 ? "Monday" : "Weekly") : c?.kind === "daily" ? "Daily" : "";
+      const when = /^(?:weekly|monthly|daily)$/.test(t.qualifier) ? cap(t.qualifier) : c?.kind === "monthly" ? "Monthly" : c?.kind === "weekly" ? DOW[c.dow]!.replace(/s$/, "") : c?.kind === "daily" ? "Daily" : "";
+      if (internalReport(t)) return normalizeWhitespace(`${when} ${t.qualifier && !/^(?:monthly|weekly|daily|monday|friday)$/.test(t.qualifier) ? t.qualifier : ""} ${/update/.test(t.phrase) ? "update" : /summar/.test(t.phrase) ? "summary" : "report"}`).replace(/^./, (x) => x.toUpperCase());
       const aud = audienceOf(t, ctx);
       const q = t.qualifier && !/^(?:monthly|weekly|daily|monday)$/.test(t.qualifier) ? t.qualifier : "";
       const noun = /update/.test(t.phrase) ? "updates" : /letter/.test(t.phrase) ? "letters" : /statement/.test(t.phrase) ? "statements" : /summar/.test(t.phrase) ? "summaries" : "reports";
-      return normalizeWhitespace(`${when} ${q !== aud ? `${aud} ` : ""}${q} ${noun}`).replace(/^./, (x) => x.toUpperCase());
+      const audWord = q && aud === "account" ? "" : aud;
+      return normalizeWhitespace(`${when} ${q !== audWord ? `${audWord} ` : ""}${q} ${noun}`).replace(/^./, (x) => x.toUpperCase());
     },
     cadence: { kind: "weekly", dow: 1 },
     outputKind: (t) => (/\btext/i.test(t.sentences.map((s) => s.text).join(" ")) ? "message" : "report"),
@@ -511,6 +585,15 @@ const PLAYS: Record<Action, Play> = {
         ];
       }
       const rec = recordSystem(t, ctx);
+      if (internalReport(t)) {
+        const forWho = internalReport(t)!;
+        const its = t.items.length ? t.items : ["the key figures", "what changed", "what needs attention"];
+        return [
+          `Pull this ${t.cadence?.kind === "monthly" ? "month" : "week"}'s figures from ${rec ?? "the records in the knowledge base"} (read-only): ${listJoin(its)}.`,
+          `Write a one-page summary for ${forWho}: a two-sentence headline, a table (figure, this period, last period, change), and what needs attention.`,
+          `Deliver it to the portal and send it to ${forWho}; mark any figure you could not confirm instead of guessing.`,
+        ];
+      }
       const aud = audienceOf(t, ctx);
       const items = t.items.length ? t.items : ["the key figures", "what changed since last period", "what needs attention"];
       const c = t.cadence;
@@ -519,7 +602,7 @@ const PLAYS: Record<Action, Play> = {
         `Pull last ${c?.kind === "monthly" ? "month" : "week"}'s figures for each ${aud} from ${rec ?? "the source system"} (read-only)${/statement/i.test(t.sentences.map((s) => s.text).join(" ")) ? ", starting from the statement it already produces" : ""}.`,
         `For each ${aud}, cover: ${listJoin(items)}.`,
         `Compare with the prior ${c?.kind === "monthly" ? "month" : "week"} and flag anything unusual (a change over 15%, a late payment, an item that has been open too long).`,
-        `Write each ${aud}'s ${/letter/i.test(t.sentences.map((s) => s.text).join(" ")) ? "summary letter" : "report"} in ${ctx.ownerFirst}'s voice: a two-sentence headline, a GFM table of the figures with the change, and 1–3 things to know or decide.`,
+        `Write each ${aud}'s ${/letter/i.test(t.sentences.map((s) => s.text).join(" ")) ? "summary letter" : "report"} in ${ctx.ownerFirst}'s voice: a two-sentence headline, a table (figure, this period, last period, change), and 1–3 things to know or decide.`,
         `Deliver all drafts to the portal${deadline ? ` by the ${ordinal(Math.max(1, deadline - 3))}, so they go out before the ${ordinal(deadline)}` : ""}; ${approvalStep(t, ctx, `emailing each ${aud} their report`).replace(/^Request/, "request")}`,
       ];
     },
@@ -527,7 +610,7 @@ const PLAYS: Record<Action, Play> = {
       { title: `A recent ${t.phrase} you were happy with`, why: "Sets the format and tone to match." },
       { title: `Read access or exports from ${recordSystem(t, ctx) ?? "the system that holds the figures"}`, why: "Every figure comes from it." },
     ],
-    questions: (t, ctx) => [`Which ${audienceOf(t, ctx)}s get ${an(t.phrase.replace(/s$/, ""))}, and does anyone need a different format?`],
+    questions: (t, ctx) => (internalReport(t) ? [] : [`Which ${audienceOf(t, ctx)}s get ${an(t.phrase.replace(/s$/, ""))}, and does anyone need a different format?`]),
     overnight: (t, ctx) => ({
       title: `${PLAYS.report.name(t, ctx)}: the template and a worked example`,
       description: `${ctx.org} wakes up to the ${t.phrase} format built from the call, with a worked example — the work that takes ${t.hoursPerWeek ? `about ${fmtHours(t.hoursPerWeek)}` : "hours"} by hand today.`,
@@ -542,14 +625,26 @@ const PLAYS: Record<Action, Play> = {
     verb: (t, ctx) => `drafts the ${PLAYS.report.name(t, ctx).toLowerCase()}`,
   },
   triage: {
-    role: (t) => `${cap(t.qualifier || "Service")} Coordinator`,
-    name: (t) => `${cap(t.qualifier || "Service")} request triage & dispatch`,
+    role: (t) => (isComplaints(t) ? "Client Care Coordinator" : `${cap(t.qualifier || "Service")} Coordinator`),
+    name: (t) => (isComplaints(t) ? `${cap(requesterOf(t))} requests & complaints` : `${cap(t.qualifier || "Service")} request triage & dispatch`),
     cadence: { kind: "event", channel: "email" },
     fixed: true,
     outputKind: () => "message",
     tools: [...BASE, "send_message", "request_approval", "schedule_followup"],
     defaultHours: 5,
+    askLabel: (t) => (isComplaints(t) ? "last week's complaints by site" : `${t.qualifier || "service"} requests`),
     steps: (t, ctx) => {
+      if (isComplaints(t)) {
+        const who = requesterOf(t);
+        const lead = /\bcrew lead\b/i.test(t.sentences.map((s) => s.text).join(" ")) ? "crew lead" : "site lead";
+        return [
+          `Read each request or complaint as it arrives by email from ${plural(who)} and log it: site, what is wrong, who reported it, when.`,
+          `Draft the note to the ${lead} for that site — what to fix on the next shift — and a short reply to the ${who} saying it is handled.`,
+          `After the next shift, check it was done and draft the follow-up to the ${who}; if it was not, flag it to ${ctx.ownerFirst}.`,
+          `Every Monday, list which sites had complaints last week (site, issue, date, status, repeat?) so ${ctx.ownerFirst} can call them before they call.`,
+          approvalStep(t, ctx, `any reply goes to ${an(who)}`),
+        ];
+      }
       const txt = t.sentences.map((s) => s.text).join(" ");
       const examples = /water leak|no heat|leak|flood|no cooling|no hot water/i.exec(txt)?.[0];
       const vendorList = /preferred vendor list[^,.]*/i.exec(txt)?.[0];
@@ -565,9 +660,24 @@ const PLAYS: Record<Action, Play> = {
         `Deliver a running GFM table to ${doerOf(t, ctx)} (request, unit, urgency, vendor, approval needed?, status) and keep it current in memory.`,
       ];
     },
-    knowledge: () => [{ title: "Preferred vendor list (trade, area, rates, contact)", why: "Every dispatch picks from it." }, { title: "Owner approval thresholds per property", why: "Some owners want approval at a lower amount." }],
-    questions: (t, ctx) => [rulesFor(t, ctx).some((r) => /\$\d/.test(r)) ? "How should owner approval requests reach owners (email or text), and how long do we wait before calling?" : "Which jobs need the owner's approval before work starts, and above what amount?"],
-    overnight: (t, ctx) => ({
+    knowledge: (t) =>
+      isComplaints(t)
+        ? [{ title: `Site list with the crew lead for each site and the ${requesterOf(t)} contact`, why: "Every complaint is routed by site." }]
+        : [{ title: "Preferred vendor list (trade, area, rates, contact)", why: "Every dispatch picks from it." }, { title: "Owner approval thresholds per property", why: "Some owners want approval at a lower amount." }],
+    questions: (t, ctx) => [isComplaints(t) ? `Which inbox do ${plural(requesterOf(t))} write to, and may the agent reply to them directly once you approve?` : rulesFor(t, ctx).some((r) => /\$\d/.test(r)) ? "How should owner approval requests reach owners (email or text), and how long do we wait before calling?" : "Which jobs need the owner's approval before work starts, and above what amount?"],
+    overnight: (t, ctx) =>
+      isComplaints(t)
+        ? {
+            title: `${cap(requesterOf(t))} complaint log and reply drafts`,
+            description: `Every request and complaint from the call, logged by site, with the crew-lead note and the reply ready to approve.`,
+            instructions: [
+              "Using the discovery call and memory:",
+              "1. Set up the complaint log as a GFM table (site, issue, reported by, date, crew lead told?, fixed?, follow-up sent?). Fill it from anything in the knowledge base; mark example rows.",
+              `2. Draft the note to the crew lead and the reply to the ${requesterOf(t)} for one example from the call.`,
+              "3. List what you need to run it for real (access to the inbox the requests arrive in, the site and crew-lead list).",
+            ].join("\n"),
+          }
+        : {
       title: `${cap(t.qualifier || "Service")} triage playbook and dispatch drafts`,
       description: `The rules ${doerOf(t, ctx)} applies in her head, written down — urgency, vendor choice and approval limits — with ready-to-use dispatch and approval messages.`,
       instructions: [
@@ -577,9 +687,9 @@ const PLAYS: Record<Action, Play> = {
         "3. Draft the vendor dispatch message, the owner approval email and the requester acknowledgement.",
         "4. List what you need to go live (vendor list, owner limits, access to the request inbox).",
       ].join("\n"),
-    }),
-    resale: (_t, ctx) => `Offer the after-hours and triage desk to other operators ${ctx.org} knows as a white-labeled service.`,
-    verb: (t) => `triages every ${t.qualifier || "service"} request and drafts the dispatch`,
+          },
+    resale: (t, ctx) => (isComplaints(t) ? `Give ${ctx.org}'s ${plural(requesterOf(t))} a live request log for their sites as a premium add-on.` : `Offer the after-hours and triage desk to other operators ${ctx.org} knows as a white-labeled service.`),
+    verb: (t) => (isComplaints(t) ? `logs every ${requesterOf(t)} request and complaint and follows up` : `triages every ${t.qualifier || "service"} request and drafts the dispatch`),
   },
   urgent: {
     role: () => "After-hours Coordinator",
@@ -669,7 +779,7 @@ const PLAYS: Record<Action, Play> = {
       description: `The packet ${ctx.org} assembles by hand today, as a checklist and templates — plus a tracker for every open claim${t.money ? ` (the call mentioned ${fmtMoney(t.money)} at stake)` : ""}.`,
       instructions: [
         "Using the discovery call and memory:",
-        "1. Write the claim packet checklist as a GFM table: item, where it comes from (the systems named on the call), who provides it.",
+        "1. Write the claim packet checklist as a table (item, where it comes from, who provides it), using the systems named on the call.",
         `2. Draft the supplement request template${(() => {
           const m = t.lists.find((l) => /\bmiss|left (?:off|out)|forget/i.test(l.text))?.items;
           return m ? ` with a line for each usual miss (${listJoin(m)})` : "";
@@ -720,14 +830,34 @@ const PLAYS: Record<Action, Play> = {
     verb: () => "runs the month-end close checklist",
   },
   quote: {
-    role: () => "Quoting Specialist",
-    name: (t, ctx) => (ctx.vertical?.id === "promo" || /presentation/i.test(t.sentences.map((s) => s.text).join(" ")) ? "Quote & product presentation builder" : "Quote builder"),
+    role: (t) => (isBid(t) ? "Proposal Writer" : "Quoting Specialist"),
+    name: (t, ctx) =>
+      isBid(t)
+        ? `${/\bbids?\b/i.test(topicText(t)) ? "Bid proposal" : /estimate/i.test(topicText(t)) && !/proposal/i.test(topicText(t)) ? "Estimate" : "Proposal"} drafts`
+        : ctx.vertical?.id === "promo" || /presentation/i.test(t.sentences.map((s) => s.text).join(" "))
+          ? "Quote & product presentation builder"
+          : "Quote builder",
     cadence: { kind: "event", channel: "email" },
     fixed: true,
+    // Bids written after a walk-through run when the walk-through is done, not on every email.
+    manual: (t) => isBid(t),
     outputKind: () => "document",
     tools: [...BASE, "http_fetch", "send_message", "request_approval"],
     defaultHours: 8,
     steps: (t, ctx) => {
+      if (isBid(t)) {
+        const txt = topicText(t);
+        const items = (t.items.length ? t.items : ["square footage", "frequency", "scope", "supplies"]).filter((x) => !/price|pric|cost|rate/i.test(x)).map((x) => x.toLowerCase());
+        const priceRule = rulesFor(t, ctx).concat(ctx.d.guardrails.map((g) => quoteOf(g, 200))).find((r) => /\bprice|pricing|quote/i.test(r));
+        return [
+          `After each ${visitOf(t)}, take ${ctx.ownerFirst}'s notes and pull out: ${listJoin(items)}.`,
+          `Start every proposal from the standard template — never from the last client's proposal — and fill in this client's name, site and contact; before delivering, check that no other client's name, address or number is left anywhere${/forget\w* to change the name/i.test(txt) ? " (the call: “half the time I'm copying the last proposal and forgetting to change the name”)" : ""}.`,
+          `Write the scope as a GFM table (area, square footage, tasks, frequency) with the supplies list under it.`,
+          priceRule ? `Leave the price for ${ctx.ownerFirst} to set: “${truncate(priceRule, 150)}”` : `Price it from the rate guide in the knowledge base and show the math so ${ctx.ownerFirst} can check it.`,
+          `Deliver the draft proposal to the portal by the next morning, with anything missing from the notes listed at the top.`,
+          approvalStep(t, ctx, "the proposal goes to the client"),
+        ];
+      }
       const promo = ctx.vertical?.id === "promo";
       return [
         `Read the incoming request (email or portal) and extract: customer, contact, ${promo ? "item types, quantities, imprint/logo details, in-hands date" : "scope, quantities, deadline"}, budget.`,
@@ -739,13 +869,30 @@ const PLAYS: Record<Action, Play> = {
         `If anything is missing (quantity, date, artwork), ask the owner one specific question in the portal instead of guessing.${ctx.d.systems.length ? ` Use ${listJoin(ctx.d.systems.slice(0, 3))} where the data lives.` : ""}`,
       ];
     },
-    knowledge: (_t, ctx) => [
+    knowledge: (t, ctx) => isBid(t) ? [
+      { title: "Your best recent proposal, to become the template", why: "Every new bid starts from it, not from the last client's file." },
+      { title: "Walk-through notes for one recent bid", why: "Shows what you capture on site." },
+      { title: "Rate guide (for your review only)", why: "Lets the agent show its math; you still set every price." },
+    ] : [
       { title: ctx.vertical?.id === "promo" ? "Supplier catalogs and current price lists" : "Price list / rate card", why: "Every quote line is priced from it." },
       { title: "Two or three past quotes the owner was proud of", why: "Sets the format, tone and margin to match." },
       { title: "Standard terms, minimums and lead times", why: "Quotes must state them correctly." },
     ],
-    questions: () => ["What margin do you apply by default, and who must approve a quote before it goes out?", "Where do quote requests arrive today (a shared inbox, a web form, phone)?"],
-    overnight: (t, ctx) => ({
+    questions: (t, ctx) =>
+      isBid(t)
+        ? [`How will ${ctx.ownerFirst} hand over ${visitOf(t)} notes (photos, a voice memo, a form), and which past ${/estimate/i.test(PLAYS.quote.name(t, ctx)) ? "estimate" : "proposal"} should be the template?`]
+        : ["What margin do you apply by default, and who must approve a quote before it goes out?", "Where do quote requests arrive today (a shared inbox, a web form, phone)?"],
+    overnight: (t, ctx) => isBid(t) ? {
+      title: `${PLAYS.quote.name(t, ctx)}: template and a worked example`,
+      description: `${ctx.org} gets one clean proposal template and a worked example built from the call — the ${t.hoursPerWeek ? `~${fmtHours(t.hoursPerWeek)}` : "late nights"} of proposal writing starts shrinking on day one.`,
+      instructions: [
+        "Using the discovery call and memory:",
+        `1. Write the proposal template in markdown: intro, scope table (area, square footage, tasks, frequency), supplies, schedule, terms, and a price line left for ${ctx.ownerFirst}.`,
+        "2. Fill one worked example for a typical site from the call, with every assumed figure marked.",
+        "3. Add the pre-send checklist: client name, site, address and contact all belong to this client.",
+        "4. List what you need to draft real bids (walk-through notes format, the rate guide).",
+      ].join("\n"),
+    } : ({
       title: ctx.vertical?.id === "promo" ? "Your quote kit: template + 3 ready-to-send sample quotes" : "Your quote kit: template + 3 sample quotes",
       description: `Overnight, ${ctx.org}'s new quoting specialist turns the call into a reusable quote template and three realistic sample quotes in your format — so the ${t.hoursPerWeek ? `~${Math.round(t.hoursPerWeek)} hours a week of` : "hours spent on"} quote-building starts shrinking on day one.`,
       instructions: [
@@ -759,7 +906,7 @@ const PLAYS: Record<Action, Play> = {
       ctx.vertical?.id === "promo"
         ? `Give ${ctx.org}'s corporate buyers a self-serve "quote desk": they request branded merchandise in a white-labeled portal and get an instant, on-brand quote. Sell it as a premium tier or use it to win larger accounts.`
         : `Package the quote builder as a self-serve quote desk for ${ctx.org}'s customers (white-labeled portal), sold as a premium tier.`,
-    verb: () => "builds customer quotes and presentations",
+    verb: (t, ctx) => (isBid(t) ? `drafts ${PLAYS.quote.name(t, ctx).replace(/ drafts$/, "").toLowerCase().replace(/^(bid proposal|estimate|proposal)$/, "$1s")} after each ${visitOf(t)}` : "builds customer quotes and presentations"),
   },
   entry: {
     role: (t) => (/migrat|switch|bring/i.test(t.phrase) ? "Data Migration Specialist" : "Data Entry Specialist"),
@@ -799,7 +946,7 @@ const PLAYS: Record<Action, Play> = {
       `For each ${ctx.vertical?.id === "insurance" ? "insured and policy (named insured, policy number, carrier, effective/expiration dates, premium, coverages)" : "record"}, click into every field and capture the values.`,
       "Normalize the data to the target system's field map (dates ISO-8601, money as numbers, names split first/last).",
       "Validate: flag duplicates, missing required fields and values that do not match the field map.",
-      "Produce a GFM table of migrated records plus an exceptions table that needs a human.",
+      "Produce a table of migrated records (record, source, target, status) plus an exceptions table that needs a human.",
       approvalStep(t, ctx, "writing records into the target system; then import and spot-check 5 records against the source"),
       "Report totals (records moved, exceptions, time taken) in the morning summary.",
       ];
@@ -825,6 +972,43 @@ const PLAYS: Record<Action, Play> = {
       `Sell "migration in a night" to ${ctx.org}'s own customers: when a customer switches from a competitor, the agent moves their ${ctx.vertical?.id === "insurance" ? "policies and insureds" : "data"} overnight. Charge per migration${t.money ? ` (it replaces a manual job billed at ~${fmtMoney(t.money)})` : ""} or bundle it into onboarding.`,
     verb: () => "moves data between systems overnight",
   },
+  coverage: {
+    role: () => "Crew Scheduling Coordinator",
+    name: () => "Call-out coverage",
+    cadence: { kind: "event", channel: "sms" },
+    fixed: true,
+    outputKind: () => "message",
+    tools: [...BASE, "send_message", "request_approval"],
+    defaultHours: 3,
+    steps: (t, ctx) => {
+      const txt = topicText(t);
+      const rec = recordSystem(t, ctx) ?? ctx.d.systems.find((x) => RECORD_SYSTEMS.test(x)) ?? null;
+      const cap40 = /\b(forty|40) hours\b/i.exec(txt) ? "under 40 hours this week" : "not over their hours this week";
+      const via = /\btext/i.test(txt) ? "text" : "message";
+      return [
+        `When someone ${via === "text" ? "texts" : "writes"} that they can't make a shift, find the site, shift time and crew in ${rec ?? "the crew schedule"}.`,
+        `Rank who can cover: not already scheduled then, closest to the site, and ${cap40}${/\bcrew sheet\b/i.test(txt) ? " (the same checks done today by scrolling the crew sheet)" : ""}.`,
+        `Draft the ${via} asking the top pick to cover, with a backup, and a heads-up to the crew lead.`,
+        approvalStep(t, ctx, `any ${via} goes to a cleaner or crew lead`),
+        `Send ${ctx.ownerFirst} one short summary: who called out, who is covering, and the hours it adds.`,
+      ];
+    },
+    knowledge: (t, ctx) => [{ title: `Crew roster with home areas and this week's hours${recordSystem(t, ctx) ? ` (${recordSystem(t, ctx)} export)` : ""}`, why: "Picks who is close and under their hours." }],
+    questions: (_t, ctx) => [`May the agent text a replacement directly once ${ctx.ownerFirst} approves, and who is the backup decision-maker at night?`],
+    overnight: (_t, ctx) => ({
+      title: "Call-out playbook and coverage texts",
+      description: `The rules ${ctx.ownerFirst} uses to find cover, written down, with the texts ready to approve the next time someone calls out.`,
+      instructions: [
+        "Using the discovery call and memory:",
+        "1. Write the coverage rules: who can cover (distance, hours this week, already scheduled), in order.",
+        "2. Draft the coverage request text, the backup text and the crew-lead heads-up.",
+        "3. List what you need to run it for real (crew roster with areas, this week's hours).",
+      ].join("\n"),
+    }),
+    resale: (_t, ctx) => `Offer the call-out desk to other service companies ${ctx.org} knows — every night-shift business has the same 7 PM scramble.`,
+    verb: () => "finds cover when someone calls out",
+    askLabel: () => "call-out coverage",
+  },
   schedule: {
     role: () => "Dispatch Coordinator",
     name: () => "Morning dispatch board",
@@ -848,7 +1032,7 @@ const PLAYS: Record<Action, Play> = {
     overnight: (_t, ctx) => ({
       title: "Tomorrow's dispatch board, pre-built",
       description: `${ctx.org} wakes up to tomorrow's jobs already sorted by urgency and assigned.`,
-      instructions: "Build tomorrow's dispatch board as a GFM table from the requests in the knowledge base and memory; write the urgency rules you used; flag anything you could not assign.",
+      instructions: "Build tomorrow's dispatch board as a table (time, customer, area, job, assigned to, notes) from the requests on file; write the urgency rules you used; flag anything you could not assign.",
     }),
     resale: (_t, ctx) => `Package the dispatcher for other contractors ${ctx.org} partners with.`,
     verb: () => "builds the daily dispatch board",
@@ -895,7 +1079,7 @@ const PLAYS: Record<Action, Play> = {
     ],
     knowledge: () => [{ title: "List of supplier catalog URLs / feeds", why: "The nightly sync reads them." }],
     questions: () => ["Which suppliers matter most, and do any require a login to see pricing?"],
-    overnight: (_t, ctx) => ({ title: "Catalog snapshot by category", description: `A categorized snapshot of ${ctx.org}'s key supplier catalogs.`, instructions: "Fetch the supplier catalogs in the knowledge base and produce a GFM table per category with price breaks and minimums. Note gaps." }),
+    overnight: (_t, ctx) => ({ title: "Catalog snapshot by category", description: `A categorized snapshot of ${ctx.org}'s key supplier catalogs.`, instructions: "Fetch the supplier catalogs in the knowledge base and produce a table per category (item, price breaks, minimums). Note gaps." }),
     resale: (_t, ctx) => `Offer ${ctx.org}'s customers a live, branded product catalog with current pricing as a portal add-on.`,
     verb: () => "keeps the catalog and pricing current overnight",
   },
@@ -916,28 +1100,46 @@ const PLAYS: Record<Action, Play> = {
     ],
     knowledge: () => [{ title: "Invoice template and payment terms", why: "Invoices must match your format and terms." }],
     questions: (t, ctx) => [`May the agent create draft invoices in ${recordSystem(t, ctx) ?? "your billing system"}?`],
-    overnight: (_t, ctx) => ({ title: "Receivables snapshot", description: `What ${ctx.org} is owed and the reminders to send, ready for approval.`, instructions: "Build a GFM table of open and past-due invoices you can find in the knowledge base, with drafted reminders and the total outstanding." }),
+    overnight: (_t, ctx) => ({
+      title: "Receivables snapshot",
+      description: `What ${ctx.org} is owed and the reminders to send, ready for approval.`,
+      instructions: [
+        "Using the discovery call, the knowledge base and memory:",
+        "1. Build the receivables snapshot as a table (client, invoice, amount, days outstanding, next step), with the total outstanding.",
+        "2. Draft a reminder for each past-due invoice in the owner's voice.",
+        "3. List what you need to fill every row from real data next run.",
+      ].join("\n"),
+    }),
     resale: (_t, ctx) => `Offer ${ctx.org}'s customers automated statements and payment reminders under their brand.`,
     verb: () => "preps invoices and chases payments",
   },
   inbox: {
     role: () => "Executive Assistant",
-    name: () => "Inbox triage & reply drafts",
+    name: (t) => (isReplyRouting(t) ? "Client reply routing" : "Inbox triage & reply drafts"),
     cadence: { kind: "event", channel: "email" },
     outputKind: () => "email_draft",
     tools: [...BASE, "send_message", "request_approval"],
     defaultHours: 3,
-    steps: (t, ctx) => [
+    steps: (t, ctx) => isReplyRouting(t) ? (() => {
+      const partner = ctx.d.people.find((p) => p.role && /partner|attorney|manager/i.test(p.role) && p.name !== ctx.d.owner)?.name;
+      return [
+        "Read each client reply as it arrives and sort it: paid or promised a date, a question, a dispute, or nothing to do.",
+        `Note payments and promised dates against the open balance so the next reminder is right.`,
+        `Route questions to the right person${partner ? `: anything for ${partner} goes on one short list for him, instead of sitting in his inbox for a week` : ""}; draft the answer when the records have it.`,
+        approvalStep(t, ctx, "any reply goes to a client"),
+        `Deliver a short digest each morning: who replied, what they said, who it went to, and what is still waiting.`,
+      ];
+    })() : [
       "Read each new email and classify it: needs owner, can be answered from knowledge, FYI, spam.",
       "Draft replies for anything answerable from the knowledge base and memory, in the owner's voice.",
       "Deliver a morning digest: a GFM table (from, subject, category, suggested action) plus the drafts.",
       approvalStep(t, ctx, "any reply goes out"),
     ],
     knowledge: () => [{ title: "FAQ / canned answers you send often", why: "Lets the agent draft accurate replies." }],
-    questions: () => ["Which inbox should the agent watch, and which senders always go straight to you?"],
+    questions: (t) => [isReplyRouting(t) ? "Which inbox do client replies land in, so the agent can read them as they arrive?" : "Which inbox should the agent watch, and which senders always go straight to you?"],
     overnight: (_t, ctx) => ({ title: "Inbox playbook + top reply templates", description: `${ctx.org}'s most common emails, each with a reply template.`, instructions: "Write the inbox playbook: categories, routing rules and 5 reply templates based on the call." }),
     resale: (_t, ctx) => `Offer ${ctx.org}'s customers an AI front desk that answers routine email under their brand.`,
-    verb: () => "triages the inbox and drafts replies",
+    verb: (t) => (isReplyRouting(t) ? "routes client replies to the right person" : "triages the inbox and drafts replies"),
   },
   manual: {
     role: () => "Operations Assistant",
@@ -949,7 +1151,7 @@ const PLAYS: Record<Action, Play> = {
     steps: (t, ctx) => [
       `Collect what is needed for ${t.phrase} from ${listJoin(t.systems.slice(0, 3)) || "the knowledge base and memory"}.`,
       `Do the ${t.phrase} work the way ${doerOf(t, ctx)} does it today (see the call notes in the knowledge base), and mark any assumption clearly.`,
-      `Deliver the result as one document with a GFM table of what was done and what needs ${ctx.ownerFirst}.`,
+      `Deliver the result as one document with a table (item, what was done, what needs ${ctx.ownerFirst}) at the top.`,
       approvalStep(t, ctx, "anything leaves the business"),
     ],
     knowledge: (t) => [{ title: `How ${t.phrase} is done today (a checklist or an example)`, why: "The agent follows the same steps." }],
@@ -979,7 +1181,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     .filter((s) => /\b(?:we|i)\b.*\b(?:are|run|own|manage|do|see|have|serve|operate|install|handle)\b/i.test(s.text))
     .map((s) => s.text)
     .join(" ");
-  const vertical = pickVertical(input.industry, `${orgName} ${description}`);
+  const vertical = pickVertical(input.industry, orgName, description);
   // A monologue (podcast, unlabelled notes) mixes several businesses: keep sentences about this one.
   const labelled = raw.sentences.some((s) => s.speaker);
   const d =
@@ -1016,11 +1218,15 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     const rev = /\b(?:my|our) (?:partner|office manager|manager),? ([A-Z][a-z]+),? reviews/.exec(r)?.[1];
     return rev ?? firstName(d.owner);
   })();
+  // Asked what a great morning looks like, the owner said what they'd come in to: the output goes to them.
+  if (!d.recipient.name && d.askTopics.length && d.owner) d.recipient = { ...d.recipient, name: d.owner };
   const ctx: Ctx = { org: orgName, d, vertical, ownerFirst: firstName(d.owner), approver: approverNames };
 
   // Distinct actions only, best first; 2–5 workflows.
+  // What the owner asked for first ("if you woke up tomorrow…") leads; then every other distinct pain, best first.
   const seen = new Set<Action>();
-  const topics = d.topics.filter((t) => (seen.has(t.action) ? false : (seen.add(t.action), true))).slice(0, 5);
+  const ordered = [...d.askTopics.slice(0, 1), ...d.topics.filter((t) => t !== d.askTopics[0])];
+  const topics = ordered.filter((t) => (seen.has(t.action) ? false : (seen.add(t.action), true))).slice(0, 5);
   const fallbackTopic: Topic | null = topics.length
     ? null
     : {
@@ -1048,9 +1254,12 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     const p = PLAYS[t.action];
     const trigger = cronFor(t, ctx, p);
     const stated = t.hoursPerWeek;
-    // The agent drafts; a person still reviews — count ~80% of the stated time as saved.
-    const weekly = stated ? stated * 0.8 : p.defaultHours;
-    const perRun = Math.min(200, Math.max(0.25, Math.round((weekly / runsPerWeek(trigger)) * 4) / 4));
+    // The agent drafts; a person still reviews — count ~80% of the stated time as saved. A pain the owner put no
+    // number on, in a call where they did give numbers, gets a modest figure rather than a template default.
+    const weekly = stated ? stated * 0.8 : d.statedHours > 0 ? Math.min(p.defaultHours, 1) : p.defaultHours;
+    const raw = weekly / runsPerWeek(trigger);
+    // Small per-run figures (an email-triggered task) keep their size instead of rounding up to a quarter hour.
+    const perRun = Math.min(200, raw >= 1 ? Math.round(raw * 4) / 4 : Math.max(0.05, Math.round(raw * 20) / 20));
     const long = (x: { text: string }) => x.text.split(/\s+/).length > 6 && !d.rules.includes(x.text);
     const named = t.sentences.filter((s) => long(s) && conceptHits(s.text).some((h) => h.action === t.action));
     const costly = t.sentences.filter((s) => long(s) && (hoursPerWeekIn(s.text) || moneyIn(s.text)));
@@ -1071,7 +1280,7 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     const outbound = p.tools.includes("send_message");
     if (outbound && d.guardrails.length) steps.push(`Hard rules from the call, in every draft: ${d.guardrails.map((g) => `“${quoteOf(g, 160)}”`).join(" ")}`);
     return {
-      name: truncate(titleOf(p.name(t, ctx)), 80),
+      name: workflowName(p.name(t, ctx)),
       problem,
       instructions: truncate(steps.map((s, i) => `${i + 1}. ${s}`).join("\n"), 6000),
       trigger,
@@ -1086,7 +1295,8 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   // Never a name another agent in the agency already has, nor the name of someone at the business or on the call.
   const name = pickAgentName(`${orgName}:${primary.action}`, [...(input.avoidNames ?? []), ...d.people.map((p) => p.name), ...(d.owner ? [d.owner] : [])]);
   const role = truncate(PLAYS[primary.action].role(primary, ctx), 80);
-  const verticalLabel = vertical?.label ?? (input.industry ? truncate(input.industry, 80) : "");
+  // The agency's own Industry wording, when given; otherwise the matched business type.
+  const verticalLabel = input.industry?.trim() ? truncate(normalizeWhitespace(input.industry), 80) : (vertical?.label ?? "");
 
   const channels: AgentSpec["channels"] = ["portal", "email"];
   if (d.channels.slack) channels.push("slack");
@@ -1094,7 +1304,11 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
 
   const verbs = topics.map((t) => PLAYS[t.action].verb(t, ctx));
   const verbList = verbs.length > 1 ? `${verbs.slice(0, -1).join(", ")} and ${verbs[verbs.length - 1]}` : (verbs[0] ?? "handles recurring work");
-  const summary = truncate(`${name} ${verbList} for ${orgName} — about ${Math.round(weeklyHoursSaved)} hours a week back.`, 280);
+  const described = Math.round(d.statedHours);
+  const hoursLine = `about ${Math.round(weeklyHoursSaved)}${described > Math.round(weeklyHoursSaved) ? ` of the ~${described}` : ""} hours a week ${described > Math.round(weeklyHoursSaved) ? "described on the call" : "back"}`;
+  const longForm = `${name} ${verbList} for ${orgName} — ${hoursLine}.`;
+  // Many jobs: lead with the time back so it survives the length limit.
+  const summary = truncate(longForm.length <= 280 ? longForm : `${name} takes ${topics.length} jobs off ${orgName}'s plate — ${hoursLine}: ${verbList}.`, 280);
 
   // Seed memories: concrete facts from the call, in the owner's words where possible.
   const seedMemories: string[] = [];
@@ -1142,7 +1356,24 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
   const requireApprovalFor = normalizeApprovals(usesComputer ? ["write_client_system"] : []).actions;
   const specTools = [...new Set(["knowledge_search", "memory_recall", "memory_save", "create_deliverable", "send_message", "request_approval", "schedule_followup", ...workflows.flatMap((w) => w.tools)])];
 
-  const first = PLAYS[primary.action].overnight(primary, ctx);
+  const first = { ...PLAYS[primary.action].overnight(primary, ctx) };
+  // The owner's explicit ask is the first deliverable, in their words — including a second thing asked in the same breath.
+  const asked = d.askTopics[0] === primary ? primary.sentences.filter((x) => x.ask) : [];
+  if (asked.length) {
+    const also = d.askTopics.find((t) => t !== primary && topics.includes(t));
+    const alsoLine = also?.sentences.find((x) => x.ask);
+    const alsoLabel = also ? (PLAYS[also.action].askLabel?.(also, ctx) ?? workflowName(PLAYS[also.action].name(also, ctx)).toLowerCase()) : null;
+    const lead = workflows[0]!.name;
+    first.title = also && alsoLabel ? `${lead}, with ${alsoLabel}` : `${lead}: ready to send`;
+    first.description = `What ${ctx.ownerFirst} asked for first, ready on day one: “${quoteOf(asked.map((x) => x.text).join(" "), 220)}”${alsoLine && !asked.includes(alsoLine) ? ` — plus “${quoteOf(alsoLine.text, 140)}”` : ""}`;
+    first.instructions = [
+      first.instructions,
+      `${(first.instructions.match(/^\d+\./gm) ?? []).length + 1}. This is what ${ctx.ownerFirst} asked for first (“${quoteOf(asked[0]!.text, 160)}”): make it ready to send, not a plan.`,
+      also && alsoLabel ? `${(first.instructions.match(/^\d+\./gm) ?? []).length + 2}. Add ${alsoLabel} as a GFM table (from “${quoteOf(alsoLine?.text ?? also.first.text, 160)}”), filled from the knowledge base; mark example rows.` : null,
+    ]
+      .filter((x): x is string => !!x)
+      .join("\n");
+  }
   const resaleIdea = truncate(`${PLAYS[primary.action].resale(primary, ctx)}${d.resale ? ` (The call points this way: “${quoteOf(d.resale)}”)` : ""}`, 600);
 
   const instructions = [
@@ -1173,7 +1404,9 @@ export function heuristicSpec(input: ArchitectInput): AgentSpec {
     summary,
     vertical: verticalLabel,
     instructions: truncate(instructions, 12000),
-    voice: `Warm, concise and specific, like a sharp ${role.toLowerCase()} who knows ${verticalLabel ? verticalLabel.toLowerCase() : "the business"}. Leads with the result; plain words, no jargon.`,
+    voice: d.tone
+      ? `As ${ctx.ownerFirst} put it: “${quoteOf(d.tone, 200)}” Leads with the result; plain words, no jargon.`
+      : `Warm, concise and specific, like a sharp ${role.toLowerCase()} who knows ${verticalLabel ? verticalLabel.toLowerCase() : "the business"}. Leads with the result; plain words, no jargon.`,
     workflows,
     knowledgeNeeds,
     seedMemories: dedupeBy(seedMemories, (s) => s).map((s) => truncate(s, 500)).slice(0, 40),
@@ -1210,6 +1443,11 @@ function tidySpec(spec: AgentSpec): AgentSpec {
   };
 }
 
+/** A workflow name is a complete noun phrase: never ends on "and", "of", "the"… ("Last proposal and" → "Last proposal"). */
+function workflowName(s: string): string {
+  return truncate(titleOf(trimPhrase(titleOf(s))), 80);
+}
+
 /** "the weekly operations summary" → "Weekly operations summary". */
 function titleOf(s: string): string {
   return cap(tidyText(normalizeWhitespace(s)).replace(/^(?:the|a|an)\s+(?=\S)/i, ""));
@@ -1233,7 +1471,8 @@ export function tidyText(s: string): string {
 }
 
 function tidyPart(input: string): string {
-  let t = input;
+  // Client-facing words, never markup jargon: the agent knows tables render; the client never reads "GFM".
+  let t = input.replace(/\bGFM (tables?)\b/g, "$1").replace(/\s+(?:in|as) markdown\b/gi, "").replace(/\bmarkdown\b/gi, "");
   for (let i = 0; i < 3; i++) {
     const before = t;
     // The second word must be lowercase, so labels survive ("the A team", "Plan A").

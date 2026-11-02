@@ -2,6 +2,8 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, Clock, FileText, Hourglass, MessageSquareWarning, Plus, ShieldCheck, Sparkles } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
 import { getHome } from "@/server/queries/studio";
+import { cn } from "@/lib/utils";
+import { billingMode } from "@/server/billing/stripe";
 import { AgentOrb } from "@/components/ui/agent-orb";
 import { buttonClass } from "@/components/ui/button";
 import { RelativeTime } from "@/components/shared/relative-time";
@@ -18,7 +20,7 @@ function greeting(tz: string) {
 export default async function StudioHome({ params, searchParams }: { params: Promise<{ agency: string }>; searchParams: Promise<{ welcome?: string }> }) {
   const [{ agency: slug }, sp] = await Promise.all([params, searchParams]);
   const { org, user } = await requireOrg(slug, "viewer");
-  const home = await getHome(org.id);
+  const home = await getHome(org.id, { live: billingMode() === "live" });
   const base = `/a/${slug}`;
   const first = (user.name ?? "").split(/\s+/)[0];
   const today = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: org.timezone }).format(new Date());
@@ -70,7 +72,12 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
       </header>
 
       <section aria-label="Key numbers" className="mt-8 grid grid-cols-2 gap-y-6 rounded-xl border border-line bg-surface px-5 py-5 shadow-xs sm:grid-cols-4 sm:divide-x sm:divide-line sm:px-0">
-        <Stat className="sm:px-6" label="Monthly recurring" value={money(home.numbers.mrrCents)} sub={`${home.counts.clients} client${home.counts.clients === 1 ? "" : "s"}`} />
+        <Stat
+          className="sm:px-6"
+          label="Monthly recurring"
+          value={money(home.numbers.mrrCents)}
+          sub={home.numbers.unbilledCents ? `${money(home.numbers.unbilledCents)} not billed` : `${home.counts.clients} client${home.counts.clients === 1 ? "" : "s"}`}
+        />
         <Stat className="sm:px-6" label="Active agents" value={home.numbers.activeAgents} sub={home.provisioning.length ? `${home.provisioning.length} provisioning` : "on the roster"} />
         <Stat className="sm:px-6" label="Hours saved" value={hours(home.numbers.hoursWeek)} sub="last 7 days" />
         <Stat className="sm:px-6" label="Delivered" value={home.numbers.deliveredWeek} sub="last 7 days" />
@@ -117,7 +124,7 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
           )}
         </section>
 
-        <section aria-labelledby="attention-h" className={attention ? "max-lg:order-first" : undefined}>
+        <section id="needs-attention" aria-labelledby="attention-h" className={cn("scroll-mt-16", attention && "max-lg:order-first")}>
           <SectionHeading title="Needs attention" count={attention || undefined} className="[&_h2]:text-[14px]" />
           {attention === 0 ? (
             <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-4 text-[13.5px] text-ink-2 shadow-xs">
@@ -165,7 +172,14 @@ export default async function StudioHome({ params, searchParams }: { params: Pro
                 <AttentionRow key={r.id} href={`${base}/agents/${r.agentId}/activity`} icon={<AlertTriangle className="size-4 text-bad" />} title={`${r.workflowName ?? "A run"} failed`} meta={`${r.agentName} · ${r.orgName}`} date={r.createdAt} />
               ))}
               {home.provisioning.map((a) => (
-                <AttentionRow key={a.id} href={`${base}/agents/${a.id}`} icon={<Hourglass className="size-4 text-accent" />} title={`${a.name} is provisioning`} meta={`${a.role} · ${a.orgName}`} date={a.createdAt} />
+                <AttentionRow
+                  key={a.id}
+                  href={`${base}/agents/${a.id}`}
+                  icon={Date.now() - a.createdAt.getTime() > 3 * 60_000 ? <AlertTriangle className="size-4 text-warn" /> : <Hourglass className="size-4 text-accent" />}
+                  title={Date.now() - a.createdAt.getTime() > 3 * 60_000 ? `${a.name}’s setup stalled — retry` : `${a.name} is provisioning`}
+                  meta={`${a.role} · ${a.orgName}`}
+                  date={a.createdAt}
+                />
               ))}
               {home.waiting.map((a) => (
                 <AttentionRow key={a.id} href={`${base}/agents/${a.id}`} icon={<Clock className="size-4 text-warn" />} title={`${a.name} hasn’t delivered yet`} meta={`First deliverable pending · ${a.orgName}`} date={a.createdAt} />

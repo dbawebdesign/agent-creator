@@ -160,7 +160,7 @@ function NewWorkflowForm({ agency, agentId, defaultDelivery, onDone }: { agency:
           required
         />
       </label>
-      <div className="flex flex-wrap items-end gap-6">
+      <div className="flex flex-wrap items-start gap-6">
         <label>
           <span className="mb-1.5 block text-[12.5px] font-medium text-ink-3">Produces</span>
           <Select value={outputKind} onChange={(e) => setOutputKind(e.target.value as (typeof OUTPUT_KINDS)[number])} className="w-40" aria-label="Output">
@@ -232,13 +232,14 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
 
   return (
     <article className={cn("rounded-xl border border-line bg-surface shadow-xs transition-opacity", !enabled && !editing && "opacity-60")}>
-      <div className="flex items-center gap-4 px-4 py-4 sm:px-5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-3">
+      {/* Mobile: controls drop to their own row under the title so the name and schedule aren't truncated. */}
+      <div className="flex items-center gap-x-4 gap-y-3 px-4 py-4 max-sm:flex-wrap sm:px-5">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-3 max-sm:self-start">
           <Icon className="size-4" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-medium text-ink">{w.name}</p>
-          <p className="mt-0.5 truncate text-[12.5px] text-ink-3">
+          <p className="text-[14px] font-medium text-ink sm:truncate">{w.name}</p>
+          <p className="mt-0.5 text-[12.5px] text-ink-3 sm:truncate">
             {describeTrigger(w.trigger)} · {OUTPUT_LABEL[w.outputKind] ?? w.outputKind} → {w.deliverTo.map((c) => CHANNEL_LABEL[c] ?? c).join(", ")}
             {enabled && w.nextRunAt ? (
               <>
@@ -248,7 +249,7 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
             ) : null}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5 max-sm:w-full max-sm:pl-12">
           {canEdit ? (
             <>
               <Button
@@ -264,10 +265,10 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
                 }
                 aria-label={`Run ${w.name} now`}
               >
-                <Play className="!size-3.5" /> <span className="max-sm:hidden">{running ? "Starting…" : "Run now"}</span>
+                <Play className="!size-3.5" /> {running ? "Starting…" : "Run now"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setEditing((e) => !e)} aria-expanded={editing}>
-                <span className="max-sm:hidden">Edit</span>
+                Edit
                 <ChevronDown className={cn("!size-3.5 transition-transform", editing && "rotate-180")} />
               </Button>
               <Switch
@@ -284,7 +285,7 @@ function WorkflowRow({ agency, agentId, w, canEdit }: { agency: string; agentId:
                     } else toast.success(v ? `${w.name} is on` : `${w.name} is off`);
                   });
                 }}
-                className="ml-1.5"
+                className="ml-1.5 max-sm:ml-auto"
               />
             </>
           ) : null}

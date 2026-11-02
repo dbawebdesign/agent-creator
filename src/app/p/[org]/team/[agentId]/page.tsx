@@ -1,8 +1,8 @@
 import Link from "next/link";
+import { StatusPill } from "@/components/portal/status-pill";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Mail, Phone } from "lucide-react";
 import { AgentOrb } from "@/components/ui/agent-orb";
-import { Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/portal/copy";
 import {
   DeliverableCardView,
@@ -17,7 +17,7 @@ import {
   humanizeTrigger,
   shortHours,
 } from "@/components/portal/lib";
-import { agentStatus } from "@/components/portal/status";
+import { agentStatus, PAUSED } from "@/components/portal/status";
 import { Thread } from "@/components/portal/thread";
 import { getAgentPage, getPortal } from "@/server/queries/portal";
 import { WorkflowSwitch } from "@/components/portal/workflow-switch";
@@ -75,7 +75,7 @@ export default async function AgentPage({
               <h1 className="text-[26px] leading-tight font-semibold tracking-[-0.025em] text-ink md:text-[28px]">
                 {agent.name}
               </h1>
-              {st ? <Badge tone={st.tone}>{st.label}</Badge> : null}
+              <StatusPill status={st} />
             </div>
             <p className="text-[14px] text-ink-3">{agent.role}</p>
           </div>
@@ -196,7 +196,7 @@ export default async function AgentPage({
                           enabled={w.enabled}
                         />
                       ) : !w.enabled ? (
-                        <Badge>Paused</Badge>
+                        <StatusPill status={PAUSED} />
                       ) : null}
                     </div>
                     <p className="mt-0.5 text-[13px] text-ink-3">

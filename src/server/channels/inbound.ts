@@ -16,6 +16,7 @@ import { fetchReceivedEmail, htmlToText, MAX_TEXT, normalizeSubject, parseAddres
 import { E164_RE, START_WORDS, STOP_WORDS } from "./sms";
 import { stripMention } from "./slack";
 import { attachmentList, attachmentNote, emailSenderTrustedForFiles, processEmailAttachments } from "./attachments";
+import { isOwnEmailDomain, orgIsInChain, resolveInboundDomain } from "./domains";
 
 type Agent = typeof schema.agents.$inferSelect;
 
@@ -329,26 +330,39 @@ function headerRaw(headers: unknown, name: string): string | null {
   return null;
 }
 
-async function agentForRecipients(database: DB, recipients: string[]): Promise<Agent | null> {
-  const domain = env().EMAIL_DOMAIN.toLowerCase();
-  const handles: string[] = [];
-  for (const r of recipients) {
+/**
+ * Route by recipient. The domain must be ours: env EMAIL_DOMAIN (any agent, by its globally unique handle) or
+ * a verified white-label domain — then the agent must belong to the domain's org or an org below it, so
+ * maya@agents.other-agency.com can't reach Northbeam's Maya.
+ */
+export async function agentForRecipients(database: DB, recipients: string[]): Promise<Agent | null> {
+  const wanted: { handle: string; domain: string }[] = [];
+  for (const r of recipients.slice(0, 50)) {
     const a = parseAddress(r);
     if (!a) continue;
     const [local, dom] = a.email.split("@");
-    if (!local || dom !== domain) continue;
-    handles.push(local.split("+")[0]!);
+    if (!local || !dom) continue;
+    wanted.push({ handle: local.split("+")[0]!, domain: dom });
   }
-  if (!handles.length) return null;
+  if (!wanted.length) return null;
+  const domainCache = new Map<string, Awaited<ReturnType<typeof resolveInboundDomain>>>();
+  const accepted: { handle: string; route: NonNullable<Awaited<ReturnType<typeof resolveInboundDomain>>> }[] = [];
+  for (const w of wanted.slice(0, 10)) {
+    if (!domainCache.has(w.domain)) domainCache.set(w.domain, await resolveInboundDomain(w.domain, database));
+    const route = domainCache.get(w.domain);
+    if (route) accepted.push({ handle: w.handle, route });
+  }
+  if (!accepted.length) return null;
   const rows = await database
     .select()
     .from(schema.agents)
-    .where(and(inArray(sql`lower(${schema.agents.emailHandle})`, handles), ne(schema.agents.status, "archived")))
-    .limit(5);
-  // Prefer the first addressed handle.
-  for (const h of handles) {
-    const hit = rows.find((r) => r.emailHandle?.toLowerCase() === h);
-    if (hit) return hit;
+    .where(and(inArray(sql`lower(${schema.agents.emailHandle})`, [...new Set(accepted.map((a) => a.handle))]), ne(schema.agents.status, "archived")))
+    .limit(10);
+  // Prefer the first addressed handle that's valid on its domain.
+  for (const { handle, route } of accepted) {
+    const hit = rows.find((r) => r.emailHandle?.toLowerCase() === handle);
+    if (!hit) continue;
+    if (route.platform || (await orgIsInChain(hit.orgId, route.orgId, database))) return hit;
   }
   return null;
 }
@@ -461,7 +475,7 @@ export async function processResendEvent(database: DB, event: ResendEvent): Prom
   }
   const from = parseAddress(str(full.from) ?? "");
   if (!from) return "ignored:bad-from";
-  if (from.email.endsWith(`@${env().EMAIL_DOMAIN.toLowerCase()}`)) return "ignored:loop"; // agent ↔ agent mail loops
+  if (await isOwnEmailDomain(from.email.split("@")[1] ?? "", database)) return "ignored:loop"; // agent ↔ agent mail loops (platform + white-label domains)
 
   const headers = full.headers;
   const messageIdHeader = parseMessageIds(str(full.message_id) ?? header(headers, "message-id"))[0] ?? null;

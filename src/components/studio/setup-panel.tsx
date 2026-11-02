@@ -3,8 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, Clock, Copy, FileUp, MessageCircleQuestion, TriangleAlert } from "lucide-react";
+import { useTransition } from "react";
+import { toast } from "sonner";
+import { Check, Clock, Copy, FileUp, MessageCircleQuestion, RotateCw, TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { retrySetup } from "@/app/a/_actions/agents";
 
 /** The first overnight deliverable, shown as a pending row until it lands. */
 export function FirstDeliverableRow({
@@ -62,6 +66,7 @@ export function BeforeTonight({
   needs,
   questions,
   haveTitles,
+  firstDone = false,
 }: {
   knowledgeHref: string;
   agentName: string;
@@ -69,6 +74,8 @@ export function BeforeTonight({
   needs: { title: string; why: string }[];
   questions: string[];
   haveTitles: string[];
+  /** The first deliverable already ran: don't promise uploads will change it. */
+  firstDone?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const have = haveTitles.map((t) => t.toLowerCase());
@@ -79,9 +86,11 @@ export function BeforeTonight({
       <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3.5">
         <div className="min-w-0 flex-1">
           <h2 id="before-tonight" className="text-[14px] font-semibold text-ink">
-            Before tonight
+            {firstDone ? "Still to collect" : "Before tonight"}
           </h2>
-          <p className="text-[12.5px] text-ink-3">What the proposal asked for. Each one makes the first deliverable sharper.</p>
+          <p className="text-[12.5px] text-ink-3">
+            {firstDone ? `What the proposal asked for. Each one sharpens what ${agentName} delivers next.` : "What the proposal asked for. Each one makes the first deliverable sharper."}
+          </p>
         </div>
         <button
           type="button"
@@ -150,4 +159,27 @@ export function AutoRefresh({ every = 2500 }: { every?: number }) {
     return () => clearInterval(t);
   }, [router, every]);
   return null;
+}
+
+/** Retry a stalled setup (re-runs provisioning, then activates). */
+export function RetrySetupButton({ agency, agentId, agentName }: { agency: string; agentId: string; agentName: string }) {
+  const [pending, start] = useTransition();
+  const router = useRouter();
+  return (
+    <Button
+      size="sm"
+      variant="primary"
+      disabled={pending}
+      onClick={() =>
+        start(async () => {
+          const r = await retrySetup(agency, agentId);
+          if (!r.ok) return void toast.error(r.error);
+          toast.success(`${agentName} is set up`);
+          router.refresh();
+        })
+      }
+    >
+      <RotateCw className={cn("!size-3.5", pending && "animate-spin")} /> {pending ? "Retrying…" : "Retry setup"}
+    </Button>
+  );
 }

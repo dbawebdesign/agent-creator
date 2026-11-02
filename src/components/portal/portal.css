@@ -87,11 +87,12 @@
 :root:has(.portal-root) :focus-visible {
   outline-color: color-mix(in oklab, var(--ink) 55%, transparent);
 }
+/*
+ * Switches: on = the highest-contrast fill in both themes. Ink track + canvas thumb (near-black + white in light,
+ * near-white + near-black in dark), so "on" never reads as disabled next to the grey "off" track.
+ */
 .portal-root [role="switch"][data-state="checked"] { background: var(--ink); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .portal-root [role="switch"][data-state="checked"] { background: var(--ink-3); }
-}
-:root[data-theme="dark"] .portal-root [role="switch"][data-state="checked"] { background: var(--ink-3); }
+.portal-root [role="switch"][data-state="checked"] > span { background: var(--canvas); }
 
 /* Reading view: a document that opens with a heading starts flush with the card. */
 .portal-reading.prose-roster > :first-child { margin-top: 0; }
@@ -110,3 +111,6 @@
   border-color: var(--ink-3);
   --tw-ring-color: color-mix(in oklab, var(--ink) 12%, transparent);
 }
+
+/* Plain text links inside portal widgets (e.g. "choose files") are ink, like prose links; the brand is for identity. */
+.portal-root .text-accent.underline-offset-2 { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }

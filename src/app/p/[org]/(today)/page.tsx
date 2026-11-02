@@ -68,137 +68,169 @@ export default async function TodayPage({
     : null;
 
   return (
-    <div className="mx-auto w-full max-w-[1040px] *:max-w-[720px] px-4 pt-8 md:px-6 md:pt-14">
-      <header className="animate-rise">
-        <div className="flex items-center gap-2.5">
-          {t.agents.length ? (
-            <span
-              className="flex -space-x-1.5"
-              aria-label={`Your team: ${t.agents.map((a) => a.name).join(", ")}`}
-            >
-              {t.agents.slice(0, 5).map((a) => (
-                <AgentOrb
-                  key={a.id}
-                  seed={a.seed}
-                  name={a.name}
-                  size={20}
-                  className="ring-2 ring-canvas"
-                />
-              ))}
-            </span>
-          ) : null}
-          <p className="text-[13px] font-medium text-ink-3">{longDate(tz)}</p>
-        </div>
-        <h1 className="mt-1.5 text-[28px] font-semibold tracking-[-0.025em] text-ink md:text-[32px]">
-          {greeting(tz)}, {p.user.firstName}
-        </h1>
-        <p className="mt-2 max-w-[56ch] text-[15px] leading-relaxed text-ink-3 text-pretty">
-          {n > 0 ? (
-            <>
-              While you were away, your team finished{" "}
-              <span className="font-medium text-ink">
-                {numberWord(n)} {n === 1 ? "thing" : "things"}
+    <div className="mx-auto w-full max-w-[1040px] px-4 pt-8 md:px-6 md:pt-14 lg:grid lg:grid-cols-[minmax(0,1fr)_17rem] lg:items-start lg:gap-x-12">
+      <div className="min-w-0">
+        <header className="animate-rise">
+          <div className="flex items-center gap-2.5">
+            {t.agents.length ? (
+              <span
+                className="flex -space-x-1.5"
+                aria-label={`Your team: ${t.agents.map((a) => a.name).join(", ")}`}
+              >
+                {t.agents.slice(0, 5).map((a) => (
+                  <AgentOrb
+                    key={a.id}
+                    seed={a.seed}
+                    name={a.name}
+                    size={20}
+                    className="ring-2 ring-canvas"
+                  />
+                ))}
               </span>
-              {hours ? (
-                <>
-                  {" "}
-                  and saved you{" "}
-                  <span className="font-medium text-ink">{hours}</span>
-                </>
-              ) : null}
-              .
-            </>
-          ) : t.feed.length || needs.length ? (
-            <>
-              Quiet night. Your team is caught up
-              {nextRun ? <> — next delivery {nextRun}.</> : "."}
-            </>
-          ) : nextRun ? (
-            <>Your team is all set up and starts working soon.</>
-          ) : (
-            <>
-              Your team is getting set up. Their first work will show up here.
-            </>
-          )}
-        </p>
-      </header>
-
-      {p.canAct && t.agents.length ? (
-        <AskComposer
-          slug={slug}
-          agents={t.agents.filter((a) => a.status !== "paused")}
-          className="mt-6 animate-rise [animation-delay:60ms]"
-          placeholder="Ask your team for anything…"
-        />
-      ) : null}
-
-      {needs.length ? (
-        <NeedsYou slug={slug} items={needs} canAct={p.canAct} />
-      ) : null}
-
-      {t.feed.length ? (
-        [...groups.entries()].map(([label, items]) => (
-          <section key={label} aria-label={label} className="mt-10">
-            <h2 className="mb-3 text-[13px] font-semibold text-ink">{label}</h2>
-            <ul className="grid gap-3">
-              {items.map((d) => (
-                <li key={d.id}>
-                  <DeliverableCardView d={d} slug={slug} tz={tz} />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
-      ) : !needs.length ? (
-        <div className="mt-10 rounded-xl border border-dashed border-line-strong px-6 py-12 text-center">
-          <span className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-surface-2 text-ink-2">
-            <CalendarClock className="size-5" aria-hidden />
-          </span>
-          <p className="text-[14.5px] font-medium text-ink">
-            {nextRun
-              ? `Your first delivery arrives ${nextRun}`
-              : "Nothing delivered yet"}
+            ) : null}
+            <p className="text-[13px] font-medium text-ink-3">{longDate(tz)}</p>
+          </div>
+          <h1 className="mt-1.5 text-[28px] font-semibold tracking-[-0.025em] text-ink md:text-[32px]">
+            {greeting(tz)}, {p.user.firstName}
+          </h1>
+          <p className="mt-2 max-w-[56ch] text-[15px] leading-relaxed text-ink-3 text-pretty">
+            {n > 0 ? (
+              <>
+                While you were away, your team finished{" "}
+                <span className="font-medium text-ink">
+                  {numberWord(n)} {n === 1 ? "thing" : "things"}
+                </span>
+                {hours ? (
+                  <>
+                    {" "}
+                    and saved you{" "}
+                    <span className="font-medium text-ink">{hours}</span>
+                  </>
+                ) : null}
+                .
+              </>
+            ) : t.feed.length || needs.length ? (
+              <>
+                Quiet night. Your team is caught up
+                {nextRun ? <> — next delivery {nextRun}.</> : "."}
+              </>
+            ) : nextRun ? (
+              <>Your team is all set up and starts working soon.</>
+            ) : (
+              <>
+                Your team is getting set up. Their first work will show up here.
+              </>
+            )}
           </p>
-          <p className="mx-auto mt-1 max-w-sm text-[13.5px] text-ink-3">
-            {t.nextRun
-              ? `${t.nextRun.agentName} is scheduled to start on “${t.nextRun.name}”. You’ll find the finished work right here.`
-              : "Finished reports, documents and drafts from your team land here — no need to ask."}
-          </p>
-          <Link
-            href={`/p/${slug}/team`}
-            className="mt-5 inline-block text-[13px] font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
-          >
-            Meet your team
-          </Link>
-        </div>
-      ) : null}
+        </header>
 
-      {t.upcoming.length && (t.feed.length || needs.length) ? (
-        <section aria-labelledby="upcoming" className="mt-12">
+        {p.canAct && t.agents.length ? (
+          <AskComposer
+            slug={slug}
+            agents={t.agents.filter((a) => a.status !== "paused")}
+            className="mt-6 animate-rise [animation-delay:60ms]"
+            placeholder="Ask your team for anything…"
+          />
+        ) : null}
+
+        {needs.length ? (
+          <NeedsYou slug={slug} items={needs} canAct={p.canAct} />
+        ) : null}
+
+        {t.feed.length ? (
+          [...groups.entries()].map(([label, items]) => (
+            <section key={label} aria-label={label} className="mt-10">
+              <h2 className="mb-3 text-[13px] font-semibold text-ink">
+                {label}
+              </h2>
+              <ul className="grid gap-3">
+                {items.map((d) => (
+                  <li key={d.id}>
+                    <DeliverableCardView d={d} slug={slug} tz={tz} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        ) : !needs.length ? (
+          <div className="mt-10 rounded-xl border border-dashed border-line-strong px-6 py-12 text-center">
+            <span className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-surface-2 text-ink-2">
+              <CalendarClock className="size-5" aria-hidden />
+            </span>
+            <p className="text-[14.5px] font-medium text-ink">
+              {nextRun
+                ? `Your first delivery arrives ${nextRun}`
+                : "Nothing delivered yet"}
+            </p>
+            <p className="mx-auto mt-1 max-w-sm text-[13.5px] text-ink-3">
+              {t.nextRun
+                ? `${t.nextRun.agentName} is scheduled to start on “${t.nextRun.name}”. You’ll find the finished work right here.`
+                : "Finished reports, documents and drafts from your team land here — no need to ask."}
+            </p>
+            <Link
+              href={`/p/${slug}/team`}
+              className="mt-5 inline-block text-[13px] font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
+            >
+              Meet your team
+            </Link>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Desktop: a right rail with what's next. Mobile: the same list after the feed. */}
+      {t.agents.length &&
+      (t.upcoming.length || t.feed.length || needs.length) ? (
+        <aside
+          aria-labelledby="upcoming"
+          className="mt-12 animate-rise [animation-delay:90ms] lg:sticky lg:top-24 lg:mt-1"
+        >
           <h2 id="upcoming" className="mb-3 text-[13px] font-semibold text-ink">
             Coming up
           </h2>
-          <ul className="space-y-2.5">
-            {t.upcoming.map((w) => (
-              <li key={w.id} className="flex items-center gap-3 text-[13.5px]">
-                <AgentOrb seed={w.agentSeed} name={w.agentName} size={18} />
-                <span className="min-w-0 flex-1 truncate text-ink-2">
-                  {w.name}
-                  <span className="text-ink-3"> · {w.agentName}</span>
-                </span>
-                {w.nextRunAt ? (
-                  <time
-                    dateTime={w.nextRunAt.toISOString()}
-                    className="shrink-0 text-[12.5px] text-ink-3 tabular"
-                  >
-                    {capitalize(dayWord(w.nextRunAt, tz))},{" "}
-                    {clockTime(w.nextRunAt, tz)}
-                  </time>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </section>
+          {t.upcoming.length ? (
+            <ul className="space-y-3.5 lg:rounded-xl lg:border lg:border-line lg:bg-surface lg:p-4 lg:shadow-sm">
+              {t.upcoming.map((w) => (
+                <li key={w.id} className="flex gap-3 text-[13.5px]">
+                  <AgentOrb
+                    seed={w.agentSeed}
+                    name={w.agentName}
+                    size={18}
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-ink-2 text-pretty">{w.name}</p>
+                    <p className="mt-0.5 text-[12.5px] text-ink-3">
+                      {w.agentName}
+                      {w.nextRunAt ? (
+                        <>
+                          {" · "}
+                          <time
+                            dateTime={w.nextRunAt.toISOString()}
+                            className="whitespace-nowrap tabular"
+                          >
+                            {capitalize(dayWord(w.nextRunAt, tz))},{" "}
+                            {clockTime(w.nextRunAt, tz)}
+                          </time>
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[13px] text-ink-3 text-pretty lg:rounded-xl lg:border lg:border-dashed lg:border-line-strong lg:p-4">
+              Nothing scheduled. Ask your team for something, or{" "}
+              <Link
+                href={`/p/${slug}/team`}
+                className="font-medium text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink"
+              >
+                see what they do
+              </Link>
+              .
+            </p>
+          )}
+        </aside>
       ) : null}
     </div>
   );

@@ -14,10 +14,13 @@ export async function ConnectStripeCard({
   sellerOrgId,
   returnPath,
   className,
+  showMode = true,
 }: {
   sellerOrgId: string;
   returnPath: string;
   className?: string;
+  /** Show the "Test mode" badge. The Portal passes false: clients don't see engineering state. */
+  showMode?: boolean;
 }) {
   const access = await requireOrgById(sellerOrgId, "viewer");
   const status = await getBillingStatus(sellerOrgId);
@@ -43,7 +46,7 @@ export async function ConnectStripeCard({
         description={description}
         action={
           <div className="flex shrink-0 items-center gap-2">
-            <BillingModeBadge mode={status.mode} />
+            {showMode ? <BillingModeBadge mode={status.mode} /> : null}
             {started &&
             status.mode !== "disabled" &&
             hasRole(access, "admin") ? (

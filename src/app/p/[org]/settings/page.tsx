@@ -154,12 +154,13 @@ export default async function SettingsPage({
         <Section
           id="billing"
           title="Plan & billing"
-          body={`Your plan with ${p.org.kind === "customer" ? p.brand.name : "your agency"}. Pay by card and download invoices here.`}
+          body={`Your plan with ${p.org.kind === "customer" ? p.brand.name : "your agency"}.`}
         >
           <SubscriptionCard
             buyerOrgId={p.org.id}
             returnPath={`/p/${slug}/settings`}
             title="Your plan"
+            quiet
           />
         </Section>
       ) : null}

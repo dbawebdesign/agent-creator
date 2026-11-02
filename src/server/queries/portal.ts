@@ -27,6 +27,8 @@ import {
 import { db, schema } from "@/server/db/client";
 import type { ChannelKind, WorkflowTrigger } from "@/server/db/schema";
 import { env } from "@/server/env";
+import { agentEmail as apiAgentEmail } from "@/server/api/v1";
+import { emailDomainFor } from "@/server/channels/domains";
 
 export type PortalBrand = {
   /** Name shown in the header: the provider brand (client branding for customers). */
@@ -66,7 +68,8 @@ function firstOf<T>(
  * Agency-only drafting notes (the Architect's offline notice lives in spec.draftNote and must stay in Studio).
  * Defence in depth: if one ever lands in client-visible text, drop that sentence.
  */
-const AGENCY_ONLY_NOTE = /[^.!?\n]*(no AI model was used|offline extractor|drafted (?:by the )?offline|review every workflow)[^.!?\n]*[.!?]?\s*/gi;
+const AGENCY_ONLY_NOTE =
+  /[^.!?\n]*(no AI model was used|offline extractor|drafted (?:by the )?offline|review every workflow)[^.!?\n]*[.!?]?\s*/gi;
 export function clientSafeText(text: string | null): string | null {
   if (!text) return text;
   const out = text.replace(AGENCY_ONLY_NOTE, "").trim();
@@ -288,7 +291,7 @@ export async function getToday(orgId: string) {
         ),
       )
       .orderBy(asc(schema.workflows.nextRunAt))
-      .limit(3),
+      .limit(5),
   ]);
   const pendingRuns = new Set(approvals.map((a) => a.runId).filter(Boolean));
   const needsReview = recent
@@ -438,8 +441,29 @@ export type TeamMember = AgentLite & {
   hours30d: number;
 };
 
-export function agentEmail(handle: string | null): string | null {
-  return handle ? `${handle}@${env().EMAIL_DOMAIN}` : null;
+/**
+ * Agent addresses use the public API's helper with the org's verified white-label domain (emailDomainFor walks
+ * customer → client → agency), so a per-agency email domain shows up here the moment it's verified.
+ */
+export function agentEmail(
+  handle: string | null,
+  domain?: string,
+): string | null {
+  const address = apiAgentEmail(handle, domain);
+  // A dev/reserved domain (agents.roster.local) can't receive mail and leaks the platform: show no address.
+  return address && deliverableDomain(address.split("@")[1] ?? "")
+    ? address
+    : null;
+}
+
+/** False for reserved, non-routable TLDs (RFC 2606/6761 and friends) a client could never email. */
+export function deliverableDomain(domain: string): boolean {
+  return (
+    domain.includes(".") &&
+    !/\.(local|localhost|test|invalid|example|internal|lan|home\.arpa)$/i.test(
+      domain,
+    )
+  );
 }
 
 export async function getTeam(orgId: string): Promise<TeamMember[]> {
@@ -498,6 +522,7 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
       )
       .groupBy(schema.deliverables.agentId),
   ]);
+  const domain = await emailDomainFor(orgId);
   return agents.map((a) => {
     const s = stats.find((x) => x.agentId === a.id);
     return {
@@ -507,7 +532,7 @@ export async function getTeam(orgId: string): Promise<TeamMember[]> {
       seed: a.seed,
       status: a.status,
       summary: clientSafeText(a.summary),
-      email: agentEmail(a.emailHandle),
+      email: agentEmail(a.emailHandle, domain),
       phone: a.phone,
       workflows: wfs.filter((w) => w.agentId === a.id),
       delivered30d: s?.n ?? 0,

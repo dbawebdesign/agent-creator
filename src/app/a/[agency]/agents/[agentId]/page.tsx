@@ -2,9 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Brain, CalendarClock, Inbox, Library, Mail, Monitor, Radio, ShieldAlert, Sparkles, Zap } from "lucide-react";
 import { ApprovalActions } from "@/components/studio/approval-actions";
-import { requireOrg } from "@/server/auth/access";
-import { agentApprovals, agentChannels, agentDeliverables, agentKnowledge, agentMemories, agentSetup, agentValue, agentWorkflows, getAgent } from "@/server/queries/studio";
-import { AutoRefresh, BeforeTonight, FirstDeliverableRow } from "@/components/studio/setup-panel";
+import { hasRole, requireOrg } from "@/server/auth/access";
+import { agentApprovals, agentChannels, agentDeliverable, agentDeliverables, agentKnowledge, agentMemories, agentSetup, agentValue, agentWorkflows, getAgent, heldDeliverables } from "@/server/queries/studio";
+import { HeldDeliverable, releaseLabel } from "@/components/studio/held-deliverable";
+import { AutoRefresh, BeforeTonight, FirstDeliverableRow, RetrySetupButton } from "@/components/studio/setup-panel";
 import { RelativeTime } from "@/components/shared/relative-time";
 import { DeliverableList } from "@/components/studio/deliverable-list";
 import { CHANNEL_LABEL, hours, microsToDollars, SectionHeading, Stat, TextLink } from "@/components/studio/bits";
@@ -13,7 +14,8 @@ import { cn } from "@/lib/utils";
 
 export default async function AgentOverview({ params, searchParams }: { params: Promise<{ agency: string; agentId: string }>; searchParams: Promise<{ welcome?: string; d?: string }> }) {
   const [{ agency: slug, agentId }, sp] = await Promise.all([params, searchParams]);
-  const { org: agency } = await requireOrg(slug, "viewer");
+  const access = await requireOrg(slug, "viewer");
+  const agency = access.org;
   const found = await getAgent(agency.id, agentId);
   if (!found) notFound();
   const { agent, org, inbox } = found;
@@ -27,9 +29,18 @@ export default async function AgentOverview({ params, searchParams }: { params: 
     agentApprovals(agent.orgId, agent.id),
     agentSetup(agent.orgId, agent.id),
   ]);
+  // ?d= deep link (⌘K, notifications): open it even when it's older than the recent list.
+  if (sp.d && !deliverables.some((d) => d.id === sp.d)) {
+    const one = await agentDeliverable(agent.orgId, agent.id, sp.d);
+    if (one) deliverables.unshift(one);
+  }
   const provisioning = agent.status === "provisioning";
   const hasRun = value.delivered > 0;
+  // Finished early and held until the release time (the draft waits in the release job; the client hasn't seen it).
+  const held = setup.firstRun?.status === "succeeded" ? (await heldDeliverables(agent.orgId, [setup.firstRun.id]))[0] : undefined;
   const first = setup.firstRun && setup.firstRun.status !== "succeeded" ? setup.firstRun : null;
+  // Once the first run has finished (or failed), uploads can only help what comes next.
+  const firstDone = hasRun || !!held || (!!setup.firstRun && setup.firstRun.status !== "queued" && setup.firstRun.status !== "running" && setup.firstRun.status !== "waiting_approval");
   const lands = first ? landsAt(first.releaseAt, setup.timezone) : null;
   const base = `/a/${slug}/agents/${agent.id}`;
   const enabled = workflows.filter((w) => w.enabled);
@@ -49,13 +60,18 @@ export default async function AgentOverview({ params, searchParams }: { params: 
     { icon: Radio, label: "Channels", value: channelKinds.map((c) => CHANNEL_LABEL[c] ?? c).join(", ") || "Portal", ok: true },
   ];
 
+  // Setup normally finishes in under a minute; past 3 minutes, say where it stopped and offer a retry.
+  const stalled = provisioning && Date.now() - agent.createdAt.getTime() > SETUP_STALL_MS;
+  // Memory and knowledge can legitimately be empty; the real setup steps are the inbox, computer and channels.
+  const stalledAt = stack.find((l) => !l.ok && (l.label === "Inbox" || l.label === "Computer" || l.label === "Channels"))?.label ?? "Activation";
+
   return (
     <div className="space-y-12">
       {sp.welcome ? (
         <div className="flex items-start gap-3 rounded-xl border border-accent/25 bg-accent-soft/60 px-5 py-4 animate-rise">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden />
           <div className="text-[13.5px] leading-relaxed text-ink-2">
-            <span className="font-medium text-ink">{agent.name} is on the roster.</span> {first ? <>“{first.title}” is queued{lands ? <> and lands {lands}</> : null}.</> : <>The first deliverable is on its way.</>} Work through “Before tonight” below, and share the inbox address so the team can email {agent.name} directly.
+            <span className="font-medium text-ink">{agent.name} is on the roster.</span> {held ? <>“{held.title}” is finished and lands {releaseLabel(held.releaseAt, setup.timezone)}.</> : first ? <>“{first.title}” is queued{lands ? <> and lands {lands}</> : null}.</> : <>The first deliverable is on its way.</>} Work through “Before tonight” below, and share the inbox address so the team can email {agent.name} directly.
           </div>
         </div>
       ) : null}
@@ -78,19 +94,37 @@ export default async function AgentOverview({ params, searchParams }: { params: 
       ) : null}
 
       {provisioning ? (
-        <section aria-label="Setting up" className="rounded-xl border border-line bg-surface shadow-xs" aria-live="polite">
-          <AutoRefresh />
-          <div className="border-b border-line px-4 py-3.5">
-            <h2 className="text-[14px] font-semibold text-ink">Setting up {agent.name}</h2>
-            <p className="text-[12.5px] text-ink-3">This page updates on its own. It usually takes under a minute.</p>
-          </div>
+        <section aria-label="Setting up" className={cn("rounded-xl border bg-surface shadow-xs", stalled ? "border-warn/30" : "border-line")} aria-live="polite">
+          {stalled ? null : <AutoRefresh />}
+          {stalled ? (
+            <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3.5">
+              <div className="min-w-0 flex-1 basis-56">
+                <h2 className="text-[14px] font-semibold text-ink">Setup stalled at {stalledAt.toLowerCase()}</h2>
+                <p className="text-[12.5px] text-ink-3">
+                  Started <RelativeTime date={agent.createdAt} />. It usually takes under a minute, so something got stuck. Retrying is safe.
+                </p>
+              </div>
+              {hasRole(access, "member") ? <RetrySetupButton agency={slug} agentId={agent.id} agentName={agent.name} /> : null}
+            </div>
+          ) : (
+            <div className="border-b border-line px-4 py-3.5">
+              <h2 className="text-[14px] font-semibold text-ink">Setting up {agent.name}</h2>
+              <p className="text-[12.5px] text-ink-3">This page updates on its own. It usually takes under a minute.</p>
+            </div>
+          )}
           <ul className="divide-y divide-line">
             {stack.map((l) => (
               <li key={l.label} className="flex items-center gap-3 px-4 py-3">
                 <l.icon className="size-4 shrink-0 text-ink-3" aria-hidden />
                 <span className="text-[13.5px] text-ink">{l.label}</span>
-                <span className="ml-auto truncate pl-3 text-[12.5px] text-ink-3">{l.ok ? l.value : "Setting up…"}</span>
-                {l.ok ? <span className="text-[12px] font-medium text-good">Ready</span> : <span className="size-3.5 animate-spin rounded-full border-2 border-accent/25 border-t-accent" aria-label="In progress" />}
+                <span className="ml-auto truncate pl-3 text-[12.5px] text-ink-3">{l.ok ? l.value : stalled ? (l.label === stalledAt ? "Not finished" : "") : "Setting up…"}</span>
+                {l.ok ? (
+                  <span className="text-[12px] font-medium text-good">Ready</span>
+                ) : stalled ? (
+                  l.label === stalledAt ? <span className="text-[12px] font-medium text-warn">Stalled</span> : <span className="text-[12px] text-ink-3">None yet</span>
+                ) : (
+                  <span className="size-3.5 animate-spin rounded-full border-2 border-accent/25 border-t-accent" aria-label="In progress" />
+                )}
               </li>
             ))}
           </ul>
@@ -108,12 +142,26 @@ export default async function AgentOverview({ params, searchParams }: { params: 
         <div className="min-w-0 space-y-10">
           <section>
             <SectionHeading title={hasRun ? "Recent deliverables" : "First deliverable"} count={hasRun ? value.delivered : undefined} />
+            {held ? (
+              <div className={cn(hasRun && "mb-3")}>
+                <HeldDeliverable
+                  title={held.title}
+                  kind={held.kind}
+                  preview={held.preview}
+                  body={held.body}
+                  releaseAt={held.releaseAt}
+                  timezone={setup.timezone}
+                  clientName={org.name}
+                  release={hasRole(access, "member") && agent.status !== "archived" ? { agency: slug, agentId: agent.id, runId: held.runId } : undefined}
+                />
+              </div>
+            ) : null}
             {first ? (
               <div className={cn(hasRun && "mb-3")}>
                 <FirstDeliverableRow title={first.title} description={first.description} status={first.status} lands={lands} />
               </div>
             ) : null}
-            {hasRun || !first ? (
+            {hasRun || (!first && !held) ? (
               <DeliverableList
                 items={deliverables}
                 initialOpenId={sp.d}
@@ -135,6 +183,7 @@ export default async function AgentOverview({ params, searchParams }: { params: 
               needs={setup.knowledgeNeeds}
               questions={setup.openQuestions}
               haveTitles={knowledge.map((k) => k.title)}
+              firstDone={firstDone}
             />
           ) : null}
         </div>
@@ -212,3 +261,5 @@ function landsAt(releaseAt: Date | null, timezone: string) {
   const tz = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "short" }).formatToParts(releaseAt).find((p) => p.type === "timeZoneName")?.value;
   return `${day} at ${time}${tz ? ` ${tz}` : ""}`;
 }
+
+const SETUP_STALL_MS = 3 * 60_000;

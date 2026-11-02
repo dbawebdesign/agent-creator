@@ -73,27 +73,24 @@ export function ReviewPanel({
         }
         next={local ? next : null}
       >
-        {sent ? (
+        {sent && sendTestMode ? (
+          // Email isn't connected here, so nothing went out: say so plainly, never claim a send.
+          <span>
+            Approved.
+            <span className="mt-1 block font-normal text-ink-3">
+              {sendTo} gets it once email is connected.
+            </span>
+          </span>
+        ) : sent ? (
           local ? (
             <span>
               Approved. {agentName} is sending it to{" "}
-              <span className="font-semibold">{sendTo}</span>
-              {sendTestMode ? (
-                <span className="font-normal">
-                  {" "}
-                  in test mode, so no real email goes out.
-                </span>
-              ) : (
-                " now."
-              )}
+              <span className="font-semibold">{sendTo}</span> now.
             </span>
           ) : (
             <span>
               Approved and sent to{" "}
               <span className="font-semibold">{sendTo}</span>
-              {sendTestMode ? (
-                <span className="font-normal"> (test mode)</span>
-              ) : null}
               {sentAt ? <span className="font-normal"> · {sentAt}</span> : null}
             </span>
           )

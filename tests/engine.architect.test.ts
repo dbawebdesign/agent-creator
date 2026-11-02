@@ -8,6 +8,7 @@ import { db, schema } from "@/server/db/client";
 import { runJobsOnce } from "@/server/jobs/handlers";
 import { isValidCron } from "@/server/jobs/scheduler";
 import { analyzeDiscovery, createDiscovery, hireAgent } from "@/server/services/engine";
+import { bareHoursIn, hoursPerWeekIn, splitSentences } from "@/server/llm/offline/discovery";
 import { makeOrgs, resetDb } from "./engine.helpers";
 
 const fixture = (f: string) => readFileSync(path.join(__dirname, "fixtures", f), "utf8");
@@ -255,7 +256,8 @@ describe("Architect (offline) — podcast transcript", () => {
     expect(spec.workflows.find((w) => /catalog/i.test(w.name))!.trigger).toMatchObject({ type: "schedule" });
     expect(spec.seedMemories.join("\n")).toMatch(/20 hours/);
     expect(spec.firstDeliverable.title).toMatch(/quote kit/i);
-    expect(spec.firstDeliverable.instructions).toMatch(/GFM table/);
+    expect(spec.firstDeliverable.instructions).toMatch(/\btable\b/);
+    expect(spec.firstDeliverable.instructions).not.toMatch(/GFM|markdown/i);
     expect(spec.resaleIdea).toMatch(/quote desk/i);
     expect(spec.weeklyHoursSaved).toBeGreaterThanOrEqual(15);
     expect(spec.requireApprovalFor).toEqual(expect.arrayContaining(["send_external_email", "send_external_sms"]));
@@ -348,5 +350,87 @@ describe("Architect output polish (design critique r3 H4)", () => {
       expect(text).not.toMatch(/\b(?:the|a|an) (?:the|a|an)\b/i);
       expect(tidyText(text)).toBe(text);
     }
+  });
+});
+
+describe("Architect (offline) — product critic r3 H4 and design critic r4 regressions", () => {
+  const nameEndsBadly = /\b(?:and|or|but|of|to|for|with|in|on|at|from|the|a|an|my|our)$/i;
+
+  it("splits sentences without cutting St./Dr./a.m., and reads the durations people actually say", () => {
+    expect(splitSentences("And never contact anyone at St. Luke's except Greg. Their people are touchy.")).toEqual(["And never contact anyone at St. Luke's except Greg.", "Their people are touchy."]);
+    expect(splitSentences("Dr. Okafor's office calls at 6 a.m. most days. I log it, e.g. in the sheet.")).toEqual(["Dr. Okafor's office calls at 6 a.m. most days.", "I log it, e.g. in the sheet."]);
+    expect(hoursPerWeekIn("I spend two hours every Monday on that.")).toBe(2);
+    expect(hoursPerWeekIn("It's an hour a day, easy.")).toBe(5);
+    expect(hoursPerWeekIn("Chasing that in QuickBooks is two or three hours a week and I hate it.")).toBe(2.5);
+    expect(hoursPerWeekIn("Every month-end I spend two full days chasing unpaid invoices.")).toBeCloseTo(3.7, 1);
+    expect(bareHoursIn("That's three, four hours when I do it.")).toBe(3.5);
+    expect(bareHoursIn("who isn't already at forty hours")).toBeNull();
+  });
+
+  it("commercial pest control: five pains, the explicit ask first, whole rules, the agency's Industry, summed hours", () => {
+    const spec = checkRubric({
+      file: "discovery-pest-control.md",
+      org: "Bayline Pest Solutions",
+      industry: "Commercial pest control",
+      main: /Monday service summar/i,
+      also: [/estimate/i, /call-out/i, /past-due invoice/i, /complaints/i],
+      never: /^(?:Square|Sick calls|Last estimate)|\bdental\b/i,
+      weekly: [12, 17],
+      role: /report/i,
+      extra: (s) => {
+        // Every distinct pain is its own workflow; the ask (and what was asked with it) is the first deliverable.
+        expect(s.workflows).toHaveLength(5);
+        for (const w of s.workflows) expect(w.name).not.toMatch(nameEndsBadly);
+        expect(s.firstDeliverable.title).toMatch(/complaints/i);
+        expect(s.firstDeliverable.description).toContain("The Monday service summaries, done and waiting for me to approve.");
+        // The Industry the agency typed wins over words said about customers ("a few dental offices").
+        expect(s.vertical).toBe("Commercial pest control");
+        expect(s.seedMemories[0]).toMatch(/commercial pest control business\.$/);
+        expect(`${s.vertical} ${s.voice} ${s.seedMemories.join(" ")}`).not.toMatch(/dental practice|medical practice/i);
+        // Only software the owner named as software: "Square footage" is not Square.
+        expect(s.instructions).toMatch(/Systems you will work with: PestPac, Excel, QuickBooks Online\./);
+        expect(JSON.stringify(s)).not.toMatch(/\bSquare\b(?! footage)/);
+        // Rules captured whole, abbreviation and all.
+        expect(s.instructions).toContain("“Never call or email anyone at St. Mary's Hospital except Dr. Okafor's office manager, Pam.”");
+        expect(s.instructions).toContain("“Never quote a price to a customer without my sign-off.”");
+        const est = s.workflows.find((w) => /estimate/i.test(w.name))!;
+        expect(est.instructions).toMatch(/Leave the price for Luis/);
+        expect(est.instructions).toMatch(/never from the last client's/);
+        // Hours: 5 (estimates) + an hour a day (5) + two hours every Monday (2) + three or four a week (3.5) ≈ 15.5.
+        expect(s.summary).toMatch(/of the ~16 hours a week described on the call/);
+        expect(s.workflows.find((w) => /call-out/i.test(w.name))!.trigger).toEqual({ type: "event", event: "sms.received" });
+        expect(s.workflows.find((w) => /invoice/i.test(w.name))!.instructions).toMatch(/QuickBooks Online/);
+        expect(s.voice).toContain("Friendly, short, no jargon.");
+      },
+    });
+    expect(spec.channels).toContain("sms");
+  });
+
+  it("estate planning law firm (Harbor & Pine): Monday aging, Friday cash summary, reply routing — no answered questions, no markup words", () => {
+    const spec = checkRubric({
+      file: "discovery-law-harbor-pine.md",
+      org: "Harbor & Pine Law",
+      industry: "Estate planning law firm",
+      main: /aging report/i,
+      also: [/Friday cash summary/, /reply routing/i],
+      never: /^(?:Intake|Billing$)|Monthly on the 1st/i,
+      weekly: [4, 8],
+      role: /billing/i,
+      extra: (s) => {
+        expect(s.workflows).toHaveLength(3);
+        const [aging, ...rest] = s.workflows;
+        expect(aging!.trigger).toMatchObject({ type: "schedule", cron: "0 7 * * 1" });
+        expect(rest.find((w) => /cash summary/i.test(w.name))!.trigger).toMatchObject({ type: "schedule", cron: "0 7 * * 5" });
+        expect(rest.find((w) => /reply/i.test(w.name))!.trigger).toEqual({ type: "event", event: "email.received" });
+        expect(aging!.instructions).toMatch(/Clio/);
+        expect(aging!.instructions).toMatch(/30, 60 and 90\+ days/);
+        expect(aging!.instructions).toMatch(/one short list for him/);
+        // The call already says who gets the output, which system holds it, and who the summary is for.
+        expect(s.openQuestions.join(" ")).not.toMatch(/who at .* should receive|morning deliverables|which systems hold|which clients get/i);
+        // Client-facing text never carries instruction jargon.
+        for (const text of allText(s)) expect(text).not.toMatch(/\bGFM\b|markdown|you can find in the knowledge base/i);
+      },
+    });
+    expect(spec.firstDeliverable.description).toContain("I'd come in and the aging report is already done");
   });
 });

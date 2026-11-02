@@ -3,6 +3,8 @@ import { AgentOrb } from "@/components/ui/agent-orb";
 import type { DeliverableCard as Card } from "@/server/queries/portal";
 import { DeliveredVia, KindIcon, kindLabel } from "./icons";
 import { testModeChannels } from "./test-mode";
+import { deliverableStatus } from "./status";
+import { StatusPill } from "./status-pill";
 import { clockTime, dayWord, shortHours, capitalize } from "./lib";
 import { cn } from "@/lib/utils";
 
@@ -72,13 +74,8 @@ export function DeliverableCardView({
           <KindIcon kind={d.kind} />
           {kindLabel(d.kind)}
         </span>
-        <DeliveredVia via={d.deliveredVia} testMode={testModeChannels()} />
-        {d.status === "approved" ? (
-          <span className="text-good">Approved</span>
-        ) : null}
-        {d.status === "changes_requested" ? (
-          <span className="text-warn">Changes requested</span>
-        ) : null}
+        <DeliveredVia via={d.deliveredVia} simulated={testModeChannels()} />
+        <StatusPill status={deliverableStatus(d)} />
         {d.hoursSaved > 0 ? (
           <span className="ml-auto tabular">
             ~{shortHours(d.hoursSaved)} saved

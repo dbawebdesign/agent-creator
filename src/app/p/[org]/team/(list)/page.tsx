@@ -1,7 +1,7 @@
 import Link from "next/link";
+import { StatusPill } from "@/components/portal/status-pill";
 import { Mail, Phone, Users } from "lucide-react";
 import { AgentOrb } from "@/components/ui/agent-orb";
-import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty";
 import {
   capitalize,
@@ -65,7 +65,7 @@ export default async function TeamPage({
                         <h2 className="truncate text-[16px] font-semibold tracking-[-0.01em] text-ink">
                           {a.name}
                         </h2>
-                        {st ? <Badge tone={st.tone}>{st.label}</Badge> : null}
+                        <StatusPill status={st} />
                       </div>
                       <p className="truncate text-[13px] text-ink-3">
                         {a.role}

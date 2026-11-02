@@ -27,6 +27,7 @@ import { logger } from "@/server/lib/logger";
 import { portalDeliverableUrl } from "@/server/api/v1";
 import {
   agentAddress,
+  emailDomainFor,
   agentFromName,
   formatFrom,
   isEmailAddress,
@@ -140,7 +141,9 @@ async function sendOne(
     const prevRefs = Array.isArray(prev?.meta.references) ? (prev!.meta.references as unknown[]).filter((r): r is string => typeof r === "string") : [];
     const references = prevId ? [...prevRefs.filter((r) => r !== prevId), prevId].slice(-20) : [];
 
-    const messageId = typeof message.meta.emailMessageId === "string" ? message.meta.emailMessageId : newMessageId();
+    // White-label: send from (and stamp Message-IDs with) the org's verified domain, else env EMAIL_DOMAIN.
+    const domain = await emailDomainFor(org.id, tx);
+    const messageId = typeof message.meta.emailMessageId === "string" ? message.meta.emailMessageId : newMessageId(domain);
     const subject = deliverable
       ? payload.subject ?? deliverable.title
       : (payload.subject ?? (typeof message.meta.subject === "string" ? message.meta.subject : replySubject(conversation.subject))).replace(
@@ -157,7 +160,7 @@ async function sendOne(
       portalUrl,
       branding: org.branding,
     });
-    const address = agentAddress(agent.emailHandle);
+    const address = agentAddress(agent.emailHandle, domain);
     const result = await sendEmail({
       from: formatFrom(agentFromName(agent.name, org.branding), address),
       to: [to],

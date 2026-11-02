@@ -13,6 +13,7 @@ import { rateLimit } from "@/server/security/rate-limit";
 import * as engine from "@/server/services/engine";
 import { ApiError, decodeCursor, encodeCursor, listQuery, parseWith } from "./http";
 import type { ApiPrincipal } from "./keys";
+import { emailDomainFor } from "@/server/channels/domains";
 
 /** Translate engine errors (matched by name so a mocked engine works too) into public API errors. */
 async function engineCall<T>(fn: () => Promise<T>): Promise<T> {
@@ -83,18 +84,19 @@ export type ApiDeliverable = {
   portalUrl: string;
 };
 
-export function agentEmail(handle: string | null): string | null {
-  return handle ? `${handle}@${env().EMAIL_DOMAIN}` : null;
+/** `domain` from emailDomainFor(p.orgId): the org's verified white-label domain, else env EMAIL_DOMAIN. */
+export function agentEmail(handle: string | null, domain: string = env().EMAIL_DOMAIN): string | null {
+  return handle ? `${handle}@${domain}` : null;
 }
 
-function serializeAgent(a: AgentRow): ApiAgent {
+function serializeAgent(a: AgentRow, domain?: string): ApiAgent {
   return {
     id: a.id,
     name: a.name,
     role: a.role,
     summary: a.summary,
     status: a.status,
-    email: agentEmail(a.emailHandle),
+    email: agentEmail(a.emailHandle, domain),
     phone: a.phoneNumber,
     createdAt: a.createdAt.toISOString(),
   };
@@ -187,7 +189,8 @@ export async function listAgents(p: ApiPrincipal, query: unknown) {
     .where(and(agentScope(p), afterCursor(schema.agents.createdAt, schema.agents.id, q.cursor)))
     .orderBy(desc(schema.agents.createdAt), desc(schema.agents.id))
     .limit(q.limit + 1);
-  return page(rows, q.limit, serializeAgent);
+  const domain = await emailDomainFor(p.orgId);
+  return page(rows, q.limit, (a) => serializeAgent(a, domain));
 }
 
 export async function getAgent(p: ApiPrincipal, agentId: string): Promise<ApiAgent & { workflows: ApiWorkflow[] }> {
@@ -197,7 +200,7 @@ export async function getAgent(p: ApiPrincipal, agentId: string): Promise<ApiAge
     .from(schema.workflows)
     .where(and(eq(schema.workflows.orgId, p.orgId), eq(schema.workflows.agentId, a.id)))
     .orderBy(schema.workflows.createdAt);
-  return { ...serializeAgent(a), workflows: wfs.map(serializeWorkflow) };
+  return { ...serializeAgent(a, await emailDomainFor(p.orgId)), workflows: wfs.map(serializeWorkflow) };
 }
 
 /** Workflows for several agents in one query (MCP list_agents). */

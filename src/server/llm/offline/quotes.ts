@@ -24,7 +24,7 @@ export function namedInTask(text: string): string[] {
     for (const w of words) if (w.length >= 3) out.add(w.replace(/[’']s$/, ""));
   }
   for (const m of text.matchAll(/#?\b([A-Z]{2,}-?\d{3,})\b/g)) out.add(m[1]!);
-  return [...out].filter((x) => x.length >= 3);
+  return [...out].filter((x) => x.length >= 3 && !/^(?:st|dr|mr|mrs|ms|mt|inc|co|ltd|jr|sr)\.?$/i.test(x));
 }
 
 export function mentions(line: string, names: string[]): boolean {

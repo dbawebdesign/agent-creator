@@ -15,6 +15,7 @@ import { sql } from "drizzle-orm";
 import { maintenancePrune } from "./maintenance";
 import { claimTypes, LEASE_MS, processJob, type ClaimedRow } from "./worker";
 import type { JobType } from "./queue";
+import { DEAD_RUN_ERROR } from "./scheduler";
 
 export type HandlerContext = { db: DB; jobId: string; attempts: number; maxAttempts: number };
 export type JobHandler = (payload: Record<string, unknown>, ctx: HandlerContext) => Promise<void>;
@@ -33,7 +34,10 @@ export const HANDLERS: Record<JobType, JobHandler> = {
     try {
       await executeRun(ctx.db, runId, { orgId });
     } catch (err) {
-      if (ctx.attempts >= ctx.maxAttempts) await failRun(ctx.db, runId, orgId, `Gave up after ${ctx.attempts} attempts: ${(err as Error).message}`);
+      if (ctx.attempts >= ctx.maxAttempts) {
+        logger.error({ runId, attempts: ctx.attempts, err: (err as Error).message }, "agent.run gave up");
+        await failRun(ctx.db, runId, orgId, DEAD_RUN_ERROR);
+      }
       throw err;
     }
   },

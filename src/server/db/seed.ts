@@ -54,6 +54,8 @@ export async function seed() {
     })
     .returning();
   await d.update(schema.organizations).set({ agencyId: agency!.id }).where(sql`id = ${agency!.id}`);
+  // White-label email: every agent in Northbeam's tree is <handle>@agents.northbeam.ai (simulated verification).
+  await d.insert(schema.emailDomains).values({ orgId: agency!.id, domain: "agents.northbeam.ai", status: "verified", simulated: true, verifiedAt: new Date(), checkedAt: new Date() });
 
   const clientRows = await d
     .insert(schema.organizations)

@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { Activity, ChevronRight } from "lucide-react";
-import { requireOrg } from "@/server/auth/access";
-import { agentRuns, getAgent } from "@/server/queries/studio";
+import { hasRole, requireOrg } from "@/server/auth/access";
+import { agentRuns, getAgent, heldDeliverables } from "@/server/queries/studio";
+import { HeldDeliverable, releaseLabel } from "@/components/studio/held-deliverable";
 import { EmptyState } from "@/components/ui/empty";
 import { StatusDot } from "@/components/ui/badge";
 import { RelativeTime } from "@/components/shared/relative-time";
@@ -42,6 +43,9 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
   const found = await getAgent(access.org.id, agentId);
   if (!found) notFound();
   const runs = await agentRuns(found.agent.orgId, found.agent.id, 40);
+  // Finished-early deliverables still waiting for their release time: never call them "ready" (the client hasn't got them).
+  const held = await heldDeliverables(found.agent.orgId, runs.filter((r) => r.status === "succeeded").map((r) => r.id));
+  const tz = found.org.timezone;
   const totals = runs.reduce((t, r) => ({ tokens: t.tokens + r.inputTokens + r.outputTokens, cost: t.cost + r.costMicros }), { tokens: 0, cost: 0 });
 
   if (!runs.length) {
@@ -62,7 +66,8 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
       </div>
       <ul className="overflow-hidden rounded-xl border border-line bg-surface shadow-xs">
         {runs.map((r, i) => {
-          const st = STATUS[r.status] ?? { tone: "neutral" as const, label: r.status };
+          const hold = held.find((h) => h.runId === r.id);
+          const st = hold ? { tone: "accent" as const, label: `Ready · lands ${releaseLabel(hold.releaseAt, tz)}` } : (STATUS[r.status] ?? { tone: "neutral" as const, label: r.status });
           return (
             <li key={r.id} className={cn(i > 0 && "border-t border-line")}>
               <details className="group">
@@ -71,7 +76,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
                   <StatusDot tone={st.tone} pulse={st.pulse} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13.5px] font-medium text-ink">{r.workflowName ?? (r.trigger === "message" ? "Conversation reply" : r.trigger === "setup" ? "First deliverable" : "Manual run")}</p>
-                    <p className="truncate text-[12.5px] text-ink-3">{r.error ?? r.summary ?? st.label}</p>
+                    <p className="truncate text-[12.5px] text-ink-3">{hold ? `“${hold.title}” is ready · lands ${releaseLabel(hold.releaseAt, tz)}` : (r.error ?? r.summary ?? st.label)}</p>
                   </div>
                   <div className="tabular hidden shrink-0 text-right text-[12px] text-ink-3 sm:block">
                     <p>{(r.inputTokens + r.outputTokens).toLocaleString()} tok · {microsToDollars(r.costMicros)}</p>
@@ -87,6 +92,20 @@ export default async function ActivityPage({ params }: { params: Promise<{ agenc
                     <span>Cost {microsToDollars(r.costMicros)}</span>
                     {duration(r.startedAt, r.finishedAt) ? <span>Took {duration(r.startedAt, r.finishedAt)}</span> : null}
                   </div>
+                  {hold ? (
+                    <div className="mb-4">
+                      <HeldDeliverable
+                        title={hold.title}
+                        kind={hold.kind}
+                        preview={hold.preview}
+                        body={hold.body}
+                        releaseAt={hold.releaseAt}
+                        timezone={tz}
+                        clientName={found.org.name}
+                        release={hasRole(access, "member") && found.agent.status !== "archived" ? { agency: slug, agentId: found.agent.id, runId: r.id } : undefined}
+                      />
+                    </div>
+                  ) : null}
                   {r.steps.length ? (
                     <ol className="space-y-2">
                       {r.steps.map((s) => {

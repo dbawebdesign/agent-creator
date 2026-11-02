@@ -24,6 +24,7 @@ import { logger } from "@/server/lib/logger";
 import { costMicros, LlmError } from "@/server/llm";
 import { slugify, truncate } from "@/server/llm/text";
 import { audit } from "@/server/security/audit";
+import { emailDomainFor } from "@/server/channels/domains";
 
 export type Actor = { type: "user"; userId: string } | { type: "api_key"; keyId: string } | { type: "system" };
 
@@ -313,7 +314,8 @@ export async function hireAgent(input: {
           sourceId = src!.id;
           await tx.update(schema.discoveries).set({ status: "hired", agentId }).where(and(eq(schema.discoveries.id, discovery.id), eq(schema.discoveries.orgId, org.id)));
         }
-        const address = `${handle}@${env().EMAIL_DOMAIN}`;
+        // White-label: the org's nearest verified email domain (customer → client → agency), else env EMAIL_DOMAIN.
+        const address = `${handle}@${await emailDomainFor(org.id)}`;
         await tx.insert(schema.channelConnections).values([
           { orgId: org.id, agentId, kind: "portal", externalId: `portal:${agentId}`, status: "connected", config: {} },
           { orgId: org.id, agentId, kind: "email", externalId: address, status: "connected", config: { address } },
@@ -330,7 +332,8 @@ export async function hireAgent(input: {
             kind: "first_deliverable",
             title: spec.firstDeliverable.title,
             description: spec.firstDeliverable.description,
-            instructions: spec.firstDeliverable.instructions,
+            // Rebuilt from the spec as hired, so edits made on the proposal reach tonight's work.
+            instructions: firstDeliverableInstructions(spec),
             outputKind: "document",
             deliverTo: deliveryChannels.filter((c) => c !== "sms"),
             hoursSaved: Math.max(1, Math.round((spec.weeklyHoursSaved / 5) * 10) / 10),
@@ -672,6 +675,33 @@ export async function triggerEvent(input: {
   return { runIds };
 }
 
+/**
+ * Hand over a held deliverable now instead of at its release time (Studio "Release now"). Claims the queued
+ * `deliverable.release` job atomically, so the worker can never release it a second time, then runs the same
+ * release handler the worker uses.
+ */
+export async function releaseHeldDeliverable(input: { orgId: string; runId: string; actor: Actor }): Promise<{ deliverableId: string }> {
+  const i = parse(z.object({ orgId: uuid, runId: uuid, actor: actorSchema }), input);
+  const database = db();
+  const [job] = await database
+    .update(schema.jobs)
+    .set({ status: "running", lockedBy: "release-now", lockedUntil: new Date(Date.now() + 60_000), attempts: sql`${schema.jobs.attempts} + 1` })
+    .where(and(eq(schema.jobs.orgId, i.orgId), eq(schema.jobs.type, "deliverable.release"), eq(schema.jobs.status, "queued"), sql`${schema.jobs.payload}->>'runId' = ${i.runId}`))
+    .returning();
+  if (!job) throw new EngineNotFoundError("Held deliverable");
+  const [{ releaseDeliverable }, { complete, fail }] = await Promise.all([import("@/server/agents/runtime"), import("@/server/jobs/queue")]);
+  try {
+    await releaseDeliverable(database, job.payload);
+    await complete(database, job.id);
+  } catch (err) {
+    await fail(database, job, err);
+    throw err;
+  }
+  const deliverableId = String((job.payload.deliverable as { id?: unknown } | undefined)?.id ?? "");
+  await audit({ orgId: i.orgId, ...actorAudit(i.actor), action: "deliverable.released_early", targetType: "deliverable", targetId: deliverableId || undefined, metadata: { runId: i.runId } });
+  return { deliverableId };
+}
+
 // ───────────────────────────────────────────── approvals & review ─────────────────────────────────────────────
 
 /** Approve or reject a pending approval; approved actions are executed by the worker. */
@@ -722,6 +752,9 @@ export async function reviewDeliverable(input: {
       break;
     case "approve": {
       await database.update(schema.deliverables).set({ status: "approved", needsReview: false, seenAt: d.seenAt ?? new Date(), feedback: i.feedback ?? d.feedback }).where(scope);
+      // Approving an email draft is the send decision: each addressed draft goes out through the email channel.
+      if (d.kind === "email_draft" && d.status !== "approved") await sendApprovedDrafts(database, d);
+      await creditApprovedWork(database, d);
       await triggerEvent({ orgId: i.orgId, agentId: d.agentId, event: "deliverable.approved", payload: { deliverableId: d.id }, dedupeKey: `approved:${d.id}` });
       // Approving a revision (or the reworked original) closes the agency's "client asked for changes" alert.
       const revisedFrom = d.runId
@@ -751,6 +784,156 @@ export async function reviewDeliverable(input: {
     }
   }
   await audit({ orgId: i.orgId, ...actorAudit(i.actor), action: `deliverable.${i.action}`, targetType: "deliverable", targetId: d.id });
+}
+
+/**
+ * Tonight's brief, from the spec as hired (title, description and workflows may all have been edited on the
+ * proposal): the workflow the first deliverable is about supplies the procedure; the Architect's original
+ * instructions are kept only when no workflow matches.
+ */
+export function firstDeliverableInstructions(spec: AgentSpec): string {
+  const fd = spec.firstDeliverable;
+  const words = (t: string) => new Set((t.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []).filter((w) => !/^(?:with|from|that|this|your|first|draft|week|weekly|daily|report|reports)$/.test(w)));
+  const want = words(`${fd.title} ${fd.description}`);
+  const scored = spec.workflows
+    .map((w) => ({ w, n: [...words(`${w.name} ${w.problem}`)].filter((x) => want.has(x)).length }))
+    .filter((x) => x.n > 0)
+    .sort((a, b) => b.n - a.n);
+  const match = scored[0]?.w ?? null;
+  const parts = [
+    `Produce “${fd.title}” tonight${fd.description ? ` — ${fd.description.replace(/\.$/, "")}` : ""}.`,
+    match ? `Follow the procedure of the “${match.name}” workflow, using only what is in the knowledge base and memory so far:\n${match.instructions}` : fd.instructions,
+    spec.workflows.length ? `You were hired for: ${spec.workflows.map((w) => w.name).join("; ")}. Show this first piece of work in the format those workflows will use.` : null,
+    "Deliver it as one document. Label any assumption, and list exactly what you still need from the team.",
+  ].filter((x): x is string => !!x);
+  return truncate(parts.join("\n\n"), 4000);
+}
+
+export type ParsedDraft = { to: string; name: string | null; subject: string; body: string };
+
+/** The email drafts in a deliverable body (`**To:** Name <addr>` / `**Subject:**` / quoted body), addressed ones only. */
+export function draftsIn(markdown: string): ParsedDraft[] {
+  const out: ParsedDraft[] = [];
+  const blocks = `\n${markdown}`.split(/\n(?=\*\*To:\*\*)/);
+  for (const b of blocks.slice(1)) {
+    const to = /^\*\*To:\*\*\s*(.+?)\s*$/m.exec(b)?.[1] ?? "";
+    const addr = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.exec(to)?.[0];
+    if (!addr) continue;
+    const subject = /^\*\*Subject:\*\*\s*(.+?)\s*$/m.exec(b)?.[1] ?? "";
+    const quoted: string[] = [];
+    let started = false;
+    for (const line of b.split("\n")) {
+      if (/^>/.test(line)) {
+        started = true;
+        quoted.push(line.replace(/^>\s?/, ""));
+      } else if (started) break;
+    }
+    if (!quoted.length) continue;
+    out.push({ to: addr.toLowerCase(), name: /^(.+?)\s*</.exec(to)?.[1]?.trim() ?? null, subject: truncate(subject || "Following up", 200), body: quoted.join("\n").trim() });
+  }
+  return out;
+}
+
+/**
+ * Send what a human just approved. One outbound message per addressed draft, delivered by the channels slice (simulated
+ * when no provider is configured, which it records truthfully per message). Idempotent: approving twice sends once.
+ */
+async function sendApprovedDrafts(database: DB, d: typeof schema.deliverables.$inferSelect): Promise<void> {
+  const drafts = draftsIn(d.body).slice(0, 20);
+  if (!drafts.length) return;
+  // Internal rules and the client's private change-request notes never leave in an email body.
+  const [rules, notes] = await Promise.all([
+    database
+      .select({ content: schema.memories.content })
+      .from(schema.memories)
+      .where(and(eq(schema.memories.orgId, d.orgId), eq(schema.memories.agentId, d.agentId), sql`${schema.memories.content} ~* '^(approval rule|hard rule|feedback on)'`))
+      .limit(200),
+    database
+      .select({ feedback: schema.deliverables.feedback })
+      .from(schema.deliverables)
+      .where(and(eq(schema.deliverables.orgId, d.orgId), eq(schema.deliverables.agentId, d.agentId), sql`${schema.deliverables.feedback} is not null`))
+      .limit(200),
+  ]);
+  const secrets = [...rules.map((r) => /“([^”]+)”/.exec(r.content)?.[1] ?? r.content.replace(/^[^:]+:\s*/, "")), ...notes.map((n) => n.feedback ?? "")]
+    .map((t) => t.replace(/\s+/g, " ").trim().toLowerCase())
+    .filter((t) => t.length >= 24)
+    .map((t) => t.slice(0, 48));
+  const leaks = (body: string) => {
+    const b = body.replace(/\s+/g, " ").toLowerCase();
+    return secrets.some((x) => b.includes(x));
+  };
+  const sent: Array<{ to: string; messageId: string }> = [];
+  const held: Array<{ to: string; reason: string }> = [];
+  for (const [n, e] of drafts.entries()) {
+    if (leaks(`${e.subject}\n${e.body}`)) {
+      held.push({ to: e.to, reason: "quotes an internal rule or a private note" });
+      logger.warn({ deliverableId: d.id }, "approved draft held: it quotes internal notes");
+      continue;
+    }
+    const externalId = `approved:${d.id}:${n}`;
+    const prior = (await database.select({ id: schema.messages.id }).from(schema.messages).where(and(eq(schema.messages.orgId, d.orgId), eq(schema.messages.externalId, externalId))).limit(1))[0];
+    let messageId = prior?.id;
+    if (!messageId) {
+      const [conv] = await database
+        .insert(schema.conversations)
+        .values({ orgId: d.orgId, agentId: d.agentId, channel: "email", subject: e.subject, externalThreadId: null })
+        .returning({ id: schema.conversations.id });
+      const [msg] = await database
+        .insert(schema.messages)
+        .values({
+          orgId: d.orgId,
+          conversationId: conv!.id,
+          direction: "outbound",
+          author: "agent",
+          body: e.body,
+          externalId,
+          meta: { to: e.to, subject: e.subject, approvedDeliverableId: d.id },
+          deliveryStatus: "pending",
+          runId: d.runId,
+        })
+        .returning({ id: schema.messages.id });
+      messageId = msg!.id;
+    }
+    await enqueue(database, "channel.deliver", { orgId: d.orgId, agentId: d.agentId, channel: "email", messageId, to: e.to, subject: e.subject }, { orgId: d.orgId, idempotencyKey: `deliver:${externalId}` });
+    sent.push({ to: e.to, messageId });
+  }
+  await database
+    .update(schema.deliverables)
+    .set({ data: { ...(d.data ?? {}), sentDrafts: sent, ...(held.length ? { heldDrafts: held } : {}), sentAt: new Date().toISOString() } })
+    .where(and(eq(schema.deliverables.id, d.id), eq(schema.deliverables.orgId, d.orgId)));
+}
+
+/**
+ * Approved work counts toward hours saved once: a scheduled/event deliverable already carries its credit; work asked
+ * for in chat (or a draft that only now became real) is credited when approved — a modest per-draft estimate,
+ * never for a revision whose original already counted.
+ */
+async function creditApprovedWork(database: DB, d: typeof schema.deliverables.$inferSelect): Promise<void> {
+  if (d.hoursSaved > 0 || d.status === "approved") return;
+  const chain = [typeof d.data?.revisionOf === "string" ? d.data.revisionOf : null, typeof d.data?.previousVersionId === "string" ? d.data.previousVersionId : null].filter(
+    (x): x is string => !!x,
+  );
+  if (chain.length) {
+    const credited = await database
+      .select({ id: schema.deliverables.id })
+      .from(schema.deliverables)
+      .where(and(eq(schema.deliverables.orgId, d.orgId), inArray(schema.deliverables.id, chain), sql`${schema.deliverables.hoursSaved} > 0`))
+      .limit(1);
+    if (credited[0]) return;
+  }
+  let hours = 0;
+  if (d.workflowId) {
+    const wf = (await database.select({ h: schema.workflows.hoursSavedPerRun }).from(schema.workflows).where(and(eq(schema.workflows.id, d.workflowId), eq(schema.workflows.orgId, d.orgId))).limit(1))[0];
+    const runCredited = d.runId
+      ? (await database.select({ id: schema.deliverables.id }).from(schema.deliverables).where(and(eq(schema.deliverables.orgId, d.orgId), eq(schema.deliverables.runId, d.runId), sql`${schema.deliverables.hoursSaved} > 0`)).limit(1))[0]
+      : undefined;
+    if (wf && !runCredited) hours = wf.h;
+  }
+  if (!hours) hours = d.kind === "email_draft" ? Math.min(1.5, 0.25 * Math.max(1, draftsIn(d.body).length)) : 0.5;
+  await database
+    .update(schema.deliverables)
+    .set({ hoursSaved: Math.round(hours * 100) / 100 })
+    .where(and(eq(schema.deliverables.id, d.id), eq(schema.deliverables.orgId, d.orgId), sql`${schema.deliverables.hoursSaved} = 0`));
 }
 
 /** Agency owners/admins of the org that runs this client (falls back to an org-wide row when none are found). */

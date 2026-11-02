@@ -5,6 +5,7 @@
  * "Needs your decision"), and revisions that apply the feedback to the previous draft.
  */
 import { cell, normalizeWhitespace, splitSentences, tokenize, truncate } from "../text";
+import { mentions, namedInTask } from "./quotes";
 
 export type Snip = { title: string; text: string; kind?: string };
 export type ComposeInput = {
@@ -394,7 +395,9 @@ export function compose(input: ComposeInput): Composed {
 
   // A direct request is answered as asked.
   const req = input.kind === "message" || input.kind === "task" ? own : "";
-  const wantsEmail = /\b(?:draft|write|compose|prepare)\b[^.]*\b(?:email|e-mail|letter|reply|message|text)\b/i.test(req) || (input.output === "email_draft" && !/template|kit|playbook|queue/i.test(input.title));
+  // A proposal or bid is a document (scope, pricing, terms), not an email — even when the workflow says "draft".
+  const wantsProposal = /\b(?:proposals?|bids?|quotes? for)\b/i.test(`${input.title} ${req}`) && !/\b(?:email|reply)\b/i.test(req) && input.kind !== "first_deliverable";
+  const wantsEmail = !wantsProposal && (/\b(?:draft|write|compose|prepare)\b[^.]*\b(?:email|e-mail|letter|reply|message|text)\b/i.test(req) || (input.output === "email_draft" && !/template|kit|playbook|queue/i.test(input.title)));
   const wantsSummary = /\bsummari[sz]e|\bsummary of\b|\brecap\b/i.test(req);
   const decisions: string[] = [];
   const needs: string[] = [];
@@ -411,15 +414,50 @@ export function compose(input: ComposeInput): Composed {
     return s?.text ?? (hours ? `about ${hours} hours a week of manual work today` : null);
   })();
 
-  if (wantsEmail) {
+  if (wantsProposal) {
+    lines.push(...proposalDoc(input, who, tables, pool, steps, own));
+    decisions.push("Review the scope and pricing, then send it to the client yourself or ask me to draft the cover email.");
+    sources.push({ step: "Proposal", status: tables.some(isRateTable) ? "Priced from your rate guide" : "Scope from your materials", basis: tables.find(isRateTable)?.table.title ?? "Your materials" });
+  } else if (wantsEmail) {
     // Who it goes to: the triggering sender, a named party in the request, or each stale row in the data.
     const ref = /#?\b([A-Z]{2,}-?\d{3,})\b/.exec(req || own)?.[1] ?? null;
     const party = /\bto (?:the |our )?([A-Z][\w&.-]*(?: [A-Z][\w&.-]*)?)?\s*(adjuster|owner|client|customer|patient|tenant|vendor|homeowner|buyer|carrier)\b/i.exec(req);
     const drafts: Array<{ label: string; e: EmailDraft }> = [];
+    let noDraftReason: string | null = null;
+    let targetedFrom: string | null = null;
     const data = tables.find((t) => t.rows.length && (!ref || t.rows.some((r) => r.join(" ").includes(ref))));
     const rowsFor = data ? (ref ? data.rows.filter((r) => r.join(" ").includes(ref)) : data.staleCol != null ? data.rows.filter((r) => Number(r[data.staleCol!]) >= 5) : data.rows).slice(0, 5) : [];
     const col = (t: Analysis, re: RegExp) => t.headers.findIndex((h) => re.test(h));
-    if (data && rowsFor.length) {
+    // A request that names someone ("a reply to Lorna Fitch at Bayside") goes to that match only, or to nobody.
+    const named = !ref && !ev?.from ? namedIn(req, who) : [];
+    const explicit = EMAIL_IN.exec(req)?.[0] ?? null;
+    if (named.length || (explicit && !ev?.from)) {
+      const target = findRecipient(named, explicit, tables, input.knowledge);
+      const answer = answerFromTables(req, tables, named);
+      if (!target) {
+        noDraftReason = `I couldn't find ${listJoin(named.slice(0, 2).map((n) => `“${n}”`)) || "that recipient"} in your knowledge base or contacts, so there is no email address to draft to.`;
+        if (answer.length) lines.push("## What your data says", "", ...answer.map((a) => `- ${a}`), "");
+        needs.push(`${named[0] ?? "The recipient"}'s email: add it to your contacts or to a tracker in the knowledge base (or put the address in your request) and ask again.`);
+      } else {
+        const first = target.person ? firstName(target.person) : null;
+        const facts = target.facts.length ? ["", `Here is where things stand${target.label ? ` for ${target.label}` : ""}:`, "", ...target.facts.map((f) => `- ${f}`)] : [];
+        const body = [
+          first ? `Hi ${first},` : "Hello,",
+          "",
+          `Thanks for your note${target.label ? ` about ${target.label}` : ""}.`,
+          ...facts,
+          "",
+          "Let me know if you have any questions or need anything else from us.",
+          "",
+          "Thank you,",
+          who.agent,
+          who.org,
+        ].join("\n");
+        drafts.push({ label: `To ${target.person ?? target.email}`, e: { to: target.person ? `${target.person} <${target.email}>` : target.email, subject: `Re: ${target.label ?? truncate(input.title, 80)}`, body } });
+        if (answer.length) lines.push("## What your data says", "", ...answer.map((a) => `- ${a}`), "");
+        targetedFrom = target.source;
+      }
+    } else if (data && rowsFor.length) {
       const partyWord = (party?.[2] ?? /\b(adjuster|owner|client|customer|patient|tenant|vendor|homeowner|buyer)s?\b/i.exec(`${input.title} ${own}`)?.[1] ?? "").toLowerCase();
       const byParty = partyWord ? data.headers.findIndex((h) => new RegExp(`^${partyWord}(?: name)?$`, "i").test(h.trim())) : -1;
       const nameC = byParty >= 0 ? byParty : col(data, /^(?:contact|name|client|customer)(?: name)?$/i);
@@ -433,7 +471,7 @@ export function compose(input: ComposeInput): Composed {
       // One email per person, covering every open item they hold.
       const groups = new Map<string, string[][]>();
       for (const r of rowsFor) {
-        const nm = nameC >= 0 ? r[nameC]! : (party?.[2] ?? "there");
+        const nm = nameC >= 0 && r[nameC] ? r[nameC]! : rowLabel(data, r);
         groups.set(nm, [...(groups.get(nm) ?? []), r]);
       }
       const noun = /claim/i.test(data.headers[idC] ?? "") || /claim/i.test(`${input.title} ${own}`) ? "claim" : "item";
@@ -442,10 +480,10 @@ export function compose(input: ComposeInput): Composed {
         const lineFor = (r: string[]) => {
           const id = idC >= 0 ? r[idC] : ref;
           const days = data.staleCol != null ? r[data.staleCol] : null;
-          return `${id ? `${noun === "claim" ? "Claim " : ""}${id}` : "Our open item"}${whatC >= 0 && r[whatC] ? ` — ${r[whatC]!.toLowerCase()}` : ""}${days && days !== "—" ? `, ${days} days since we last heard back` : ""}`;
+          return `${id ? `${noun === "claim" ? "Claim " : ""}${id}` : rowLabel(data, r)}${whatC >= 0 && r[whatC] ? ` — ${r[whatC]!.toLowerCase()}` : ""}${days && days !== "—" ? `, ${days} days since we last heard back` : ""}`;
         };
         const body = [
-          `Hi ${firstName(nm)},`,
+          nameC >= 0 && r0Name(rs, nameC) ? `Hi ${firstName(nm)},` : "Hello,",
           "",
           rs.length === 1
             ? `I'm following up on ${lineFor(rs[0]!).replace(/^Claim /, "claim ")}. I wanted to make sure nothing is stuck on our side.`
@@ -461,16 +499,25 @@ export function compose(input: ComposeInput): Composed {
         const mail = mailC >= 0 ? rs[0]![mailC] : undefined;
         drafts.push({
           label: `To ${nm}${ids.length ? ` — ${ids.join(", ")}` : ""}`,
-          e: { to: mail ? `${nm} <${mail}>` : nm, subject: `${ids.length ? `${noun === "claim" ? (ids.length > 1 ? "Claims" : "Claim") : ""} ${ids.join(", ")}: `.trimStart() : ""}checking in on next steps`, body },
+          e: { to: mail ? `${nm} <${mail}>` : nm, subject: ids.length ? `${`${noun === "claim" ? (ids.length > 1 ? "Claims" : "Claim") : ""} ${ids.join(", ")}`.trim()}: next steps` : `${rowLabel(data, rs[0]!)}: next steps`, body },
         });
       }
+    } else if (!ev?.from) {
+      // Nobody to write to: no sender, no one named in the data. Say what's missing instead of drafting to a guess.
+      noDraftReason = data
+        ? `None of the rows in ${data.table.title} match this request, so there is no one to draft to yet.`
+        : "There is no recipient to draft to yet: the request doesn't name anyone I can find in your files.";
+      needs.push(`Who it goes to: name the person (as they appear in your tracker or contacts) or include their email${ref ? ` for ${ref}` : ""}.`);
     } else {
-      const to = ev?.from ?? (party ? `${party[1] ? `${party[1]} ` : ""}${party[2]}` : recipient ?? "the recipient");
+      const to = ev.from;
       const about = ev?.subject ?? (ref ? `${ref}` : input.title.replace(/^Message:\s*/i, ""));
       const facts2 = relevant(pool, `${about} ${req || own}`, 2, used);
       facts2.forEach((f) => used.add(f.text));
       const body = [
-        `Hi ${party ? `there` : firstName(String(to).replace(/<.*>/, "").trim()) || "there"},`,
+        (() => {
+          const nm = String(to).replace(/<.*>/, "").trim();
+          return nm && !nm.includes("@") ? `Hi ${firstName(nm)},` : "Hello,";
+        })(),
         "",
         ev?.text
           ? `Thanks for your message about ${ev.subject ? `“${truncate(ev.subject, 80)}”` : "this"}. We have it and are on it.`
@@ -483,17 +530,25 @@ export function compose(input: ComposeInput): Composed {
         who.org,
       ].join("\n");
       drafts.push({ label: `To ${to}`, e: { to: String(to), subject: ref ? `${ref}: following up` : `Re: ${truncate(about, 80)}`, body } });
-      if (!ev && !party?.[1] && !data) needs.push(`The ${party?.[2] ?? "recipient"}'s name and email${ref ? ` for ${ref}` : ""} — add your tracker (CSV or sheet) to the knowledge base and I'll address every draft.`);
     }
-    lines.unshift("## Summary", "", `${drafts.length} ${drafts.length === 1 ? "email is" : "emails are"} drafted and ready for your approval${data ? `, built from ${data.table.title} (${data.facts.slice(0, 2).join("; ")})` : ""}. Nothing is sent until you approve it.`, "");
-    lines.push("", "## The work");
-    for (const d of drafts) lines.push("", ...renderEmail(d.e, d.label));
-    if (rules.length) {
+    lines.unshift(
+      "## Summary",
+      "",
+      drafts.length
+        ? `${drafts.length} ${drafts.length === 1 ? "email is" : "emails are"} drafted and ready for your approval${targetedFrom ? `, addressed from ${targetedFrom}` : data ? `, built from ${data.table.title} (${data.facts.slice(0, 2).join("; ")})` : ""}. Nothing is sent until you approve it.`
+        : `No email drafted. ${noDraftReason ?? "There is no recipient to draft to yet."}`,
+      "",
+    );
+    if (drafts.length) {
+      lines.push("", "## The work");
+      for (const d of drafts) lines.push("", ...renderEmail(d.e, d.label));
+    }
+    if (rules.length && drafts.length) {
       const kept = [/dollar|amount|price/i.test(rules.join(" ")) ? "dollar amounts" : null, /\bdates?\b/i.test(rules.join(" ")) ? "dates" : null, /deductible/i.test(rules.join(" ")) ? "deductibles" : null].filter((x): x is string => !!x);
       decisions.push(`Check the ${drafts.length === 1 ? "draft" : "drafts"} against your rules: ${rules.slice(0, 3).map((r) => `“${truncate(r, 120)}”`).join(" ")}${kept.length ? ` — I kept out ${listJoin(kept)}.` : ""}`);
     }
-    decisions.push(`Approve, edit or reject ${drafts.length === 1 ? "the draft" : "each draft"} above.`);
-    sources.push({ step: "Email drafts", status: data ? "Built from your data" : "Drafted from your request", basis: data ? data.table.title : "Your request" });
+    if (drafts.length) decisions.push(`Approve, edit or reject ${drafts.length === 1 ? "the draft" : "each draft"} above.`);
+    sources.push({ step: "Email drafts", status: drafts.length ? (targetedFrom || data ? "Built from your data" : "Drafted from your request") : "Not drafted: no recipient", basis: targetedFrom ?? (data ? data.table.title : "Your request") });
   } else {
     // Report / document / table: summary, the work products the steps ask for, what was checked, decisions, needs.
     const work: string[] = [];
@@ -613,11 +668,21 @@ export function compose(input: ComposeInput): Composed {
 
   const preview = truncate(
     wantsEmail
-      ? `${input.title}: ${sources.length && /data/.test(sources[0]!.status) ? "follow-up emails drafted from your data" : "email drafted"} and waiting for your approval.`
+      ? /^No email drafted/.test(lines[2] ?? "")
+        ? `${input.title}: no email drafted yet — I need to know who it goes to.`
+        : `${input.title}: ${sources.length && /data/.test(sources[0]!.status) ? "emails drafted from your data" : "email drafted"} and waiting for your approval.`
       : `${input.title} is ready${decisions.length ? ` — ${decisions.length} ${decisions.length === 1 ? "item needs" : "items need"} your decision` : ""}.`,
     200,
   );
-  return { title: input.title, kind: input.output, body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), preview, ...(sources.length ? { trace } : {}) };
+  return { title: input.title, kind: wantsProposal ? "document" : input.output, body: noPlaceholders(lines.join("\n").replace(/\n{3,}/g, "\n\n")), preview, ...(sources.length ? { trace } : {}) };
+}
+
+/** No literal `{customer first name}` / `{price}` in client-facing output: greetings become "Hello,", blanks "—". */
+export function noPlaceholders(body: string): string {
+  return body
+    .replace(/\bHi \{[^{}\n]*\},/g, "Hello,")
+    .replace(/\{(?:period|this period)\}/gi, "this period")
+    .replace(/\{[^{}\n]{1,80}\}/g, "—");
 }
 
 function needsFrom(step: string, memories: Snip[]): string[] {
@@ -661,6 +726,9 @@ function draftBlock(step: string, who: Who, people: Array<{ name: string; role: 
   const pair = /\bfor (?:a |an |the )?([^,]+?),? and one for (?:a |an |the )?(.+?)(?:\s+[—–-]|\.|$)/i.exec(step);
   const variants = pair ? [cap(pair[1]!), cap(pair[2]!)] : /\bthree\b|first touch/i.test(step) ? ["First touch", "Second touch", "Last touch"] : /\btwo\b/i.test(step) ? ["Version 1", "Version 2"] : ["Draft"];
   const owe = /owe|money|balance/i.test(step);
+  // What the message is about, from the step itself ("a reminder for each overdue invoice" → "overdue invoice").
+  const topic = /\b(?:about|for|on|regarding)\s+(?:each |every |the |a |an |any |their |your )?([a-z][a-z' -]{3,50}?)(?:\s+(?:that|which|who|with|in|to|before|after|by|and)\b|[.,;:(—–]|$)/i.exec(step.replace(/\bone for\b.*$/i, ""))?.[1]?.trim() ?? null;
+  const about = topic && !/^(?:a|an|the|each|every)$/i.test(topic) ? topic.replace(/s$/, "") : null;
   const out: string[] = [];
   const noMoney = rules.some((r) => /dollar amount|amounts?|price/i.test(r));
   variants.forEach((v, i) => {
@@ -673,14 +741,164 @@ function draftBlock(step: string, who: Who, people: Array<{ name: string; role: 
           : i === 0
         ? owe && !noMoney
           ? `This is ${who.agent} from ${who.org}. Before your visit tomorrow we checked your benefits, and part of the visit may not be covered. We'd like to walk you through it before you come in — reply here or call us and we'll explain your options.`
-          : `This is ${who.agent} from ${who.org}, checking in. We wanted to make sure you have what you need from us and to help with the next step — just reply here.`
+          : about
+            ? `This is ${who.agent} from ${who.org} about your ${about}. Could you let us know the next step that works for you? Reply here and we'll take care of the rest.`
+            : `This is ${who.agent} from ${who.org}. We have one open item with you and want to close it out — could you reply with the next step that works for you?`
         : i === 1
-          ? `Following up on my last note — happy to answer any questions or find a time that works for you.`
-          : `Last check-in from me. If now isn't the right time, no problem — reply whenever you're ready and we'll pick it up.`;
+          ? `Following up on my note${about ? ` about your ${about}` : ""}: if anything is holding it up, tell me what you need from us and I'll sort it out today.`
+          : `A last note${about ? ` on your ${about}` : ""} from me. If now isn't the right time, reply whenever you're ready and we'll pick it up from there.`;
     out.push(`**${v} (${isText ? "text" : "email"})**`, "", `> ${greet}`, ">", `> ${msg}`, ">", `> ${isText ? `— ${who.org}` : `Best,\n> ${who.agent}\n> ${who.org}`}`, "");
   });
   if (rules.length) out.push(`_Checked against your rules: ${rules.slice(0, 2).map((r) => `“${truncate(r, 150)}”`).join(" ")}_`);
   void people;
   void recipient;
+  return out;
+}
+
+// ───────────────────────────────────────────── named recipients & answers ─────────────────────────────────────────────
+
+const EMAIL_IN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/** People, companies and sites the request names, minus the agent and the business itself. */
+function namedIn(req: string, who: Who): string[] {
+  const own = `${who.agent} ${who.org}`.toLowerCase();
+  return namedInTask(req).filter((n) => !own.includes(n.toLowerCase()) && !/^(?:csv|pdf|email|reply|summary|report)$/i.test(n));
+}
+
+const LABEL_COL = /^(?:property|site|location|account|client|customer|company|building|facility|business|practice|office)(?: name)?$/i;
+const PERSON_COL = /^(?:contact|name|person|manager|property manager|owner|adjuster|homeowner|patient|tenant)(?: name)?$|contact name|manager name/i;
+
+/** What a row is about ("Bayside Medical Plaza"), never "Our open item". */
+function rowLabel(t: { headers: string[] }, r: string[]): string {
+  const i = t.headers.findIndex((h) => LABEL_COL.test(h.trim()));
+  if (i >= 0 && r[i]) return r[i]!;
+  const firstText = r.find((c) => /[A-Za-z]{3}/.test(c) && !EMAIL_IN.test(c));
+  return firstText ?? r[0] ?? "this item";
+}
+
+function r0Name(rs: string[][], nameC: number): boolean {
+  return !!rs[0]?.[nameC] && /[A-Za-z]{2}/.test(rs[0][nameC]!) && !EMAIL_IN.test(rs[0][nameC]!);
+}
+
+type Target = { email: string; person: string | null; label: string | null; facts: string[]; source: string };
+
+/** The one recipient a request names: an address in it, or a row/line in the knowledge base that names them. */
+function findRecipient(named: string[], explicit: string | null, tables: Analysis[], knowledge: Snip[]): Target | null {
+  const hits = tables
+    .flatMap((t) => t.rows.map((r) => ({ t, r, score: named.filter((n) => mentions(r.join(" | "), [n])).length + named.filter((n) => n.includes(" ") && mentions(r.join(" | "), [n])).length })))
+    .filter((h) => h.score > 0)
+    .sort((a, b) => b.score - a.score);
+  const mailOf = (t: Analysis, r: string[]) => {
+    const cols = t.headers.map((h, i) => i).filter((i) => /email/i.test(t.headers[i]!) && EMAIL_IN.test(r[i] ?? ""));
+    if (!cols.length) return null;
+    // With several email columns, take the one next to the column that names the person asked for.
+    const nameAt = r.findIndex((c) => named.some((n) => n.includes(" ") && mentions(c, [n])));
+    const best = nameAt >= 0 ? cols.sort((a, b) => Math.abs(a - nameAt) - Math.abs(b - nameAt))[0]! : cols[0]!;
+    return EMAIL_IN.exec(r[best]!)![0];
+  };
+  const factsOf = (t: Analysis, r: string[], label: string | null, person: string | null) =>
+    t.headers
+      .map((h, i) => ({ h, v: r[i] ?? "" }))
+      .filter(({ h, v }) => v && v !== "—" && !/email|phone/i.test(h) && v !== label && v !== person)
+      .slice(0, 5)
+      .map(({ h, v }) => `${h}: ${v}`);
+  if (explicit) {
+    const h = hits.find((x) => x.r.some((c) => c.toLowerCase().includes(explicit.toLowerCase()))) ?? hits[0];
+    const person = h ? personOf(h.t, h.r, named) : (named.find((n) => n.includes(" ")) ?? null);
+    const label = h ? rowLabel(h.t, h.r) : null;
+    return { email: explicit, person, label, facts: h ? factsOf(h.t, h.r, label, person) : [], source: "your request" };
+  }
+  for (const h of hits) {
+    const email = mailOf(h.t, h.r);
+    if (!email) continue;
+    const person = personOf(h.t, h.r, named);
+    const label = rowLabel(h.t, h.r);
+    // Facts about the same site from the other tables too (e.g. the inspection score).
+    const extra = hits.filter((x) => x.t !== h.t && mentions(x.r.join(" | "), [label])).flatMap((x) => factsOf(x.t, x.r, label, person));
+    return { email, person, label: label === person ? null : label, facts: [...new Set([...factsOf(h.t, h.r, label, person), ...extra])].slice(0, 6), source: h.t.table.title };
+  }
+  for (const k of knowledge) {
+    for (const line of k.text.split(/\r?\n/)) {
+      const m = EMAIL_IN.exec(line);
+      if (m && named.some((n) => mentions(line, [n]))) return { email: m[0], person: named.find((n) => n.includes(" ") && mentions(line, [n])) ?? null, label: null, facts: [], source: k.title };
+    }
+  }
+  return null;
+}
+
+function personOf(t: Analysis, r: string[], named: string[]): string | null {
+  const full = r.find((c) => named.some((n) => n.includes(" ") && mentions(c, [n])) && !EMAIL_IN.test(c));
+  if (full) return full;
+  const i = t.headers.findIndex((h) => PERSON_COL.test(h.trim()));
+  return i >= 0 && r[i] && !EMAIL_IN.test(r[i]!) ? r[i]! : null;
+}
+
+const stem = (w: string) => w.replace(/(?:es|s)$/, "");
+
+/** Answers from the data for what the request asks ("Bayside's score" → "Bayside Medical Plaza — Score: 81"). */
+export function answerFromTables(question: string, tables: Analysis[], named: string[]): string[] {
+  if (!named.length) return [];
+  const q = new Set(tokenize(question).map(stem));
+  const out: string[] = [];
+  for (const t of tables) {
+    const cols = t.headers.map((h, i) => ({ h, i })).filter(({ h }) => !/email|phone/i.test(h) && tokenize(h).some((w) => q.has(stem(w))) && !LABEL_COL.test(h.trim()) && !PERSON_COL.test(h.trim()));
+    if (!cols.length) continue;
+    for (const r of t.rows) {
+      if (!named.some((n) => mentions(r.join(" | "), [n]))) continue;
+      out.push(`${rowLabel(t, r)} — ${cols.map(({ h, i }) => `${h}: ${r[i] ?? "—"}`).join(", ")} (from ${t.table.title})`);
+    }
+  }
+  return [...new Set(out)].slice(0, 5);
+}
+
+/** Offline chat answers: named rows in the data that hold what was asked. */
+export function answerQuestion(question: string, knowledge: Snip[], now = new Date()): string[] {
+  const tables = tablesIn(knowledge).map((t) => analyze(t, now));
+  return answerFromTables(question, tables, namedInTask(question));
+}
+
+// ───────────────────────────────────────────── proposals ─────────────────────────────────────────────
+
+function isRateTable(t: Analysis): boolean {
+  return /rate|pric|fee|cost|menu|tariff/i.test(t.table.title) || t.headers.some((h) => /rate|price|fee|cost|per (?:sq|hour|visit)/i.test(h));
+}
+
+/** A proposal document: who it's for, scope, pricing (from a rate guide when one is on file), terms, next steps. */
+function proposalDoc(input: ComposeInput, who: Who, tables: Analysis[], pool: Sent[], steps: string[], own: string): string[] {
+  const named = namedIn(own, who);
+  const client = named.find((n) => n.includes(" ")) ?? named[0] ?? null;
+  const rate = tables.find(isRateTable) ?? null;
+  const rateLines = rate
+    ? []
+    : pool.filter((p) => /\$\s?\d/.test(p.text) && /rate|price|per |sq\.? ?f|hour|visit|month|minimum/i.test(p.text)).slice(0, 8);
+  const scope = steps
+    .filter((st) => !/\b(?:request approval|deliver|lead with|list exactly)\b/i.test(st))
+    .map((st) => truncate(st.replace(/^(?:\d+\.\s*)/, "").replace(/\.$/, ""), 200))
+    .slice(0, 6);
+  const termLines = pool.filter((p) => /\bnet \d+|deposit|valid for|payment terms|cancel|minimum|invoice/i.test(p.text)).slice(0, 4);
+  const out = [
+    "## Summary",
+    "",
+    `A proposal${client ? ` for ${client}` : ""} from ${who.org}: scope, pricing and terms, ready for your review.${rate ? ` Pricing comes from ${rate.table.title}.` : rateLines.length ? " Pricing comes from the rates in your files." : ""}`,
+    "",
+    "## Proposal",
+    "",
+    `**Prepared for:** ${client ?? "the client named in the request"}  `,
+    `**Prepared by:** ${who.agent}, ${who.org}`,
+    "",
+    "### Scope of work",
+    "",
+    ...(scope.length ? scope.map((x) => `- ${cap(x)}`) : ["- The services discussed, as described in your materials."]),
+    "",
+    "### Pricing",
+    "",
+  ];
+  if (rate) out.push(...gfm(rate.headers, rate.rows.slice(0, 15)), "", `_From ${rate.table.title}; final figures depend on the site walk-through._`);
+  else if (rateLines.length) out.push(...rateLines.map((l) => `- ${truncate(l.text, 220)}`));
+  else out.push("Pricing isn't on file yet. Add your rate guide to the knowledge base and I'll price every line.");
+  out.push("", "### Terms", "");
+  out.push(...(termLines.length ? termLines.map((l) => `- ${truncate(l.text, 220)}`) : ["- Prices valid for 30 days from the date of this proposal.", "- Invoiced monthly; payment due within 30 days.", "- Either party may end the agreement with 30 days' written notice."]));
+  out.push("", "### Next steps", "", "- Confirm the scope and schedule.", "- Sign and return; we start on the agreed date.");
+  void input;
   return out;
 }

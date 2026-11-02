@@ -7,6 +7,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-o
 import { cache } from "react";
 import { db, schema } from "@/server/db/client";
 import { env } from "@/server/env";
+import { emailDomainFor } from "@/server/channels/domains";
 
 const s = schema;
 const DAY = 86_400_000;
@@ -32,8 +33,9 @@ export async function agencyOrgIds(agencyId: string): Promise<string[]> {
   return (await agencyOrgs(agencyId)).map((o) => o.id);
 }
 
-export function inboxAddress(handle: string | null | undefined): string | null {
-  return handle ? `${handle}@${env().EMAIL_DOMAIN}` : null;
+/** `domain`: emailDomainFor(orgId) — the nearest verified white-label domain, else env EMAIL_DOMAIN. */
+export function inboxAddress(handle: string | null | undefined, domain: string = env().EMAIL_DOMAIN): string | null {
+  return handle ? `${handle}@${domain}` : null;
 }
 
 const agentCols = {
@@ -79,8 +81,8 @@ export async function getShellData(agencyId: string) {
       .from(s.agents)
       .innerJoin(s.organizations, eq(s.organizations.id, s.agents.orgId))
       .where(and(inAgency(s.agents.orgId, agencyId), ne(s.agents.status, "archived")))
-      // Most recently active: last delivery (trigger-maintained) or last edit, whichever is newer.
-      .orderBy(sql`greatest(${s.agents.updatedAt}, coalesce(${s.agents.lastDeliveredAt}, ${s.agents.updatedAt})) desc`)
+      // Most recently active by last delivery (trigger-maintained), else hire date. Edits don't reshuffle the list.
+      .orderBy(sql`coalesce(${s.agents.lastDeliveredAt}, ${s.agents.createdAt}) desc`, asc(s.agents.id))
       .limit(SHELL_RECENT),
     db()
       .select({
@@ -102,13 +104,15 @@ export async function getShellData(agencyId: string) {
   };
 }
 
-/** ⌘K: prefix / word-prefix matches on names (and agent roles), capped. */
+/** ⌘K: prefix / word-prefix matches on names (and agent roles), plus recent deliverable titles, capped. */
 export async function searchStudio(agencyId: string, q: string, limit = 8) {
   const term = likeEscape(q.trim().toLowerCase());
-  if (!term) return { agents: [], clients: [] };
+  if (!term) return { agents: [], clients: [], deliverables: [] };
   const prefix = `${term}%`;
   const word = `% ${term}%`;
-  const [agents, clients] = await Promise.all([
+  // Title search scans the agency's recent deliverables by (agency_id, created_at); 14 days keeps it ~100ms at 586k rows.
+  const since = new Date(Date.now() - 14 * DAY);
+  const [agents, clients, deliverables] = await Promise.all([
     db()
       .select({ id: s.agents.id, name: s.agents.name, role: s.agents.role, seed: s.agents.avatarSeed, orgName: s.organizations.name })
       .from(s.agents)
@@ -128,32 +132,28 @@ export async function searchStudio(agencyId: string, q: string, limit = 8) {
       .where(and(inAgency(s.organizations.id, agencyId), eq(s.organizations.kind, "client"), sql`(lower(${s.organizations.name}) like ${prefix} or lower(${s.organizations.name}) like ${word})`))
       .orderBy(sql`lower(${s.organizations.name}) like ${prefix} desc`, asc(s.organizations.name))
       .limit(limit),
+    // Recent deliverables only (last 14 days); 3+ characters to stay selective.
+    term.length >= 3
+      ? db()
+          .select({ id: s.deliverables.id, title: s.deliverables.title, agentId: s.deliverables.agentId, agentName: s.agents.name, orgName: s.organizations.name, createdAt: s.deliverables.createdAt })
+          .from(s.deliverables)
+          .innerJoin(s.agents, eq(s.agents.id, s.deliverables.agentId))
+          .innerJoin(s.organizations, eq(s.organizations.id, s.deliverables.orgId))
+          .where(and(agencyDeliverables(agencyId), gte(s.deliverables.createdAt, since), sql`(lower(${s.deliverables.title}) like ${prefix} or lower(${s.deliverables.title}) like ${word})`))
+          .orderBy(desc(s.deliverables.createdAt))
+          .limit(5)
+      : Promise.resolve([]),
   ]);
-  return { agents: agents.map((a) => ({ ...a, seed: a.seed ?? a.id })), clients };
+  return { agents: agents.map((a) => ({ ...a, seed: a.seed ?? a.id })), clients, deliverables };
 }
 
 export const PAGE_SIZE = 50;
 
-async function mrrCents(agencyId: string, ids: string[]): Promise<number> {
-  if (!ids.length) return 0;
-  const [row] = await db()
-    .select({ v: sql<number>`coalesce(sum(${s.plans.priceCents}), 0)`.mapWith(Number) })
-    .from(s.subscriptions)
-    .innerJoin(s.plans, eq(s.plans.id, s.subscriptions.planId))
-    .where(
-      and(
-        inArray(s.subscriptions.orgId, ids),
-        eq(s.plans.orgId, agencyId),
-        inArray(s.subscriptions.status, ["active", "past_due", "trialing"]),
-      ),
-    );
-  return row?.v ?? 0;
-}
 
 /** Mirrors the engine's notification href for a change request (engine.ts changesHref). */
 const changesHrefSql = sql`'/agents/' || ${s.deliverables.agentId}::text || '/activity?deliverable=' || ${s.deliverables.id}::text`;
 
-export async function getHome(agencyId: string) {
+export async function getHome(agencyId: string, opts: { live?: boolean } = {}) {
   const empty = {
     delivered: [],
     approvals: [],
@@ -260,7 +260,7 @@ export async function getHome(agencyId: string) {
       })
       .from(s.deliverables)
       .where(and(agencyDeliverables(agencyId), gte(s.deliverables.createdAt, week))),
-    clientTotals(agencyId).then((t) => t.mrrCents),
+    clientTotals(agencyId, opts),
     db()
       .select({
         id: s.deliverables.id,
@@ -299,7 +299,8 @@ export async function getHome(agencyId: string) {
     provisioning: attentionAgents.filter((a) => a.status === "provisioning").slice(0, 6),
     waiting: attentionAgents.filter((a) => a.status === "active").slice(0, 6),
     numbers: {
-      mrrCents: mrr,
+      mrrCents: mrr.mrrCents,
+      unbilledCents: mrr.unbilledCents,
       activeAgents: counts?.active ?? 0,
       provisioningAgents: counts?.provisioning ?? 0,
       hoursWeek: week7[0]?.hours ?? 0,
@@ -533,7 +534,7 @@ export async function getAgent(agencyId: string, agentId: string) {
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  return { ...row, inbox: inboxAddress(row.agent.emailHandle) };
+  return { ...row, inbox: inboxAddress(row.agent.emailHandle, await emailDomainFor(row.agent.orgId)) };
 }
 
 export async function agentWorkflows(orgId: string, agentId: string) {
@@ -551,6 +552,17 @@ export async function agentDeliverables(orgId: string, agentId: string, limit = 
     .where(and(eq(s.deliverables.orgId, orgId), eq(s.deliverables.agentId, agentId)))
     .orderBy(desc(s.deliverables.createdAt))
     .limit(limit);
+}
+
+/** One deliverable of this agent (for ?d= deep links to work older than the recent list). */
+export async function agentDeliverable(orgId: string, agentId: string, id: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const rows = await db()
+    .select()
+    .from(s.deliverables)
+    .where(and(eq(s.deliverables.id, id), eq(s.deliverables.orgId, orgId), eq(s.deliverables.agentId, agentId)))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function agentValue(orgId: string, agentId: string) {
@@ -685,14 +697,17 @@ export async function listBlueprints(agencyId: string) {
   return db().select().from(s.blueprints).where(eq(s.blueprints.orgId, agencyId)).orderBy(desc(s.blueprints.updatedAt));
 }
 
-export async function getBilling(agencyId: string) {
-  const orgs = await agencyOrgs(agencyId);
-  const ids = orgs.map((o) => o.id);
-  const monthStart = new Date();
-  monthStart.setUTCDate(1);
-  monthStart.setUTCHours(0, 0, 0, 0);
+/**
+ * Billing page data, bounded: totals in SQL, and the client/margin table one page (50) at a time, ordered by revenue.
+ * Revenue counts as billed only when Stripe is live and the subscription is a real Stripe subscription; manual rows
+ * and anything in test mode are "not billed" and stay out of MRR and margin.
+ */
+export async function getBilling(agencyId: string, opts: { live: boolean; page?: number }) {
+  const page = Math.max(0, Math.floor(opts.page ?? 0));
   const since30 = new Date(Date.now() - 30 * DAY);
-  const [plans, subs, usage, mrr] = await Promise.all([
+  const billedSql = opts.live ? sql`sb.stripe_subscription_id is not null` : sql`false`;
+  const clientOrgs = sql`(select o.id from organizations o where (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and o.kind = 'client' and o.id <> ${agencyId} and o.deleted_at is null)`;
+  const [plans, totals, costRows, billedRows, pageRows] = await Promise.all([
     db()
       .select({ plan: s.plans, subs: sql<number>`count(${s.subscriptions.id})`.mapWith(Number) })
       .from(s.plans)
@@ -700,36 +715,82 @@ export async function getBilling(agencyId: string) {
       .where(eq(s.plans.orgId, agencyId))
       .groupBy(s.plans.id)
       .orderBy(desc(s.plans.active), asc(s.plans.priceCents)),
-    ids.length
-      ? db()
-          .select({ sub: s.subscriptions, planName: s.plans.name, priceCents: s.plans.priceCents, orgName: s.organizations.name, orgSlug: s.organizations.slug })
-          .from(s.subscriptions)
-          .innerJoin(s.plans, eq(s.plans.id, s.subscriptions.planId))
-          .innerJoin(s.organizations, eq(s.organizations.id, s.subscriptions.orgId))
-          .where(and(inArray(s.subscriptions.orgId, ids), eq(s.plans.orgId, agencyId)))
-          .orderBy(asc(s.organizations.name))
-      : Promise.resolve([]),
-    ids.length
-      ? db()
-          .select({ orgId: s.usageEvents.orgId, kind: s.usageEvents.kind, micros: sql<number>`coalesce(sum(${s.usageEvents.costMicros}), 0)`.mapWith(Number) })
-          .from(s.usageEvents)
-          .where(and(inArray(s.usageEvents.orgId, ids), gte(s.usageEvents.createdAt, since30)))
-          .groupBy(s.usageEvents.orgId, s.usageEvents.kind)
-      : Promise.resolve([]),
-    mrrCents(agencyId, ids),
+    db()
+      .select({
+        billed: sql<number>`coalesce(sum(p.price_cents) filter (where ${billedSql}), 0)`.mapWith(Number),
+        unbilled: sql<number>`coalesce(sum(p.price_cents) filter (where not (${billedSql})), 0)`.mapWith(Number),
+        billedSubs: sql<number>`count(*) filter (where ${billedSql})`.mapWith(Number),
+        unbilledSubs: sql<number>`count(*) filter (where not (${billedSql}))`.mapWith(Number),
+        clients: sql<number>`(select count(*) from ${clientOrgs} c)`.mapWith(Number),
+      })
+      .from(sql`subscriptions sb join plans p on p.id = sb.plan_id`)
+      .where(sql`p.org_id = ${agencyId} and sb.org_id in ${clientOrgs} and sb.status in ('active', 'past_due', 'trialing')`),
+    // 30-day cost per client (resale customers roll up to their client), via usage_events(agency_id, created_at).
+    db()
+      .select({
+        clientId: sql<string>`case when o.kind = 'customer' then o.parent_id else o.id end`,
+        micros: sql<number>`coalesce(sum(u.cost_micros), 0)`.mapWith(Number),
+      })
+      .from(sql`usage_events u join organizations o on o.id = u.org_id`)
+      .where(sql`u.agency_id = ${agencyId} and u.org_id <> ${agencyId} and u.created_at >= ${since30} and o.deleted_at is null`)
+      .groupBy(sql`1`),
+    db()
+      .selectDistinct({ orgId: sql<string>`sb.org_id` })
+      .from(sql`subscriptions sb join plans p on p.id = sb.plan_id`)
+      .where(sql`p.org_id = ${agencyId} and sb.status in ('active', 'past_due', 'trialing') and ${billedSql}`),
+    db()
+      .select({
+        id: s.organizations.id,
+        name: s.organizations.name,
+        slug: s.organizations.slug,
+        subStatus: sql<string | null>`sub.status`,
+        cancelAtPeriodEnd: sql<boolean | null>`sub.cancel_at_period_end`,
+        stripeSubscriptionId: sql<string | null>`sub.stripe_subscription_id`,
+        planName: sql<string | null>`sub.plan_name`,
+        priceCents: sql<number>`coalesce(sub.price_cents, 0)`.mapWith(Number),
+      })
+      .from(s.organizations)
+      .leftJoin(
+        sql`lateral (select sb.status, sb.cancel_at_period_end, sb.stripe_subscription_id, p.name as plan_name, p.price_cents from subscriptions sb join plans p on p.id = sb.plan_id where sb.org_id = ${s.organizations.id} and p.org_id = ${agencyId} and sb.status <> 'canceled' order by sb.created_at desc limit 1) sub`,
+        sql`true`,
+      )
+      .where(and(inAgency(s.organizations.id, agencyId), eq(s.organizations.kind, "client")))
+      .orderBy(sql`coalesce(sub.price_cents, 0) desc`, asc(s.organizations.name), asc(s.organizations.id))
+      .limit(PAGE_SIZE + 1)
+      .offset(page * PAGE_SIZE),
   ]);
-  const clients = orgs.filter((o) => o.kind === "client");
-  const margin = clients.map((c) => {
-    // A client's cost includes its customers' (resale) usage.
-    const tree = new Set([c.id, ...orgs.filter((o) => o.parentId === c.id).map((o) => o.id)]);
-    const rows = usage.filter((u) => tree.has(u.orgId));
-    const costMicros = rows.reduce((sum, u) => sum + u.micros, 0);
-    const priceCents = subs.filter((x) => x.sub.orgId === c.id && x.sub.status !== "canceled").reduce((sum, x) => sum + x.priceCents, 0);
-    const byKind: Record<string, number> = {};
-    for (const r of rows) byKind[r.kind] = (byKind[r.kind] ?? 0) + r.micros;
-    return { id: c.id, name: c.name, slug: c.slug, priceCents, costCents: Math.round(costMicros / 10_000), byKind };
-  });
-  return { plans, subs, margin, mrrCents: mrr, clients: clients.map((c) => ({ id: c.id, name: c.name })), monthStart };
+  const cost = new Map(costRows.map((r) => [r.clientId, r.micros] as const));
+  const billedOrgs = new Set(billedRows.map((r) => r.orgId));
+  const centsOf = (micros: number) => Math.round(micros / 10_000);
+  const costAll = costRows.reduce((sum, r) => sum + r.micros, 0);
+  const costBilled = costRows.reduce((sum, r) => sum + (billedOrgs.has(r.clientId) ? r.micros : 0), 0);
+  const tot = totals[0];
+  const rows = pageRows.slice(0, PAGE_SIZE).map((r) => ({
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    planName: r.planName,
+    subStatus: r.subStatus as "trialing" | "active" | "past_due" | "canceled" | null,
+    cancelAtPeriodEnd: !!r.cancelAtPeriodEnd,
+    billed: opts.live && !!r.stripeSubscriptionId,
+    priceCents: r.priceCents,
+    costCents: centsOf(cost.get(r.id) ?? 0),
+  }));
+  return {
+    plans,
+    rows,
+    page,
+    more: pageRows.length > PAGE_SIZE,
+    totals: {
+      clients: tot?.clients ?? 0,
+      billedCents: tot?.billed ?? 0,
+      unbilledCents: tot?.unbilled ?? 0,
+      billedSubs: tot?.billedSubs ?? 0,
+      unbilledSubs: tot?.unbilledSubs ?? 0,
+      costCents: centsOf(costAll),
+      billedCostCents: centsOf(costBilled),
+    },
+  };
 }
 
 export async function getTeam(agencyId: string) {
@@ -810,15 +871,21 @@ export async function agentSetup(orgId: string, agentId: string) {
   };
 }
 
-/** Header totals for the Clients page, without loading every client. */
-export async function clientTotals(agencyId: string) {
+/**
+ * Header totals for the Clients page, without loading every client. `mrrCents` is billed revenue only (Stripe live and
+ * a real Stripe subscription); test-mode and manual plans are `unbilledCents`.
+ */
+export async function clientTotals(agencyId: string, opts: { live?: boolean } = {}) {
+  const billed = opts.live ? sql`sb.stripe_subscription_id is not null` : sql`false`;
+  const subs = sql`from subscriptions sb join plans p on p.id = sb.plan_id join organizations o on o.id = sb.org_id where p.org_id = ${agencyId} and o.kind = 'client' and o.deleted_at is null and (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and sb.status in ('active','past_due','trialing')`;
   const [row] = await db()
     .select({
       count: sql<number>`(select count(*) from organizations o where (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and o.kind = 'client' and o.deleted_at is null)`.mapWith(Number),
-      mrr: sql<number>`(select coalesce(sum(p.price_cents), 0) from subscriptions sb join plans p on p.id = sb.plan_id join organizations o on o.id = sb.org_id where p.org_id = ${agencyId} and o.kind = 'client' and o.deleted_at is null and (o.agency_id = ${agencyId} or o.parent_id = ${agencyId}) and sb.status in ('active','past_due','trialing'))`.mapWith(Number),
+      mrr: sql<number>`(select coalesce(sum(p.price_cents) filter (where ${billed}), 0) ${subs})`.mapWith(Number),
+      unbilled: sql<number>`(select coalesce(sum(p.price_cents) filter (where not (${billed})), 0) ${subs})`.mapWith(Number),
     })
     .from(sql`(select 1) as one`);
-  return { count: row?.count ?? 0, mrrCents: row?.mrr ?? 0 };
+  return { count: row?.count ?? 0, mrrCents: row?.mrr ?? 0, unbilledCents: row?.unbilled ?? 0 };
 }
 
 /** Header totals for the Agents page. */

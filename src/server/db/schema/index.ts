@@ -4,3 +4,4 @@ export * from "./comms";
 export * from "./ops";
 export * from "./files";
 export * from "./billing";
+export * from "./email-domains";

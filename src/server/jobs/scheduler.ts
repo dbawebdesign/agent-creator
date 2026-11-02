@@ -147,6 +147,34 @@ export async function expireApprovals(database: DB, now: Date = new Date(), ttlM
   return expired.length;
 }
 
+/** What the client sees on a run whose job was given up on (raw errors go to the logs, not the portal). */
+export const DEAD_RUN_ERROR = "This run stopped before it finished and won't be retried automatically. Your agency has been notified.";
+
+/**
+ * An agent.run job the queue dead-lettered (its worker crashed on the last attempt and the lease ran out) leaves
+ * its run `queued`/`running` forever. Fail those runs — unless another job for the same run is still live (e.g. the
+ * resume after an approval) — and alert the agency. Called on every scheduler tick; cheap when there is nothing.
+ */
+export async function failRunsOfDeadJobs(database: DB, batch = 50): Promise<number> {
+  const rows = (
+    await database.execute(sql`
+      select r.id, r.org_id from jobs j
+      join runs r on r.id::text = j.payload->>'runId' and r.org_id = j.org_id
+      where j.type = 'agent.run' and j.status = 'dead' and j.finished_at > now() - interval '7 days'
+        and r.status in ('queued', 'running')
+        and not exists (
+          select 1 from jobs j2 where j2.type = 'agent.run' and j2.status in ('queued', 'running')
+            and j2.payload->>'runId' = j.payload->>'runId')
+      limit ${batch}`)
+  ).rows as Array<{ id: string; org_id: string }>;
+  if (!rows.length) return 0;
+  // Lazy: the runtime pulls in the whole agent stack, which the scheduler must not load at import time.
+  const { failRun } = await import("@/server/agents/runtime");
+  for (const r of rows) await failRun(database, r.id, r.org_id, DEAD_RUN_ERROR);
+  logger.warn({ runs: rows.length }, "failed runs whose jobs were dead-lettered");
+  return rows.length;
+}
+
 /** Local wall-clock hour (0-23) of `at` in `timezone`. */
 export function localHour(timezone: string, at: Date): number {
   try {

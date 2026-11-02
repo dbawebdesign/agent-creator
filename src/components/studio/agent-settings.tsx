@@ -34,7 +34,7 @@ function initialApprovals(list: string[] | undefined): ApprovalAction[] {
 
 type Agent = { id: string; name: string; role: string; summary: string | null; instructions: string; status: string; config: { voice?: string; requireApprovalFor?: string[] } };
 
-export function AgentSettings({ agency, agent, canAdmin }: { agency: string; agent: Agent; canAdmin: boolean }) {
+export function AgentSettings({ agency, agent, canAdmin, children }: { agency: string; agent: Agent; canAdmin: boolean; children?: React.ReactNode }) {
   const router = useRouter();
   const [form, setForm] = useState({
     name: agent.name,
@@ -116,6 +116,9 @@ export function AgentSettings({ agency, agent, canAdmin }: { agency: string; age
           </Button>
         </div>
       </form>
+
+      {/* Sections the page adds (channels) sit between the job and the lifecycle actions, so Archive stays last. */}
+      {children}
 
       <section className="space-y-3">
         <h2 className="text-[13.5px] font-semibold text-ink">Lifecycle</h2>

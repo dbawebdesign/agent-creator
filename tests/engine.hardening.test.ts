@@ -152,8 +152,11 @@ describe("H4/M1: crash-safe tool calls", () => {
   });
 
   it("a tool that throws after approval is recorded as failed and never asks for approval again", async () => {
-    const { client, user, workflowId } = await hire();
+    const { client, user, workflowId, agentId } = await hire();
     await db().execute(sql`delete from jobs where org_id = ${client.id}`);
+    // The recipient is a row in the workflow's own data (allowed: not memory or rule text).
+    const [src] = await db().insert(schema.knowledgeSources).values({ orgId: client.id, agentId, title: "Estimates.csv", kind: "file", status: "ready", chunkCount: 1 }).returning();
+    await db().insert(schema.knowledgeChunks).values({ orgId: client.id, sourceId: src!.id, agentId, seq: 0, content: "Customer,Email,Status\nPat Lee,customer@outside.example,Estimate ready" });
     const { provider } = scripted(() => [{ name: "send_message", input: { channel: "email", to: "customer@outside.example", subject: "Estimate", text: "Your estimate is ready." } }]);
     setLlmProviderForTests(provider);
     const { runId } = await runWorkflowNow({ orgId: client.id, workflowId, actor: { type: "system" } });

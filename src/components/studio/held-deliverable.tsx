@@ -1,13 +1,14 @@
 import { Clock, Eye } from "lucide-react";
 import { Markdown } from "@/components/shared/markdown";
 import { OUTPUT_LABEL } from "./bits";
+import { ReleaseNowButton } from "./release-now";
 
-/** "6:00 AM EST" (with "tomorrow" / weekday when not today) in the client's timezone. */
+/** "at 6:00 AM EST", "tomorrow at 6:00 AM EST" or "Tuesday at 6:00 AM EST", in the client's timezone. */
 export function releaseLabel(releaseAt: Date, timezone: string) {
   const fmt = (d: Date) => new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
   const time = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(releaseAt);
   const day = fmt(releaseAt) === fmt(new Date()) ? "" : fmt(releaseAt) === fmt(new Date(Date.now() + 86_400_000)) ? "tomorrow " : `${new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long" }).format(releaseAt)} `;
-  return `${day}${time}`.trim();
+  return `${day}at ${time}`;
 }
 
 /**
@@ -22,6 +23,7 @@ export function HeldDeliverable({
   releaseAt,
   timezone,
   clientName,
+  release,
 }: {
   title: string;
   kind: string;
@@ -30,6 +32,8 @@ export function HeldDeliverable({
   releaseAt: Date;
   timezone: string;
   clientName: string;
+  /** Shown to members: hand it over now instead of at the release time. */
+  release?: { agency: string; agentId: string; runId: string };
 }) {
   return (
     <div className="rounded-xl border border-line bg-surface shadow-xs">
@@ -41,11 +45,21 @@ export function HeldDeliverable({
           <p className="text-[14px] font-medium text-ink">{title}</p>
           {preview ? <p className="mt-0.5 line-clamp-2 text-[13px] leading-relaxed text-ink-3">{preview}</p> : null}
           <p className="mt-2 text-[12.5px] font-medium text-ink-2">
-            Finished · held until {releaseLabel(releaseAt, timezone)}
+            Ready · lands {releaseLabel(releaseAt, timezone)}
             <span className="font-normal text-ink-3"> · {clientName} sees it then</span>
           </p>
         </div>
+        {release ? (
+          <div className="shrink-0 max-sm:hidden">
+            <ReleaseNowButton {...release} clientName={clientName} />
+          </div>
+        ) : null}
       </div>
+      {release ? (
+        <div className="px-4 pb-3 sm:hidden">
+          <ReleaseNowButton {...release} clientName={clientName} />
+        </div>
+      ) : null}
       {body ? (
         <details className="group border-t border-line">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-[12.5px] font-medium text-accent hover:underline [&::-webkit-details-marker]:hidden">

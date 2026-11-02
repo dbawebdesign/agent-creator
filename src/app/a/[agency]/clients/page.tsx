@@ -5,6 +5,7 @@ import { Building2 } from "lucide-react";
 import { requireOrg } from "@/server/auth/access";
 import { db, schema } from "@/server/db/client";
 import { clientTotals, listClients } from "@/server/queries/studio";
+import { billingMode } from "@/server/billing/stripe";
 import { ListSearch, Pager, parsePage } from "@/components/studio/list-controls";
 import { EmptyState } from "@/components/ui/empty";
 import { RelativeTime } from "@/components/shared/relative-time";
@@ -20,7 +21,7 @@ export default async function ClientsPage({ params, searchParams }: { params: Pr
   const page = parsePage(sp.page);
   const [list, totals, plans] = await Promise.all([
     listClients(org.id, { page, q }),
-    clientTotals(org.id),
+    clientTotals(org.id, { live: billingMode() === "live" }),
     db().select().from(schema.plans).where(and(eq(schema.plans.orgId, org.id), eq(schema.plans.active, true))).orderBy(asc(schema.plans.priceCents)),
   ]);
   const planOpts = plans.map((p) => ({ id: p.id, name: p.name, price: money(p.priceCents) }));
@@ -32,7 +33,8 @@ export default async function ClientsPage({ params, searchParams }: { params: Pr
         <div>
           <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-ink">Clients</h1>
           <p className="mt-1 text-[14px] text-ink-3">
-            {totals.count.toLocaleString()} client{totals.count === 1 ? "" : "s"} · {money(totals.mrrCents)} / month
+            {totals.count.toLocaleString()} client{totals.count === 1 ? "" : "s"} · {money(totals.mrrCents)} / month billed
+            {totals.unbilledCents ? <> · {money(totals.unbilledCents)} not billed</> : null}
           </p>
         </div>
         <div className="flex w-full items-center gap-2 sm:w-auto">

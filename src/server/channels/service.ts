@@ -12,6 +12,7 @@ import { audit } from "@/server/security/audit";
 import { mcpConfigSnippet, type McpSnippets } from "@/server/api/mcp-config";
 import { normalizeE164 } from "./sms";
 import { slackBotToken, slackConfigured, slackRevokeToken } from "./slack";
+import { emailDomainFor } from "./domains";
 
 export { slackConfigured };
 
@@ -87,7 +88,7 @@ export async function getChannelOverview(orgId: string): Promise<ChannelOverview
       .groupBy(schema.apiKeys.agentId),
   ]);
   const providers = providerStatus();
-  const domain = env().EMAIL_DOMAIN;
+  const domain = await emailDomainFor(orgId, database);
   const slackConn = connections.find((c) => c.kind === "slack" && c.status !== "disabled") ?? null;
   const orgWideKeys = keys.find((k) => k.agentId === null)?.n ?? 0;
   const mcpUrl = `${base()}/api/mcp`;
